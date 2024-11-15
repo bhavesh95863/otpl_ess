@@ -84,7 +84,7 @@ def get_task_details(**data):
                 wms_task_doc["complete_action"] = True
             if not wms_task_doc.get("status") == "Overdue":
                 wms_task_doc["extend_action"] = True
-        if wms_task_doc.get("status") == "Extend Required" and ("WMS Admin" in frappe.get_roles(frappe.session.user) or "System Manager" in frappe.get_roles(frappe.session.user)):
+        if wms_task_doc.get("status") == "Extend Required" and "WMS Admin" in frappe.get_roles(frappe.session.user):
             wms_task_doc["extend_workflow_action"] = True
         if wms_task_doc.get("status") == "Late" or wms_task_doc.get("status") == "Ontime":
             if "WMS Admin" in frappe.get_roles(frappe.session.user) or "System Manager" in frappe.get_roles(frappe.session.user):
@@ -163,11 +163,25 @@ def reopen_task(**data):
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
-def get_user_list(start=0, page_length=10):
+def get_user_list(start=0, page_length=10,filters=None):
     try:
-        users = frappe.get_list("User",filters={"enabled":1},fields=["name","full_name","email","user_image"],start=start,page_length=page_length)
+        if isinstance(filters,str):
+            filters = json.loads(filters)
+        filters.append(["User","enabled","=",1])
+        users = frappe.get_list("User",filters=filters,fields=["name","full_name","email","user_image"],start=start,page_length=page_length)
         return gen_response(200,"User list get successfully",users)
     except frappe.PermissionError:
         return gen_response(500, "Not permitted for read user")
+    except Exception as e:
+        return exception_handler(e)
+    
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_status_list():
+    try:
+        status_list = ["Not Yet Due","Due Today","Without Due Date","Ontime","Late","Overdue","Extend Required"]
+        return gen_response(200,"Status list get successfully",status_list)
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted for status")
     except Exception as e:
         return exception_handler(e)

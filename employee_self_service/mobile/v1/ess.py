@@ -37,6 +37,10 @@ from erpnext.accounts.utils import get_fiscal_year
 from employee_self_service.employee_self_service.doctype.push_notification.push_notification import (
     create_push_notification,
 )
+from erpnext.hr.doctype.leave_application.leave_application import (
+    get_leave_balance_on,
+    get_leaves_for_period,
+)
 from frappe.utils import add_to_date, get_datetime
 DATE_FORMAT = "%Y-%m-%d"
 
@@ -166,32 +170,186 @@ def get_leave_application_list():
         leave_applications = {
             "upcoming": upcoming_leaves,
             "taken": taken_leaves,
-            "balance": res["result"],
+            "balance": res,
         }
         return gen_response(200, "Leave data getting successfully", leave_applications)
     except Exception as e:
         return exception_handler(e)
 
 
+# def get_leave_balance_report(employee, company, fiscal_year):
+#     fiscal_year = get_fiscal_year(fiscal_year=fiscal_year, as_dict=True)
+#     year_start_date = get_date_str(fiscal_year.get("year_start_date"))
+#     # year_end_date = get_date_str(fiscal_year.get("year_end_date"))
+#     filters_leave_balance = {
+#         "from_date": year_start_date,
+#         "to_date": add_days(today(), 1),
+#         "company": company,
+#         "employee": employee,
+#     }
+#     from frappe.desk.query_report import run
+
+#     result = run("Employee Leave Balance", filters=filters_leave_balance)
+#     for row in result.get("result"):
+#         frappe.log_error(title="180", message=row)
+#         frappe.log_error(title="180", message=type(row.get("employee")))
+#         if isinstance(row.get("employee"), tuple):
+#             row["employee"] = employee
+#     return result
+
+
 def get_leave_balance_report(employee, company, fiscal_year):
     fiscal_year = get_fiscal_year(fiscal_year=fiscal_year, as_dict=True)
     year_start_date = get_date_str(fiscal_year.get("year_start_date"))
-    # year_end_date = get_date_str(fiscal_year.get("year_end_date"))
+    year_end_date = get_date_str(fiscal_year.get("year_end_date"))
     filters_leave_balance = {
         "from_date": year_start_date,
-        "to_date": add_days(today(), 1),
+        "to_date": year_end_date,
         "company": company,
         "employee": employee,
     }
-    from frappe.desk.query_report import run
+    return leave_report(filters_leave_balance)
 
-    result = run("Employee Leave Balance", filters=filters_leave_balance)
-    for row in result.get("result"):
-        frappe.log_error(title="180", message=row)
-        frappe.log_error(title="180", message=type(row.get("employee")))
-        if isinstance(row.get("employee"), tuple):
-            row["employee"] = employee
-    return result
+
+
+def leave_report(filters):
+    leave_types = frappe.db.sql_list(
+        "select name from `tabLeave Type` order by name asc"
+    )
+    return get_data(filters, leave_types)
+
+
+def get_data(filters, leave_types):
+    user = frappe.session.user
+
+    if filters.get("to_date") <= filters.get("from_date"):
+        frappe.throw(_("'From Date should be less than To Date"))
+
+
+
+    data = []
+    # for employee in active_employees:
+    #     leave_approvers = department_approver_map.get(employee.department_name, [])
+    #     if employee.leave_approver:
+    #         leave_approvers.append(employee.leave_approver)
+
+    #     if (
+    #         (len(leave_approvers) and user in leave_approvers)
+    #         or (user in ["Administrator", employee.user_id])
+    #         or ("HR Manager" in frappe.get_roles(user))
+    #     ):
+    #         # row = [employee.name, employee.employee_name, employee.department]
+    #         row = dict(
+    #             employee=employee.name,
+    #             employee_name=employee.employee_name,
+    #         )
+
+    for leave_type in leave_types:
+        row = {}
+        row["leave_type"] = leave_type
+        row["employee"] = filters.get("employee")
+        row["employee_name"] = frappe.db.get_value(
+            "Employee", filters.get("employee"), "employee_name"
+        )
+        row.update(
+            calculate_leaves_details(filters, leave_type, filters.get("employee"))
+        )
+
+        # row += calculate_leaves_details(filters, leave_type, employee)
+
+        data.append(row)
+    return data
+
+
+def get_leave_ledger_entries(from_date, to_date, employee, leave_type):
+    records = frappe.db.sql(
+        """
+		SELECT
+			employee, leave_type, from_date, to_date, leaves, transaction_name, transaction_type
+			is_carry_forward, is_expired
+		FROM `tabLeave Ledger Entry`
+		WHERE employee=%(employee)s AND leave_type=%(leave_type)s
+			AND docstatus=1
+			AND (from_date between %(from_date)s AND %(to_date)s
+				OR to_date between %(from_date)s AND %(to_date)s
+				OR (from_date < %(from_date)s AND to_date > %(to_date)s))
+	""",
+        {
+            "from_date": from_date,
+            "to_date": to_date,
+            "employee": employee,
+            "leave_type": leave_type,
+        },
+        as_dict=1,
+    )
+
+    return records
+
+
+
+def calculate_leaves_details(filters, leave_type, employee):
+    ledger_entries = get_leave_ledger_entries(
+        filters.get("from_date"), filters.get("to_date"), employee, leave_type
+    )
+
+    # Leaves Deducted consist of both expired and leaves taken
+    leaves_deducted = (
+        get_leaves_for_period(
+            employee, leave_type, filters.get("from_date"), filters.get("to_date")
+        )
+        * -1
+    )
+
+    # removing expired leaves
+    leaves_taken = leaves_deducted - remove_expired_leave(ledger_entries)
+
+    opening = get_leave_balance_on(
+        employee, leave_type, add_days(filters.get("from_date"), -1)
+    )
+
+    new_allocation, expired_allocation = get_allocated_and_expired_leaves(
+        ledger_entries, filters.get("from_date"), filters.get("to_date")
+    )
+
+    # removing leaves taken from expired_allocation
+    expired_leaves = max(expired_allocation - leaves_taken, 0)
+
+    # Formula for calculating  closing balance
+    closing = max(opening + new_allocation - (leaves_taken + expired_leaves), 0)
+    return dict(
+        leaves_allocated=flt(new_allocation),
+        leaves_expired=flt(expired_leaves),
+        opening_balance=flt(opening),
+        leaves_taken=flt(leaves_taken),
+        closing_balance=flt(closing),
+    )
+    # return [opening, new_allocation, leaves_taken, expired_leaves, closing]
+
+
+def remove_expired_leave(records):
+    expired_within_period = 0
+    for record in records:
+        if record.is_expired:
+            expired_within_period += record.leaves
+    return expired_within_period * -1
+
+
+def get_allocated_and_expired_leaves(records, from_date, to_date):
+
+    from frappe.utils import getdate
+
+    new_allocation = 0
+    expired_leaves = 0
+
+    for record in records:
+        if record.to_date < getdate(today()) and record.leaves > 0:
+            expired_leaves += record.leaves
+
+        if record.from_date >= getdate(from_date) and record.leaves > 0:
+            new_allocation += record.leaves
+
+    return new_allocation, expired_leaves
+
 
 
 @frappe.whitelist()
@@ -428,6 +586,7 @@ def get_dashboard():
         }
         dashboard_data["employee_image"] = emp_data.get("image")
         dashboard_data["employee_name"] = emp_data.get("employee_name")
+        get_latest_leave(dashboard_data,emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
         get_latest_ss(dashboard_data, emp_data.get("name"))
         get_last_log_type(dashboard_data, emp_data.get("name"))
@@ -447,7 +606,7 @@ def get_leave_balance_dashboard():
             res = get_leave_balance_report(
                 emp_data.get("name"), emp_data.get("company"), fiscal_year
             )
-            dashboard_data["leave_balance"] = res["result"]
+            dashboard_data["leave_balance"] = res
         return gen_response(200, "Leave balance data get successfully", dashboard_data)
     except Exception as e:
         return exception_handler(e)
@@ -512,8 +671,8 @@ def get_notice_board(employee=None):
 def get_attendance_details(emp_data):
     last_date = get_last_day(today())
     first_date = get_first_day(today())
-    total_days = date_diff(last_date, first_date)
-    till_date_days = date_diff(today(), first_date)
+    total_days = date_diff(last_date, first_date) + 1
+    till_date_days = date_diff(today(), first_date) + 1
     days_off = 0
     absent = 0
     total_present = 0
@@ -567,7 +726,7 @@ def get_attendance_details(emp_data):
 @frappe.whitelist()
 def run_attendance_report(employee, company):
     filters = {
-        "month": cstr(frappe.utils.getdate().month),
+        "month": cstr(get_month_name(frappe.utils.getdate().month)),
         "year": cstr(frappe.utils.getdate().year),
         "company": company,
         "employee": employee,
@@ -580,12 +739,30 @@ def run_attendance_report(employee, company):
         return attendance_report.get("result")[0]
 
 
+def get_month_name(month):
+    month_list = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    ]
+    return month_list[int(month) - 1]
+
 def get_latest_leave(dashboard_data, employee):
     leave_applications = frappe.get_all(
         "Leave Application",
         filters={"employee": employee},
         fields=[
             "status",
+            "name",
             "DATE_FORMAT(from_date, '%d-%m-%Y') AS from_date",
             "DATE_FORMAT(to_date, '%d-%m-%Y') AS to_date",
             "name",
@@ -601,24 +778,19 @@ def get_latest_leave(dashboard_data, employee):
 def get_latest_expense(dashboard_data, employee):
     global_defaults = get_global_defaults()
     expense_list = frappe.get_all(
-        "Expense Claim",
-        filters={"employee": employee},
-        fields=["name"],
+        "OTPL Expense",
+        filters={"sent_by": employee},
+        fields=["*"],
         order_by="modified desc",
     )
     if len(expense_list) >= 1:
-        expense_doc = frappe.get_doc("Expense Claim", expense_list[0].name)
-        dashboard_data["latest_expense"] = dict(
-            status=expense_doc.approval_status,
-            date=expense_doc.expenses[0].expense_date.strftime("%d-%m-%Y"),
-            expense_type=expense_doc.expenses[0].expense_type,
-            # amount=expense_doc.expenses[0].amount,
-            amount=fmt_money(
-                expense_doc.expenses[0].amount,
-                currency=global_defaults.get("default_currency"),
-            ),
-            name=expense_doc.name,
-        )
+        if expense_list[0]["amount"]:
+            expense_list[0]["amount"] = fmt_money(
+                    expense_list[0].get("amount"),
+                    currency=global_defaults.get("default_currency"),
+                )
+
+        dashboard_data["latest_expense"] = expense_list[0]
 
 
 def get_latest_ss(dashboard_data, employee):
@@ -646,9 +818,11 @@ def get_latest_ss(dashboard_data, employee):
 
 @frappe.whitelist()
 def create_employee_log(
-    log_type, location=None, odometer_reading=None, attendance_image=None
+    log_type, location=None, odometer_reading=None, log_time=None,attendance_image=None
 ):
     try:
+        if not log_time:
+            log_time = now_datetime().__str__()[:-7]
         emp_data = get_employee_by_user(
             frappe.session.user, fields=["name", "default_shift"]
         )
@@ -658,7 +832,7 @@ def create_employee_log(
                 doctype="Employee Checkin",
                 employee=emp_data.get("name"),
                 log_type=log_type,
-                time=now_datetime().__str__()[:-7],
+                time=log_time,
                 location=location,
                 odometer_reading=odometer_reading,
             )
@@ -2051,21 +2225,31 @@ def update_task(**kwargs):
 
         data = kwargs
         task_doc = frappe.get_doc("Task", data.get("name"))
+        if data.get("assign_to"):
+            assign_to_list = data.get("assign_to")
+            del data["assign_to"]
+        
         task_doc.update(data)
         task_doc.save()
-        if data.get("assign_to"):
-            assign_to.add(
-                {
-                    "assign_to": data.get("assign_to"),
-                    "doctype": task_doc.doctype,
-                    "name": task_doc.name,
-                }
-            )
+        if assign_to_list:
+            if isinstance(assign_to_list, str):
+                assign_to_list = [assign_to_list]
+            
+            for assign_to_user in assign_to_list:
+                assign_to.add(
+                    {
+                        "assign_to": assign_to_user,
+                        "doctype": task_doc.doctype,
+                        "name": task_doc.name,
+                    }
+                )
+
         return gen_response(200, "Task has been updated successfully")
     except frappe.PermissionError:
-        return gen_response(500, "Not permitted for update task")
+        return gen_response(500, "Not permitted to update task")
     except Exception as e:
         return exception_handler(e)
+
 
 
 @frappe.whitelist()

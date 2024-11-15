@@ -1,1 +1,1 @@
-from .task import create_task as create_wms_task,create_task as update_wms_task,get_task_list,get_task_details,get_user_list,mark_task_complete,extend_date_request,approve_extend_request,reject_extend_request,reopen_task
+from .task import create_task as create_wms_task,create_task as update_wms_task,get_task_list,get_task_details,get_user_list,mark_task_complete,extend_date_request,approve_extend_request,reject_extend_request,reopen_task,get_status_list

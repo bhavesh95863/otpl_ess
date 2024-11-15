@@ -49,7 +49,7 @@ def ess_validate(methods):
     return wrapper
 
 
-def get_employee_by_user(user, fields=["name"]):
+def get_employee_by_user(user, fields=["name","company"]):
     if isinstance(fields, str):
         fields = [fields]
     emp_data = frappe.get_cached_value(

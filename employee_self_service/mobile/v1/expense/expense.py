@@ -7,8 +7,9 @@ from employee_self_service.mobile.v1.api_utils import (
     ess_validate,
     exception_handler,
     get_employee_by_user,
+    get_global_defaults
 )
-from frappe.utils import get_datetime
+from frappe.utils import get_datetime,fmt_money
 
 
 @frappe.whitelist()
@@ -47,11 +48,13 @@ def create_expense(**data):
 @ess_validate(methods=["GET"])
 def get_expense_list(start=0, page_length=10, filters={}):
     try:
+        global_defaults = get_global_defaults()
         emp_data = get_employee_by_user(
         frappe.session.user, fields=["name", "image", "department","company"]
         )
-        filters["sent_by"] = emp_data.get("name")
-        timesheet_list = frappe.get_list(
+        if isinstance(filters,str):
+            filters = json.loads(filters)
+        expense_list = frappe.get_list(
             "OTPL Expense",
             fields=["*"],
             start=start,
@@ -59,7 +62,16 @@ def get_expense_list(start=0, page_length=10, filters={}):
             order_by="modified desc",
             filters=filters,
         )
-        return gen_response(200, "Expense List getting Successfully", timesheet_list)
+        for row in expense_list:
+            row["amount"] = fmt_money(
+                    row.get("amount"),
+                    currency=global_defaults.get("default_currency"),
+                )
+            row["amount_approved"] = fmt_money(
+                    row.get("amount_approved"),
+                    currency=global_defaults.get("default_currency"),
+                )
+        return gen_response(200, "Expense List getting Successfully", expense_list)
     except frappe.PermissionError:
         return gen_response(500, "Not permitted read OTPL Expense")
     except Exception as e:
@@ -69,7 +81,16 @@ def get_expense_list(start=0, page_length=10, filters={}):
 @ess_validate(methods=["GET"])
 def get_expense_details(**data):
     try:
-        expense_doc = frappe.get_doc("OTPL Expense",data.get("name"))
+        global_defaults = get_global_defaults()
+        expense_doc = json.loads(frappe.get_doc("OTPL Expense",data.get("name")).as_json())
+        expense_doc["amount"] = fmt_money(
+                expense_doc.get("amount"),
+                currency=global_defaults.get("default_currency"),
+            )
+        expense_doc["amount_approved"] = fmt_money(
+                expense_doc.get("amount_approved"),
+                currency=global_defaults.get("default_currency"),
+            )
         return gen_response(200, "Expense get successfully", expense_doc)
     except frappe.PermissionError:
         return gen_response(500, "Not permitted for read OTPL Expense")
