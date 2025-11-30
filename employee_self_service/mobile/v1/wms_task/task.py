@@ -80,10 +80,10 @@ def get_task_details(**data):
         if "WMS Admin" in frappe.get_roles(frappe.session.user) or "System Manager" in frappe.get_roles(frappe.session.user):
             wms_task_doc["edit"] = True
         if not wms_task_doc.get("status") == "Extend Required" and wms_task_doc.get("assign_to") == frappe.session.user:
-            if wms_task_doc.get("status") in ['Not Yet Due',' Due Today',' Without Due Date','Overdue']:
+            if wms_task_doc.get("status") in ['Not Yet Due','Due Today',' Without Due Date','Overdue']:
                 wms_task_doc["complete_action"] = True
-            if not wms_task_doc.get("status") == "Overdue":
-                wms_task_doc["extend_action"] = True
+                if not wms_task_doc.get("status") == "Overdue":
+                    wms_task_doc["extend_action"] = True
         if wms_task_doc.get("status") == "Extend Required" and "WMS Admin" in frappe.get_roles(frappe.session.user):
             wms_task_doc["extend_workflow_action"] = True
         if wms_task_doc.get("status") == "Late" or wms_task_doc.get("status") == "Ontime":

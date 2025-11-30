@@ -1,8 +1,6 @@
 {
- "actions": [],
  "allow_rename": 1,
  "creation": "2022-11-19 21:43:00.887054",
- "default_view": "List",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
@@ -27,6 +25,7 @@
   "quick_task",
   "column_break_tyodi",
   "allow_odometer_reading_input",
+  "enable_device_restrictions",
   "section_break_npr4y",
   "version",
   "update_version_forcefully",
@@ -169,12 +168,16 @@
    "fieldname": "check_in_with_location",
    "fieldtype": "Check",
    "label": "Check in with location"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_device_restrictions",
+   "fieldtype": "Check",
+   "label": "Enable Device Restrictions"
   }
  ],
- "index_web_pages_for_search": 1,
  "issingle": 1,
- "links": [],
- "modified": "2023-10-30 19:10:25.062705",
+ "modified": "2025-04-09 00:04:44.113083",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",
@@ -193,7 +196,6 @@
  ],
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": [],
  "track_changes": 1,
  "track_seen": 1
 }

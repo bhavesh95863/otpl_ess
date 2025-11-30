@@ -49,7 +49,7 @@ def ess_validate(methods):
     return wrapper
 
 
-def get_employee_by_user(user, fields=["name","company"]):
+def get_employee_by_user(user, fields=["name","company","leave_approver"]):
     if isinstance(fields, str):
         fields = [fields]
     emp_data = frappe.get_cached_value(
@@ -150,3 +150,19 @@ def update_workflow_state(reference_doctype, reference_name, action):
     except Exception as e:
         frappe.db.rollback()
         return exception_handler(e)
+
+
+def convert_timezone(timestamp, from_timestamp, time_zone):
+    from pytz import UnknownTimeZoneError, timezone
+
+    fromtimezone = timezone(from_timestamp).localize(timestamp)
+    try:
+        return fromtimezone.astimezone(timezone(time_zone))
+    except UnknownTimeZoneError:
+        return fromtimezone
+
+def get_system_timezone() -> str:
+    """Return the system timezone."""
+    return (
+        frappe.get_system_settings("time_zone") or "Asia/Kolkata"
+    )  # Default to India ?!

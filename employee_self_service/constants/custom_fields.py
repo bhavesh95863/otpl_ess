@@ -47,6 +47,13 @@ CUSTOM_FIELDS = {
             "fieldtype": "Attach",
             "insert_after": "location",
         },
+        {
+            "fieldname": "log_location",
+            "label": "Log Location",
+            "fieldtype": "Small Text",
+            "read_only": 1,
+            "insert_after": "attendance_image",
+        },
     ],
 }
 

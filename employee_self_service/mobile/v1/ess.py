@@ -42,25 +42,31 @@ from erpnext.hr.doctype.leave_application.leave_application import (
     get_leaves_for_period,
 )
 from frappe.utils import add_to_date, get_datetime
+
 DATE_FORMAT = "%Y-%m-%d"
 
 
 def get_date_str(date_obj):
-	"""Return the given datetime like object (datetime.date, datetime.datetime, string) as a string in `yyyy-mm-dd` format."""
-	if isinstance(date_obj, str):
-		date_obj = get_datetime(date_obj)
-	return date_obj.strftime(DATE_FORMAT)
+    """Return the given datetime like object (datetime.date, datetime.datetime, string) as a string in `yyyy-mm-dd` format."""
+    if isinstance(date_obj, str):
+        date_obj = get_datetime(date_obj)
+    return date_obj.strftime(DATE_FORMAT)
 
 
 @frappe.whitelist(allow_guest=True)
-def login(usr, pwd):
+def login(usr, pwd, unique_id=None):
     try:
         login_manager = LoginManager()
         login_manager.authenticate(usr, pwd)
         validate_employee(login_manager.user)
+        emp_data = get_employee_by_user(login_manager.user)
+        # Register device (throws exception if device is not valid)
+        if unique_id:
+            if not register_device(emp_data.get("name"), unique_id):
+                return
+
         login_manager.post_login()
         if frappe.response["message"] == "Logged In":
-            emp_data = get_employee_by_user(login_manager.user)
             frappe.response["user"] = login_manager.user
             frappe.response["key_details"] = generate_key(login_manager.user)
             frappe.response["employee_id"] = emp_data.get("name")
@@ -69,6 +75,48 @@ def login(usr, pwd):
         gen_response(500, frappe.response["message"])
     except Exception as e:
         return exception_handler(e)
+
+
+def register_device(employee, unique_id):
+    # check if device registration exists for this employee
+    # if not enter the given number and create registration
+    # if exists than validate the given number with existing number
+    # if number mataches than allow login
+    # else through frappe exceptions
+    try:
+        ess_settings = get_ess_settings()
+        if not ess_settings.get("enable_device_restrictions"):
+            return True
+
+        existing_registration = frappe.db.exists(
+            "Employee Device Registration", {"employee": employee}
+        )
+        existing_unique_id = frappe.db.exists(
+            "Employee Device Registration", {"unique_id": unique_id}
+        )
+
+        if existing_unique_id and not existing_registration:
+            gen_response(500, "Device not recognized. Please contact admin.")
+            return False
+
+        if not existing_registration:
+            # Register the device if not exists
+            doc = frappe.new_doc("Employee Device Registration")
+            doc.employee = employee
+            doc.unique_id = unique_id
+            doc.insert(ignore_permissions=True)
+        else:
+            # Fetch the existing device_id to compare
+            registered_device_id = frappe.db.get_value(
+                "Employee Device Registration", existing_registration, "unique_id"
+            )
+            if registered_device_id != unique_id:
+                gen_response(500, "Device not recognized. Please contact admin.")
+                return False
+        return True
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "register_device_error")
+        frappe.throw("An error occurred during device registration.")
 
 
 def validate_employee(user):
@@ -81,25 +129,77 @@ def validate_employee(user):
 @ess_validate(methods=["POST"])
 def make_leave_application(*args, **kwargs):
     try:
-        from erpnext.hr.doctype.leave_application.leave_application import (
-            get_leave_approver,
-        )
 
         emp_data = get_employee_by_user(frappe.session.user)
         if not len(emp_data) >= 1:
             return gen_response(500, "Employee does not exists!")
         validate_employee_data(emp_data)
+        if not emp_data.get("leave_approver"):
+            frappe.throw("Leave approver not selected in employee record.")
         leave_application_doc = frappe.get_doc(
             dict(
-                doctype="Leave Application",
+                doctype="OTPL Leave",
                 employee=emp_data.get("name"),
-                company=emp_data.company,
-                leave_approver=get_leave_approver(emp_data.name),
+                approved_from_date=emp_data.get("from_date"),
+                approved_to_date=emp_data.get("to_date"),
+                approver=emp_data.get("leave_approver"),
             )
         )
         leave_application_doc.update(kwargs)
         res = leave_application_doc.insert()
         gen_response(200, "Leave application successfully added!")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def update_leave_application(*args, **kwargs):
+    try:
+        emp_data = get_employee_by_user(frappe.session.user)
+        if not len(emp_data) >= 1:
+            return gen_response(500, "Employee does not exists!")
+        validate_employee_data(emp_data)
+
+        leave_id = kwargs.get("name")
+        if not leave_id:
+            return gen_response(500, "Leave ID is required!")
+
+        if not frappe.db.exists("Leave Application", kwargs.get("name")):
+            return gen_response(500, "Leave application does not exists!")
+
+        leave_application_doc = frappe.get_doc("Leave Application", leave_id)
+        leave_application_doc.update(kwargs)
+        leave_application_doc.save()
+        gen_response(200, "Leave application successfully updated!")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def cancel_leave_application(*args, **kwargs):
+    try:
+        emp_data = get_employee_by_user(frappe.session.user)
+        if not len(emp_data) >= 1:
+            return gen_response(500, "Employee does not exists!")
+        validate_employee_data(emp_data)
+
+        leave_id = kwargs.get("name")
+        if not leave_id:
+            return gen_response(500, "Leave ID is required!")
+
+        if not frappe.db.exists("Leave Application", kwargs.get("name")):
+            return gen_response(500, "Leave application does not exists!")
+
+        leave_application_doc = frappe.get_doc("Leave Application", leave_id)
+        if leave_application_doc.employee != emp_data.get("name"):
+            return gen_response(
+                500, "You are not authorized to cancel this leave application!"
+            )
+        leave_application_doc.status = "Cancelled"
+        leave_application_doc.save()
+        gen_response(200, "Leave application successfully cancelled!")
     except Exception as e:
         return exception_handler(e)
 
@@ -177,6 +277,44 @@ def get_leave_application_list():
         return exception_handler(e)
 
 
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_leave_application(name):
+    """
+    Get Leave Application which is already applied. Get Leave Balance Report
+    """
+    try:
+        emp_data = get_employee_by_user(frappe.session.user)
+        validate_employee_data(emp_data)
+
+        if not frappe.db.exists(
+            "Leave Application", {"name": name, "employee": emp_data.get("name")}
+        ):
+            return gen_response(500, "Leave application does not exists!")
+
+        leave_application_fields = [
+            "name",
+            "leave_type",
+            "total_leave_days",
+            "description",
+            "status",
+            "half_day",
+            "from_date",
+            "to_date",
+            "posting_date",
+            "half_day_date",
+            "alternate_mobile_number",
+        ]
+
+        leave_application = frappe.db.get_value(
+            "Leave Application", name, leave_application_fields, as_dict=True
+        )
+
+        return gen_response(200, "Leave data getting successfully", leave_application)
+    except Exception as e:
+        return exception_handler(e)
+
+
 # def get_leave_balance_report(employee, company, fiscal_year):
 #     fiscal_year = get_fiscal_year(fiscal_year=fiscal_year, as_dict=True)
 #     year_start_date = get_date_str(fiscal_year.get("year_start_date"))
@@ -211,7 +349,6 @@ def get_leave_balance_report(employee, company, fiscal_year):
     return leave_report(filters_leave_balance)
 
 
-
 def leave_report(filters):
     leave_types = frappe.db.sql_list(
         "select name from `tabLeave Type` order by name asc"
@@ -224,8 +361,6 @@ def get_data(filters, leave_types):
 
     if filters.get("to_date") <= filters.get("from_date"):
         frappe.throw(_("'From Date should be less than To Date"))
-
-
 
     data = []
     # for employee in active_employees:
@@ -284,7 +419,6 @@ def get_leave_ledger_entries(from_date, to_date, employee, leave_type):
     )
 
     return records
-
 
 
 def calculate_leaves_details(filters, leave_type, employee):
@@ -349,7 +483,6 @@ def get_allocated_and_expired_leaves(records, from_date, to_date):
             new_allocation += record.leaves
 
     return new_allocation, expired_leaves
-
 
 
 @frappe.whitelist()
@@ -558,11 +691,24 @@ def download_pdf(doctype, name, format=None, doc=None, no_letterhead=0):
 @ess_validate(methods=["GET"])
 def get_dashboard():
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["name", "company", "image", "employee_name"])
+        emp_data = get_employee_by_user(
+            frappe.session.user,
+            fields=[
+                "name",
+                "company",
+                "image",
+                "employee_name",
+                "location",
+                "reports_to",
+                "business_vertical",
+                "sales_order"
+            ],
+        )
         notice_board = get_notice_board(emp_data.get("name"))
         # attendance_details = get_attendance_details(emp_data)
         log_details = get_last_log_details(emp_data.get("name"))
         settings = get_ess_settings()
+
         dashboard_data = {
             "notice_board": notice_board,
             "leave_balance": [],
@@ -574,19 +720,32 @@ def get_dashboard():
             "version": settings.get("version") or "1.0",
             "update_version_forcefully": settings.get("update_version_forcefully") or 1,
             "company": emp_data.get("company") or "Employee Dashboard",
-            "last_log_time": log_details.get("time").strftime("%I:%M%p")
-            if log_details.get("time")
-            else "",
+            "last_log_time": (
+                log_details.get("time").strftime("%I:%M%p")
+                if log_details.get("time")
+                else ""
+            ),
             "check_in_with_image": settings.get("check_in_with_image"),
             "check_in_with_location": settings.get("check_in_with_location"),
             "quick_task": settings.get("quick_task"),
             "allow_odometer_reading_input": settings.get(
                 "allow_odometer_reading_input"
             ),
+            "check_in_request": 1 if emp_data.get("location") == "Site" else 0,
+            "location": emp_data.get("location"),
+            "business_vertical": emp_data.get("business_vertical"),
+            "sales_order": emp_data.get("sales_order"),
         }
+
+        approval_manager = emp_data.get("reports_to")
+        if approval_manager:
+            approval_manager = frappe.db.get_value(
+                "Employee", approval_manager, "user_id"
+            )
+        dashboard_data["approval_manager"] = approval_manager or None
         dashboard_data["employee_image"] = emp_data.get("image")
         dashboard_data["employee_name"] = emp_data.get("employee_name")
-        get_latest_leave(dashboard_data,emp_data.get("name"))
+        get_latest_leave(dashboard_data, emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
         get_latest_ss(dashboard_data, emp_data.get("name"))
         get_last_log_type(dashboard_data, emp_data.get("name"))
@@ -668,7 +827,7 @@ def get_notice_board(employee=None):
     return notice_board_employee
 
 
-def get_attendance_details(emp_data):
+def get_attendance_details(emp_data, year=None, month=None):
     last_date = get_last_day(today())
     first_date = get_first_day(today())
     total_days = date_diff(last_date, first_date) + 1
@@ -756,6 +915,7 @@ def get_month_name(month):
     ]
     return month_list[int(month) - 1]
 
+
 def get_latest_leave(dashboard_data, employee):
     leave_applications = frappe.get_all(
         "Leave Application",
@@ -786,9 +946,9 @@ def get_latest_expense(dashboard_data, employee):
     if len(expense_list) >= 1:
         if expense_list[0]["amount"]:
             expense_list[0]["amount"] = fmt_money(
-                    expense_list[0].get("amount"),
-                    currency=global_defaults.get("default_currency"),
-                )
+                expense_list[0].get("amount"),
+                currency=global_defaults.get("default_currency"),
+            )
 
         dashboard_data["latest_expense"] = expense_list[0]
 
@@ -818,14 +978,24 @@ def get_latest_ss(dashboard_data, employee):
 
 @frappe.whitelist()
 def create_employee_log(
-    log_type, location=None, odometer_reading=None, log_time=None,attendance_image=None
+    log_type,
+    location=None,
+    odometer_reading=None,
+    log_time=None,
+    attendance_image=None,
+    requested_from=None,
+    reason=None,
+    today_work=None,
+    order=None,
 ):
     try:
         if not log_time:
             log_time = now_datetime().__str__()[:-7]
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name", "default_shift"]
+            frappe.session.user, fields=["name", "default_shift", "sales_order", "reports_to"]
         )
+
+        order = emp_data.get("sales_order") or None
 
         log_doc = frappe.get_doc(
             dict(
@@ -835,6 +1005,10 @@ def create_employee_log(
                 time=log_time,
                 location=location,
                 odometer_reading=odometer_reading,
+                reason=reason,
+                today_work=today_work,
+                order=order,
+                requested_from=emp_data.get("reports_to")
             )
         ).insert(ignore_permissions=True)
         # update_shift_last_sync(emp_data)
@@ -945,7 +1119,7 @@ def get_employees_having_an_event_today(event_type, date=None):
 @ess_validate(methods=["GET"])
 def get_task_list(start=0, page_length=10, filters=None):
     try:
-        frappe.log_error(title="filters",message=filters)
+        frappe.log_error(title="filters", message=filters)
         tasks = frappe.get_list(
             "Task",
             fields=[
@@ -959,9 +1133,9 @@ def get_task_list(start=0, page_length=10, filters=None):
                 "_assign as assigned_to",
                 "owner as assigned_by",
                 "progress",
-                "issue"
+                "issue",
             ],
-            filters = filters,
+            filters=filters,
             start=start,
             page_length=page_length,
             order_by="modified desc",
@@ -978,7 +1152,9 @@ def get_task_list(start=0, page_length=10, filters=None):
             if task.get("assigned_to"):
                 task["assigned_to"] = frappe.get_all(
                     "User",
-                    filters=[["User", "email", "in", json.loads(task.get("assigned_to"))]],
+                    filters=[
+                        ["User", "email", "in", json.loads(task.get("assigned_to"))]
+                    ],
                     fields=["full_name as user", "user_image"],
                     order_by="creation asc",
                 )
@@ -990,6 +1166,7 @@ def get_task_list(start=0, page_length=10, filters=None):
     except Exception as e:
         return exception_handler(e)
 
+
 def get_task_assigned_by(task):
     task["assigned_by"] = frappe.db.get_value(
         "User",
@@ -997,7 +1174,6 @@ def get_task_assigned_by(task):
         ["full_name as user", "user_image"],
         as_dict=1,
     )
-
 
 
 def get_task_comments(task):
@@ -1014,7 +1190,7 @@ def get_task_comments(task):
             "creation",
             "comment_email",
         ],
-    )    
+    )
     for comment in comments:
         comment["commented"] = pretty_date(comment["creation"])
         comment["creation"] = comment["creation"].strftime("%I:%M %p")
@@ -1025,6 +1201,7 @@ def get_task_comments(task):
 
     task["comments"] = comments
     task["num_comments"] = len(comments)
+
 
 def validate_assign_task(task_id):
     assigned_to = frappe.get_value(
@@ -1064,15 +1241,16 @@ def update_task_status(task_id=None, new_status=None):
     except Exception as e:
         return exception_handler(e)
 
+
 @frappe.whitelist()
 @ess_validate(methods=["POST"])
-def update_task_progress(task_id=None,progress=None):
+def update_task_progress(task_id=None, progress=None):
     try:
         if not task_id or not progress:
             return gen_response(500, "task id and progress is required")
         validate_assign_task(task_id=task_id)
         if progress:
-            frappe.db.set_value("Task",task_id,"progress",progress)
+            frappe.db.set_value("Task", task_id, "progress", progress)
         return gen_response(200, "Progress updated successfully")
     except frappe.PermissionError:
         return gen_response(500, "Not permitted for update task")
@@ -1151,18 +1329,17 @@ def get_task_list_dashboard():
                 "reason",
                 "details",
                 "assign_by",
-                "assign_to"
+                "assign_to",
             ],
             order_by="modified desc",
             filters=filters,
-            limit=4
+            limit=4,
         )
         return gen_response(200, "Task List getting Successfully", timesheet_list)
     except frappe.PermissionError:
         return gen_response(500, "Not permitted read WMS Task")
     except Exception as e:
         return exception_handler(e)
- 
 
 
 @frappe.whitelist()
@@ -1193,8 +1370,6 @@ def get_attendance_list(year=None, month=None):
                 "DATE_FORMAT(attendance_date, '%d %W') AS attendance_date",
                 "status",
                 "working_hours",
-                "in_time",
-                "out_time",
                 "late_entry",
             ],
         )
@@ -1592,6 +1767,16 @@ def employee_device_info(**kwargs):
                 )
             ).insert(ignore_permissions=True)
 
+        emp_data = get_employee_by_user(frappe.session.user)
+        existing_registration = frappe.db.exists(
+            "Employee Device Registration", {"employee": emp_data.get("name")}
+        )
+        if not existing_registration and data.get("unique_id"):
+            # Register the device if not exists
+            doc = frappe.new_doc("Employee Device Registration")
+            doc.employee = emp_data.get("name")
+            doc.unique_id = data.get("unique_id")
+            doc.insert(ignore_permissions=True)
         return gen_response(200, "Device information saved successfully!")
     except Exception as e:
         return exception_handler(e)
@@ -1700,11 +1885,11 @@ def on_holiday_event():
 @ess_validate(methods=["GET"])
 def get_branch():
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["branch"])
+        emp_data = get_employee_by_user(frappe.session.user, fields=["location"])
         branch = frappe.db.get_value(
-            "Branch",
-            {"branch": emp_data.get("branch")},
-            ["branch", "latitude", "longitude", "radius"],
+            "ESS Location",
+            {"location": emp_data.get("location")},
+            ["location", "latitude", "longitude", "radius"],
             as_dict=1,
         )
 
@@ -1786,9 +1971,7 @@ def get_task_by_id(task_id=None):
     try:
         if not task_id:
             return gen_response(500, "task_id is required", [])
-        filters = [
-            ["Task", "name", "=", task_id]
-        ]
+        filters = [["Task", "name", "=", task_id]]
         tasks = frappe.db.get_value(
             "Task",
             {"name": task_id},
@@ -1807,23 +1990,23 @@ def get_task_by_id(task_id=None):
                 "completed_by",
                 "completed_on",
                 "progress",
-                "issue"
+                "issue",
             ],
             as_dict=1,
         )
         if not tasks:
             return gen_response(500, "you have not task with this task id", [])
-            
+
         tasks["assigned_by"] = frappe.db.get_value(
             "User",
             {"name": tasks.get("assigned_by")},
-            ["name","full_name as user", "full_name", "user_image"],
+            ["name", "full_name as user", "full_name", "user_image"],
             as_dict=1,
         )
         tasks["completed_by"] = frappe.db.get_value(
             "User",
             {"name": tasks.get("completed_by")},
-            ["name","full_name as user", "full_name", "user_image"],
+            ["name", "full_name as user", "full_name", "user_image"],
             as_dict=1,
         )
         tasks["project_name"] = frappe.db.get_value(
@@ -1834,7 +2017,7 @@ def get_task_by_id(task_id=None):
             tasks["assigned_to"] = frappe.get_all(
                 "User",
                 filters=[["User", "email", "in", json.loads(tasks.get("assigned_to"))]],
-                fields=["name","full_name as user", "full_name", "user_image"],
+                fields=["name", "full_name as user", "full_name", "user_image"],
                 order_by="creation asc",
             )
 
@@ -2085,7 +2268,9 @@ def get_transactions(
 @ess_validate(methods=["GET"])
 def get_customer_list(start=0, page_length=10, filters=None):
     try:
-        customer = frappe.get_list("Customer", ["name", "customer_name"],  
+        customer = frappe.get_list(
+            "Customer",
+            ["name", "customer_name"],
             start=start,
             filters=filters,
             page_length=page_length,
@@ -2100,9 +2285,11 @@ def get_customer_list(start=0, page_length=10, filters=None):
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
-def get_employee_list():
+def get_employee_list(start=0, page_length=20):
     try:
-        employee = frappe.get_list("Employee", ["name", "employee_name"])
+        employee = frappe.get_list(
+            "Employee", ["name", "employee_name"], start=start, page_length=page_length
+        )
         return gen_response(200, "Employee list Getting Successfully", employee)
     except frappe.PermissionError:
         return gen_response(500, "Not permitted read employee")
@@ -2121,9 +2308,11 @@ def send_notification_for_task_assign(doc, event):
         # )
         create_push_notification(
             title=f"New Task Assigned - {task_doc.get('subject')}",
-            message=strip_html(str(task_doc.get("description")))
-            if task_doc.get("description")
-            else "",
+            message=(
+                strip_html(str(task_doc.get("description")))
+                if task_doc.get("description")
+                else ""
+            ),
             send_for="Single User",
             user=doc.owner,
             notification_type="task_assignment",
@@ -2228,13 +2417,13 @@ def update_task(**kwargs):
         if data.get("assign_to"):
             assign_to_list = data.get("assign_to")
             del data["assign_to"]
-        
+
         task_doc.update(data)
         task_doc.save()
         if assign_to_list:
             if isinstance(assign_to_list, str):
                 assign_to_list = [assign_to_list]
-            
+
             for assign_to_user in assign_to_list:
                 assign_to.add(
                     {
@@ -2249,7 +2438,6 @@ def update_task(**kwargs):
         return gen_response(500, "Not permitted to update task")
     except Exception as e:
         return exception_handler(e)
-
 
 
 @frappe.whitelist()
@@ -2322,3 +2510,15 @@ def get_task_status_list():
 #             user=doc.allocated_to,
 #             notification_type="task_comment",
 #         )
+
+
+@frappe.whitelist()
+def get_attendance_details_by_month(year, month):
+    try:
+        emp_data = get_employee_by_user(frappe.session.user, fields=["name", "company"])
+        attendance_details = get_attendance_details(emp_data, year, month)
+        return gen_response(
+            200, "Leave balance data get successfully", attendance_details
+        )
+    except Exception as e:
+        return exception_handler(e)

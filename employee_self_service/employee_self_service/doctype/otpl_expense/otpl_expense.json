@@ -7,10 +7,14 @@
  "field_order": [
   "sent_by",
   "employee_name",
+  "approval_manager",
+  "expense_type",
+  "expense_claim_type",
   "column_break_2",
   "date_of_entry",
   "date_of_expense",
   "status",
+  "business_line",
   "section_break_5",
   "amount",
   "details_of_expense",
@@ -117,10 +121,34 @@
    "fieldtype": "Select",
    "label": "Status",
    "options": "Open\nApproved"
+  },
+  {
+   "fieldname": "expense_type",
+   "fieldtype": "Select",
+   "label": "Expense Type",
+   "options": "Order\nNon-Order"
+  },
+  {
+   "fieldname": "approval_manager",
+   "fieldtype": "Link",
+   "label": "Approval Manager",
+   "options": "User"
+  },
+  {
+   "fieldname": "business_line",
+   "fieldtype": "Link",
+   "label": "Business Line",
+   "options": "Business Line"
+  },
+  {
+   "fieldname": "expense_claim_type",
+   "fieldtype": "Link",
+   "label": "Expense Claim Type",
+   "options": "Expense Claim Type"
   }
  ],
  "is_submittable": 1,
- "modified": "2024-04-07 18:44:49.677822",
+ "modified": "2025-01-27 15:13:52.545187",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Expense",

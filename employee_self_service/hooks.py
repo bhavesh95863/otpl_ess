@@ -196,13 +196,11 @@ scheduler_events = {
 
 fixtures = [
     {
-        "dt": "Notice Board Template",
-    },
-    {
-        "dt": "Notice Board Template Type",
-    },
-    {"dt": "Custom DocPerm", "filters": [["name", "in", ["5318c19ff9", "c3d5dc5296"]]]},
-    {
-        "dt": "Ess Translation",
-    },
+        "dt": "Custom Field",
+        "filters": [["dt", "in", [
+            "Employee",
+            "Employee Checkin",
+            "Branch"
+        ]]],
+    }
 ]
