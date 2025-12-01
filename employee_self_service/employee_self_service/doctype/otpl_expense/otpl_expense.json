@@ -15,6 +15,8 @@
   "date_of_expense",
   "status",
   "business_line",
+  "approved_by_manager",
+  "approve",
   "section_break_5",
   "amount",
   "details_of_expense",
@@ -22,6 +24,7 @@
   "sales_order",
   "column_break_10",
   "amount_approved",
+    "journal_entry",
   "purpose",
   "query",
   "amended_from"
@@ -90,6 +93,13 @@
    "fieldtype": "Currency",
    "label": "Amount Approved"
   },
+    {
+     "fieldname": "journal_entry",
+     "fieldtype": "Link",
+     "label": "Journal Entry",
+     "options": "Journal Entry",
+     "read_only": 1
+    },
   {
    "fieldname": "purpose",
    "fieldtype": "Small Text",
@@ -144,11 +154,24 @@
    "fieldname": "expense_claim_type",
    "fieldtype": "Link",
    "label": "Expense Claim Type",
-   "options": "Expense Claim Type"
+   "options": "OTPL Expense Type"
+  },
+  {
+   "default": "0",
+   "fieldname": "approved_by_manager",
+   "fieldtype": "Check",
+   "label": "Approved By Manager",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.approved_by_manager != 1",
+   "fieldname": "approve",
+   "fieldtype": "Button",
+   "label": "Approve"
   }
  ],
  "is_submittable": 1,
- "modified": "2025-01-27 15:13:52.545187",
+ "modified": "2025-12-01 00:19:08.346549",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Expense",
@@ -167,7 +190,6 @@
    "write": 1
   }
  ],
- "quick_entry": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
  "track_changes": 1
