@@ -122,7 +122,7 @@ def get_sales_order(start=0, page_length=10, filters=None):
 def get_expense_type():
     try:
         expense_types = frappe.get_all(
-            "Expense Claim Type", filters={}, fields=["name"]
+            "OTPL Expense Type", filters={}, fields=["name"]
         )
         return gen_response(200, "Expense type get successfully", expense_types)
     except Exception as e:

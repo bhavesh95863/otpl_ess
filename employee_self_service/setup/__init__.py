@@ -8,6 +8,7 @@ from employee_self_service.constants.custom_fields import CUSTOM_FIELDS
 def after_install():
     create_custom_fields()
     add_default_language_in_ess_settings()
+    setup_attendance_custom_fields()
 
 def create_custom_fields():
     print("Creating custom fields")
@@ -37,3 +38,7 @@ def add_default_language_in_ess_settings():
                 "ess_language", dict(language="en", language_name="English")
             )
             ess_settings.save(ignore_permissions=True)
+
+def setup_attendance_custom_fields():
+    from employee_self_service.setup.custom_fields import execute
+    execute()

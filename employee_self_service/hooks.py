@@ -123,6 +123,9 @@ doc_events = {
     "ToDo": {
         "after_insert": "employee_self_service.mobile.v1.ess.send_notification_for_task_assign"
     },
+    "Employee Checkin": {
+        "after_insert": "employee_self_service.employee_self_service.utils.otpl_attendance.after_employee_checkin_insert"
+    },
     # "Comment": {
     #     "after_insert": "employee_self_service.mobile.ess.send_notification_on_task_comment"
     # },
@@ -132,10 +135,17 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
-    "daily": ["employee_self_service.mobile.v1.ess.daily_notice_board_event"],
+    "daily": [
+        "employee_self_service.mobile.v1.ess.daily_notice_board_event"
+    ],
     "cron": {
-        "0 9 * * *": ["employee_self_service.mobile.v1.ess.send_notification_on_event"],
-        "0 9 * * *": ["employee_self_service.mobile.v1.ess.on_holiday_event"],
+        "0 9 * * *": [
+            "employee_self_service.mobile.v1.ess.send_notification_on_event",
+            "employee_self_service.mobile.v1.ess.on_holiday_event"
+        ],
+        "0 0 * * *": [
+            "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance"
+        ]
     },
 }
 
