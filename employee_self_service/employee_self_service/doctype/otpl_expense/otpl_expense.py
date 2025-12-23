@@ -7,6 +7,14 @@ import frappe
 from frappe.model.document import Document
 
 class OTPLExpense(Document):
+	def validate(self):
+		if not self.approval_manager:
+			report_to = frappe.db.get_value("Employee", self.sent_by, "reports_to")
+			if report_to:
+				self.approval_manager = frappe.db.get_value("Employee", report_to, "user_id")
+		if not self.business_line:
+			self.business_line = frappe.db.get_value("Employee", self.sent_by, "business_vertical")
+		
 	def approve_expense(self):
 		# Implement the logic for approving the expense here
 		if not frappe.session.user == self.approval_manager and not frappe.session.user == "Administrator":
@@ -71,7 +79,8 @@ class OTPLExpense(Document):
 			frappe.throw("Payroll Payable (employee payable) account not configured on Business Line.")
 
 		company = frappe.db.get_value("Global Defaults", "Global Defaults", "default_company")
-
+		order_cost_center = frappe.db.get_value("Cost Center",{"sales_order": self.sales_order}, "name")
+		frappe.msgprint(f"Using Cost Center: {order_cost_center} for Sales Order: {self.sales_order}")
 		# Build Journal Entry
 		jv_doc = frappe.get_doc({
 			"doctype": "Journal Entry",
@@ -83,12 +92,14 @@ class OTPLExpense(Document):
 				{
 					"account": expense_account,
 					"debit_in_account_currency": self.amount_approved,
+					"cost_center": order_cost_center
 				},
 				{
 					"account": payable_account,
 					"credit_in_account_currency": self.amount_approved,
 					"party_type": "Employee",
 					"party": self.sent_by,
+					"cost_center": order_cost_center
 				}
 			],
 		})
