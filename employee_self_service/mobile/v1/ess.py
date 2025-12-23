@@ -1927,7 +1927,50 @@ def on_holiday_event():
 @ess_validate(methods=["GET"])
 def get_branch():
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["location"])
+        emp_data = get_employee_by_user(frappe.session.user, fields=["location","reports_to"])
+        
+        if emp_data.get("location") == "Site":
+            # Check if reporting manager is assigned
+            if not emp_data.get("reports_to"):
+                return gen_response(500, "Reporting manager not assigned. Please contact administrator.")
+            
+            # Get reporting manager's latest check-in for today
+            latest_checkin = frappe.db.get_value(
+                "Employee Checkin",
+                {
+                    "employee": emp_data.get("reports_to"),
+                    "time": [">=", today()]
+                },
+                ["location"],
+                order_by="time desc",
+                as_dict=1
+            )
+            
+            if not latest_checkin or not latest_checkin.get("location"):
+                return gen_response(500, "Reporting manager has not checked in today. Please wait for manager to check in first.")
+            
+            # Parse latitude and longitude from location field (comma-separated)
+            location_parts = latest_checkin.get("location").split(",")
+            
+            if len(location_parts) != 2:
+                return gen_response(500, "Invalid location format for reporting manager's check-in.")
+            
+            try:
+                latitude = float(location_parts[0].strip())
+                longitude = float(location_parts[1].strip())
+            except (ValueError, AttributeError):
+                return gen_response(500, "Invalid latitude/longitude values for reporting manager's check-in.")
+            
+            # Return reporting manager's check-in location with radius 50
+            branch = {
+                "location": "Site",
+                "latitude": latitude,
+                "longitude": longitude,
+                "radius": 50
+            }
+            return gen_response(200, "Branch", branch)
+        
+        # For non-Site employees, get location from ESS Location
         branch = frappe.db.get_value(
             "ESS Location",
             {"location": emp_data.get("location")},
