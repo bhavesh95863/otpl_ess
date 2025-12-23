@@ -701,7 +701,7 @@ def get_dashboard():
                 "location",
                 "reports_to",
                 "business_vertical",
-                "sales_order"
+                "sales_order",
             ],
         )
         notice_board = get_notice_board(emp_data.get("name"))
@@ -735,6 +735,7 @@ def get_dashboard():
             "location": emp_data.get("location"),
             "business_vertical": emp_data.get("business_vertical"),
             "sales_order": emp_data.get("sales_order"),
+            "allow_expense": 0,
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -992,7 +993,8 @@ def create_employee_log(
         if not log_time:
             log_time = now_datetime().__str__()[:-7]
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name", "default_shift", "sales_order", "reports_to"]
+            frappe.session.user,
+            fields=["name", "default_shift", "sales_order", "reports_to"],
         )
 
         order = emp_data.get("sales_order") or None
@@ -1008,7 +1010,7 @@ def create_employee_log(
                 reason=reason,
                 today_work=today_work,
                 order=order,
-                requested_from=emp_data.get("reports_to")
+                requested_from=emp_data.get("reports_to"),
             )
         ).insert(ignore_permissions=True)
         # update_shift_last_sync(emp_data)
@@ -1781,6 +1783,42 @@ def employee_device_info(**kwargs):
     except Exception as e:
         return exception_handler(e)
 
+
+@frappe.whitelist(allow_guest=True)
+def auto_login_with_device_token(**kwargs):
+    try:
+        data = kwargs
+        device_registration = frappe.db.get_value(
+            "Employee Device Registration",
+            {"unique_id": data.get("unique_id")},
+            ["employee"],
+            as_dict=True,
+        )
+        if device_registration:
+            employee_user = frappe.db.get_value(
+                "Employee", device_registration.get("employee"), "user_id"
+            )
+            if employee_user:
+                validate_employee(employee_user)
+                emp_data = get_employee_by_user(employee_user)
+                
+                login_manager = LoginManager()
+                login_manager.user = employee_user
+                login_manager.post_login()
+                
+                if frappe.response["message"] == "Logged In":
+                    frappe.response["user"] = login_manager.user
+                    frappe.response["key_details"] = generate_key(login_manager.user)
+                    frappe.response["employee_id"] = emp_data.get("name")
+                    frappe.response["redirect_to_login"] = False
+                gen_response(200, frappe.response["message"])
+                return
+        
+        # Device not registered - return 200 but indicate redirect needed
+        frappe.response["redirect_to_login"] = True
+        return gen_response(200, "Device not registered. Please login.")
+    except Exception as e:
+        return exception_handler(e)
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
