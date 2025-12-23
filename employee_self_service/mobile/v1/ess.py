@@ -735,7 +735,6 @@ def get_dashboard():
             "location": emp_data.get("location"),
             "business_vertical": emp_data.get("business_vertical"),
             "sales_order": emp_data.get("sales_order"),
-            "allow_expense": 0,
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -746,6 +745,11 @@ def get_dashboard():
         dashboard_data["approval_manager"] = approval_manager or None
         dashboard_data["employee_image"] = emp_data.get("image")
         dashboard_data["employee_name"] = emp_data.get("employee_name")
+        
+        # Check if user has "SITE EXPENSE INITIATOR" role
+        user_roles = frappe.get_roles(frappe.session.user)
+        dashboard_data["allow_expense"] = 1 if "SITE EXPENSE INITIATOR" in user_roles else 0
+        
         get_latest_leave(dashboard_data, emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
         get_latest_ss(dashboard_data, emp_data.get("name"))
