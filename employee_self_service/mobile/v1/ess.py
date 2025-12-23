@@ -1925,11 +1925,41 @@ def on_holiday_event():
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
+def get_manager_login_status():
+    try:
+        emp_data = get_employee_by_user(frappe.session.user, fields=["location","reports_to"])
+        if not emp_data.get("location") == "Site":
+            return gen_response(200, "Employee is not assigned to Site location", {"is_manager_logged_in": True})
+        if "TEAM LEADER" in frappe.get_roles(frappe.session.user):
+            return gen_response(200, "Employee is a Team Leader", {"is_manager_logged_in": True})
+        if emp_data.get("location") == "Site":
+            # Get reporting manager's latest check-in for today
+            latest_checkin = frappe.db.get_value(
+                "Employee Checkin",
+                {
+                    "employee": emp_data.get("reports_to"),
+                    "time": [">=", today()]
+                },
+                ["location"],
+                order_by="time desc",
+                as_dict=1
+            )
+            
+            if not latest_checkin or not latest_checkin.get("location"):
+                return gen_response(200, "Reporting manager has not checked in today. Please wait for manager to check in first.", {"is_manager_logged_in": False})
+            else:
+                return gen_response(200, "Reporting manager is logged in today.", {"is_manager_logged_in": True})
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
 def get_branch():
     try:
         emp_data = get_employee_by_user(frappe.session.user, fields=["location","reports_to"])
         
-        if emp_data.get("location") == "Site":
+        if emp_data.get("location") == "Site" and not "TEAM LEADER" in frappe.get_roles(frappe.session.user):
             # Check if reporting manager is assigned
             if not emp_data.get("reports_to"):
                 return gen_response(500, "Reporting manager not assigned. Please contact administrator.")
@@ -1947,13 +1977,10 @@ def get_branch():
             )
             
             if not latest_checkin or not latest_checkin.get("location"):
-                return gen_response(500, "Reporting manager has not checked in today. Please wait for manager to check in first.")
+                return gen_response(200,"Branch", {})
             
             # Parse latitude and longitude from location field (comma-separated)
             location_parts = latest_checkin.get("location").split(",")
-            
-            if len(location_parts) != 2:
-                return gen_response(500, "Invalid location format for reporting manager's check-in.")
             
             try:
                 latitude = float(location_parts[0].strip())
