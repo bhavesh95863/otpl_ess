@@ -1,10 +1,82 @@
 import frappe
+import json
 
 def after_employee_checkin_insert(doc, method):
     if doc.requested_from and doc.reason:
         doc.approval_required = 1
         doc.manager = frappe.db.get_value("Employee",doc.requested_from, "user_id")
         doc.save(ignore_permissions=True)
+    
+    # Sync to remote ERPs as Leader Location if employee is team leader
+    sync_leader_location_to_remote(doc)
+
+
+def sync_leader_location_to_remote(checkin_doc):
+    """
+    Sync Employee Checkin to remote ERPs as Leader Location if employee is team leader
+    """
+    try:
+        # Check if employee is team leader
+        employee = checkin_doc.employee
+        if not employee:
+            return
+        
+        is_team_leader = frappe.get_cached_value("Employee", employee, "is_team_leader")
+        if not is_team_leader:
+            return
+        
+        # Get employee company
+        company = frappe.get_cached_value("Employee", employee, "company")
+        
+        # Prepare leader location data - send employee ID, not Employee Pull
+        leader_location_data = {
+            "employee": employee,  # Send actual Employee ID
+            "company": company,
+            "datetime": checkin_doc.time,
+            "location": checkin_doc.get("location") or "Unknown"
+        }
+        
+        # Get all enabled ERP Sync Settings
+        sync_settings = frappe.get_all(
+            "ERP Sync Settings",
+            filters={"enabled": 1, "sync_leader_location": 1},
+            fields=["name"]
+        )
+        
+        if not sync_settings:
+            return
+        
+        # Queue sync for each remote ERP
+        for settings in sync_settings:
+            # Create queue entry
+            queue_doc = frappe.get_doc({
+                "doctype": "ERP Sync Queue",
+                "erp_sync_settings": settings.name,
+                "doctype_name": "Leader Location",
+                "document_name": checkin_doc.name,
+                "sync_action": "Create/Update",
+                "status": "Pending",
+                "retry_count": 0,
+                "sync_data": json.dumps(leader_location_data, default=str)
+            })
+            queue_doc.insert(ignore_permissions=True)
+            frappe.db.commit()
+            
+            # Enqueue the sync job - immediate execution
+            frappe.enqueue(
+                "employee_self_service.employee_self_service.utils.erp_sync.process_sync_queue_item",
+                queue="default",
+                timeout=300,
+                queue_name=queue_doc.name,
+                is_async=True,
+                now=True  # Execute immediately
+            )
+            
+    except Exception as e:
+        frappe.log_error(
+            message=frappe.get_traceback(),
+            title="Error syncing Leader Location for checkin {0}".format(checkin_doc.name)
+        )
 
 @frappe.whitelist()
 def approve_checkin(checkin_name, log_time=None):

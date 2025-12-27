@@ -126,6 +126,12 @@ doc_events = {
     "Employee Checkin": {
         "after_insert": "employee_self_service.employee_self_service.utils.otpl_attendance.after_employee_checkin_insert"
     },
+    "Employee": {
+        "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
+    },
+    "Sales Order": {
+        "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_sales_order_to_remote"
+    },
     # "Comment": {
     #     "after_insert": "employee_self_service.mobile.ess.send_notification_on_task_comment"
     # },
@@ -145,6 +151,9 @@ scheduler_events = {
         ],
         "0 0 * * *": [
             "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance"
+        ],
+        "*/5 * * * *": [
+            "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"
         ]
     },
 }

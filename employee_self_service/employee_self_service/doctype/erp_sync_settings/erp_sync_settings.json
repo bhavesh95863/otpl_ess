@@ -1,0 +1,116 @@
+{
+ "actions": [],
+ "creation": "2025-12-27 15:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "section_break_2",
+  "erp_name",
+  "erp_url",
+  "api_key",
+  "api_secret",
+  "section_break_7",
+  "sync_employee",
+  "sync_sales_order_pull",
+  "sync_leader_location",
+  "section_break_11",
+  "last_pull_time"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break",
+   "label": "ERP Details"
+  },
+  {
+   "fieldname": "erp_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "ERP Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "erp_url",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "ERP URL",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Data",
+   "label": "API Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_secret",
+   "fieldtype": "Password",
+   "label": "API Secret",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_7",
+   "fieldtype": "Section Break",
+   "label": "Sync Rules"
+  },
+  {
+   "default": "1",
+   "fieldname": "sync_employee",
+   "fieldtype": "Check",
+   "label": "Sync Employee (Team Leaders)"
+  },
+  {
+   "default": "1",
+   "fieldname": "sync_sales_order_pull",
+   "fieldtype": "Check",
+   "label": "Sync Sales Order Pull"
+  },
+  {
+   "default": "1",
+   "fieldname": "sync_leader_location",
+   "fieldtype": "Check",
+   "label": "Sync Leader Location"
+  },
+  {
+   "fieldname": "section_break_11",
+   "fieldtype": "Section Break",
+   "label": "Pull Status"
+  },
+  {
+   "fieldname": "last_pull_time",
+   "fieldtype": "Datetime",
+   "label": "Last Pull Time",
+   "read_only": 1
+  }
+ ],
+ "modified": "2025-12-27 15:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "ERP Sync Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

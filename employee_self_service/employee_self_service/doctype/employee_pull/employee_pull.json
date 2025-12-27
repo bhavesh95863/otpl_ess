@@ -1,0 +1,63 @@
+{
+ "autoname": "format:{employee}-{company}",
+ "creation": "2025-12-27 12:12:49.083360",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "sales_order",
+  "business_line",
+  "company"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Read Only",
+   "label": "Employee"
+  },
+  {
+   "fieldname": "sales_order",
+   "fieldtype": "Read Only",
+   "label": "Sales Order"
+  },
+  {
+   "fieldname": "business_line",
+   "fieldtype": "Read Only",
+   "label": "Business Line"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Read Only",
+   "label": "Company"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Read Only",
+   "label": "Employee Name"
+  }
+ ],
+ "modified": "2025-12-27 12:14:32.780453",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "Employee Pull",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
