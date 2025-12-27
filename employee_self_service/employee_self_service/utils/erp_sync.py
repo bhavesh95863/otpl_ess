@@ -22,11 +22,12 @@ def receive_employee_pull(data, source_site=None):
 			data = json.loads(data)
 		
 		# Check if Employee Pull already exists
-		existing = frappe.db.exists("Employee Pull", data.get("name"))
+		name = data.get("employee") + "-" + data.get("company")
+		existing = frappe.db.exists("Employee Pull", name)
 		
 		if existing:
 			# Update existing
-			doc = frappe.get_doc("Employee Pull", data.get("name"))
+			doc = frappe.get_doc("Employee Pull", name)
 			doc.employee = data.get("employee")
 			doc.employee_name = data.get("employee_name")
 			doc.sales_order = data.get("sales_order")
@@ -38,7 +39,6 @@ def receive_employee_pull(data, source_site=None):
 			# Create new
 			doc = frappe.get_doc({
 				"doctype": "Employee Pull",
-				"name": data.get("name"),
 				"employee": data.get("employee"),
 				"employee_name": data.get("employee_name"),
 				"sales_order": data.get("sales_order"),
@@ -68,12 +68,13 @@ def receive_sales_order_pull(data, source_site=None):
 		if isinstance(data, str):
 			data = json.loads(data)
 		
+		name = data.get("sales_order") + "-" + data.get("company")
 		# Check if Sales Order Pull already exists
-		existing = frappe.db.exists("Sales Order Pull", data.get("name"))
+		existing = frappe.db.exists("Sales Order Pull", name)
 		
 		if existing:
 			# Update existing
-			doc = frappe.get_doc("Sales Order Pull", data.get("name"))
+			doc = frappe.get_doc("Sales Order Pull", name)
 			doc.sales_order = data.get("sales_order")
 			doc.business_line = data.get("business_line")
 			doc.company = data.get("company")
@@ -712,16 +713,15 @@ def process_pending_sync_queue():
 	This function is called by scheduler
 	"""
 	try:
-		# Get all pending queue items
-		pending_items = frappe.get_all(
-			"ERP Sync Queue",
-			filters={
-				"status": "Pending",
-				"retry_count": ["<", frappe.qb.Field("max_retries")]
-			},
-			fields=["name"],
-			limit=100
-		)
+		# Get all pending queue items where retry_count < max_retries
+		# Using SQL for version 12 compatibility
+		pending_items = frappe.db.sql("""
+			SELECT name 
+			FROM `tabERP Sync Queue`
+			WHERE status = 'Pending'
+			AND retry_count < max_retries
+			LIMIT 100
+		""", as_dict=1)
 		
 		for item in pending_items:
 			# Enqueue each item
@@ -752,15 +752,10 @@ def sync_employee_to_remote(doc, method=None):
 	Only syncs if employee is team leader and relevant fields changed
 	"""
 	try:
+		
 		# Only sync team leaders
 		if not doc.is_team_leader:
-			return
-		
-		# Check if relevant fields changed
-		if not doc.has_value_changed("sales_order") and \
-		   not doc.has_value_changed("business_vertical") and \
-		   not doc.has_value_changed("employee_name") and \
-		   not doc.has_value_changed("company"):
+			frappe.log_error("Not a team leader: {0}".format(doc.name), "ERP Sync Debug")
 			return
 		
 		# Prepare employee data
@@ -780,6 +775,7 @@ def sync_employee_to_remote(doc, method=None):
 		)
 		
 		if not sync_settings:
+			frappe.log_error("No enabled ERP Sync Settings for Employee sync", "ERP Sync Debug")
 			return
 		
 		# Queue sync for each remote ERP
@@ -825,9 +821,20 @@ def sync_sales_order_to_remote(doc, method=None):
 		if doc.docstatus != 1:
 			return
 		
-		# Check if relevant fields changed
-		if not doc.has_value_changed("business_line") and \
-		   not doc.has_value_changed("company"):
+		# Skip if this is a new document
+		if doc.is_new():
+			return
+		
+		# Version 12 compatible field change detection
+		changed = False
+		for field in ['business_line', 'company']:
+			old_value = doc.db_get(field)
+			new_value = doc.get(field)
+			if old_value != new_value:
+				changed = True
+				break
+		
+		if not changed:
 			return
 		
 		# Prepare sales order data
