@@ -160,7 +160,7 @@ def get_employees_for_sync(filters=None):
 	Uses metadata to dynamically get all fields
 	"""
 	try:
-		field_names = ["name", "employee_name", "company","sales_order","business_vertical"]
+		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical"]
 		
 
 		# Get all team leader employees from Employee doctype
@@ -177,8 +177,8 @@ def get_employees_for_sync(filters=None):
 			employee_data.append({
 				"employee": emp.get("name"),
 				"employee_name": emp.get("employee_name"),
-				"sales_order": emp.get("sales_order"),
-				"business_line": emp.get("business_vertical"),
+				"sales_order": emp.get("sales_order") if not emp.get("external_sales_order") == 1 else emp.get("external_so"),
+				"business_line": emp.get("business_vertical") if not emp.get("external_sales_order") == 1 else emp.get("external_business_vertical"),
 				"company": emp.get("company")
 			})
 		
@@ -762,8 +762,8 @@ def sync_employee_to_remote(doc, method=None):
 		employee_data = {
 			"employee": doc.name,
 			"employee_name": doc.employee_name,
-			"sales_order": doc.get("sales_order"),
-			"business_line": doc.get("business_vertical"),
+			"sales_order": doc.get("sales_order") if not doc.get("external_sales_order") == 1 else doc.get("external_so"),
+			"business_line": doc.get("business_vertical") if not doc.get("external_sales_order") == 1 else doc.get("external_business_vertical"),
 			"company": doc.company
 		}
 		
@@ -817,26 +817,6 @@ def sync_sales_order_to_remote(doc, method=None):
 	Only syncs if relevant fields changed and sales order is submitted
 	"""
 	try:
-		# Only sync submitted sales orders
-		if doc.docstatus != 1:
-			return
-		
-		# Skip if this is a new document
-		if doc.is_new():
-			return
-		
-		# Version 12 compatible field change detection
-		changed = False
-		for field in ['business_line', 'company']:
-			old_value = doc.db_get(field)
-			new_value = doc.get(field)
-			if old_value != new_value:
-				changed = True
-				break
-		
-		if not changed:
-			return
-		
 		# Prepare sales order data
 		sales_order_data = {
 			"sales_order": doc.name,

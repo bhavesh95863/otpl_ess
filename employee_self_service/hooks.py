@@ -130,7 +130,7 @@ doc_events = {
         "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
     },
     "Sales Order": {
-        "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_sales_order_to_remote"
+        "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_sales_order_to_remote",
     },
     # "Comment": {
     #     "after_insert": "employee_self_service.mobile.ess.send_notification_on_task_comment"
