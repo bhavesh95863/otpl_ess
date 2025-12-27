@@ -160,7 +160,7 @@ def get_employees_for_sync(filters=None):
 	Uses metadata to dynamically get all fields
 	"""
 	try:
-		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical"]
+		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so"]
 		
 
 		# Get all team leader employees from Employee doctype

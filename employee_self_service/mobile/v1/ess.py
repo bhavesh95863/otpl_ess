@@ -702,6 +702,9 @@ def get_dashboard():
                 "reports_to",
                 "business_vertical",
                 "sales_order",
+                "external_sales_order",
+                "external_so",
+                "external_business_vertical"
             ],
         )
         notice_board = get_notice_board(emp_data.get("name"))
@@ -733,8 +736,8 @@ def get_dashboard():
             ),
             "check_in_request": 1 if emp_data.get("location") == "Site" else 0,
             "location": emp_data.get("location"),
-            "business_vertical": emp_data.get("business_vertical"),
-            "sales_order": emp_data.get("sales_order"),
+            "business_vertical": emp_data.get("business_vertical") if emp_data.get("external_sales_order") != 1 else emp_data.get("external_business_vertical"),
+            "sales_order": emp_data.get("sales_order") if emp_data.get("external_sales_order") != 1 else emp_data.get("external_so"),
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -1957,27 +1960,46 @@ def get_manager_login_status():
 @ess_validate(methods=["GET"])
 def get_branch():
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["location","reports_to"])
+        emp_data = get_employee_by_user(frappe.session.user, fields=["location","reports_to","external_reporting_manager","external_report_to"])
         
         if emp_data.get("location") == "Site" and not "TEAM LEADER" in frappe.get_roles(frappe.session.user):
             # Check if reporting manager is assigned
-            if not emp_data.get("reports_to"):
-                return gen_response(500, "Reporting manager not assigned. Please contact administrator.")
-            
-            # Get reporting manager's latest check-in for today
-            latest_checkin = frappe.db.get_value(
-                "Employee Checkin",
-                {
-                    "employee": emp_data.get("reports_to"),
-                    "time": [">=", today()]
-                },
-                ["location"],
-                order_by="time desc",
-                as_dict=1
-            )
-            
-            if not latest_checkin or not latest_checkin.get("location"):
-                return gen_response(200,"Branch", {})
+            if not emp_data.get("external_reporting_manager") == 1:
+                if not emp_data.get("reports_to"):
+                    return gen_response(500, "Reporting manager not assigned. Please contact administrator.")
+                
+                # Get reporting manager's latest check-in for today
+                latest_checkin = frappe.db.get_value(
+                    "Employee Checkin",
+                    {
+                        "employee": emp_data.get("reports_to"),
+                        "time": [">=", today()]
+                    },
+                    ["location"],
+                    order_by="time desc",
+                    as_dict=1
+                )
+                
+                if not latest_checkin or not latest_checkin.get("location"):
+                    return gen_response(200,"Branch", {})
+            else:
+                if not emp_data.get("external_report_to"):
+                    return gen_response(500, "External reporting manager not assigned. Please contact administrator.")
+                
+                # Get external reporting manager's latest check-in for today
+                latest_checkin = frappe.db.get_value(
+                    "Leader Location",
+                    {
+                        "employee": emp_data.get("external_report_to"),
+                        "datetime": [">=", today()]
+                    },
+                    ["location"],
+                    order_by="datetime desc",
+                    as_dict=1
+                )
+                
+                if not latest_checkin or not latest_checkin.get("location"):
+                    return gen_response(200,"Branch", {})
             
             # Parse latitude and longitude from location field (comma-separated)
             location_parts = latest_checkin.get("location").split(",")
