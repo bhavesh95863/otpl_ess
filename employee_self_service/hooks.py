@@ -127,7 +127,13 @@ doc_events = {
         "after_insert": "employee_self_service.employee_self_service.utils.otpl_attendance.after_employee_checkin_insert"
     },
     "Employee": {
-        "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
+        "on_update": [
+            "employee_self_service.employee_self_service.utils.employee_worker_sync.update_worker_fields_from_manager",
+            "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
+        ]
+    },
+    "Employee Pull": {
+        "on_update": "employee_self_service.employee_self_service.utils.employee_worker_sync.update_workers_from_employee_pull"
     },
     "Sales Order": {
         "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_sales_order_to_remote",

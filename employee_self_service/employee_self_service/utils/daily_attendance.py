@@ -17,7 +17,7 @@ def process_daily_attendance():
 	
 	employees = frappe.get_all("Employee", 
 		filters={"status": "Active"}, 
-		fields=["name", "employee_name", "location", "company"]
+		fields=["name", "employee_name", "location", "company", "no_check_in"]
 	)
 	
 	processed_count = 0
@@ -27,7 +27,7 @@ def process_daily_attendance():
 	
 	for emp in employees:
 		try:
-			result = process_employee_attendance(emp.name, emp.location, yesterday)
+			result = process_employee_attendance(emp.name, emp.location, yesterday, emp.get("no_check_in", 0))
 			
 			if result == "Processed":
 				processed_count += 1
@@ -61,7 +61,7 @@ def process_daily_attendance():
 	}
 
 
-def process_employee_attendance(employee, location, date):
+def process_employee_attendance(employee, location, date, no_check_in=0):
 	"""
 	Process attendance for a single employee
 	Returns: Processed, Skipped, Absent, or Error
@@ -97,6 +97,19 @@ def process_employee_attendance(employee, location, date):
 	# Check if it's a holiday
 	if is_holiday(employee, date):
 		return "Skipped"
+	
+	# If employee has no_check_in enabled, directly mark as present
+	if no_check_in:
+		create_attendance_record(
+			employee=employee,
+			date=date,
+			status="Present",
+			late_entry=False,
+			early_exit=False,
+			working_hours=0,
+			remarks="Auto marked present (No check-in required)"
+		)
+		return "Processed"
 	
 	# Get checkin records for the employee
 	checkins = frappe.get_all(
