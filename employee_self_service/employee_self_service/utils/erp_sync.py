@@ -156,13 +156,17 @@ def receive_leader_location(data, source_site=None):
 def get_employees_for_sync(filters=None):
 	"""
 	API endpoint to get all team leader employees for initial pull
+	Uses metadata to dynamically get all fields
 	"""
 	try:
+		field_names = ["name", "employee_name", "company","sales_order","business_vertical"]
+		
+
 		# Get all team leader employees from Employee doctype
 		employees = frappe.get_all(
 			"Employee",
 			filters={"is_team_leader": 1, "status": "Active"},
-			fields=["name", "employee_name", "custom_sales_order", "custom_business_vertical", "company"],
+			fields=field_names,
 			limit_page_length=None
 		)
 		
@@ -172,8 +176,8 @@ def get_employees_for_sync(filters=None):
 			employee_data.append({
 				"employee": emp.get("name"),
 				"employee_name": emp.get("employee_name"),
-				"sales_order": emp.get("custom_sales_order"),
-				"business_line": emp.get("custom_business_vertical"),
+				"sales_order": emp.get("sales_order"),
+				"business_line": emp.get("business_vertical"),
 				"company": emp.get("company")
 			})
 		
@@ -191,13 +195,17 @@ def get_employees_for_sync(filters=None):
 def get_sales_orders_for_sync(filters=None):
 	"""
 	API endpoint to get all sales orders for initial pull
+	Uses metadata to dynamically get all fields
 	"""
 	try:
+		field_names = ["name", "company","business_line"]
+		
+		
 		# Get all Sales Order records
 		sales_orders = frappe.get_all(
 			"Sales Order",
 			filters={"docstatus": 1},  # Only submitted sales orders
-			fields=["name", "custom_business_line", "company"],
+			fields=field_names,
 			limit_page_length=None
 		)
 		
@@ -206,7 +214,7 @@ def get_sales_orders_for_sync(filters=None):
 		for so in sales_orders:
 			sales_order_data.append({
 				"sales_order": so.get("name"),
-				"business_line": so.get("custom_business_line"),
+				"business_line": so.get("business_line"),
 				"company": so.get("company")
 			})
 		
@@ -749,8 +757,8 @@ def sync_employee_to_remote(doc, method=None):
 			return
 		
 		# Check if relevant fields changed
-		if not doc.has_value_changed("custom_sales_order") and \
-		   not doc.has_value_changed("custom_business_vertical") and \
+		if not doc.has_value_changed("sales_order") and \
+		   not doc.has_value_changed("business_vertical") and \
 		   not doc.has_value_changed("employee_name") and \
 		   not doc.has_value_changed("company"):
 			return
@@ -759,8 +767,8 @@ def sync_employee_to_remote(doc, method=None):
 		employee_data = {
 			"employee": doc.name,
 			"employee_name": doc.employee_name,
-			"sales_order": doc.get("custom_sales_order"),
-			"business_line": doc.get("custom_business_vertical"),
+			"sales_order": doc.get("sales_order"),
+			"business_line": doc.get("business_vertical"),
 			"company": doc.company
 		}
 		
@@ -818,14 +826,14 @@ def sync_sales_order_to_remote(doc, method=None):
 			return
 		
 		# Check if relevant fields changed
-		if not doc.has_value_changed("custom_business_line") and \
+		if not doc.has_value_changed("business_line") and \
 		   not doc.has_value_changed("company"):
 			return
 		
 		# Prepare sales order data
 		sales_order_data = {
 			"sales_order": doc.name,
-			"business_line": doc.get("custom_business_line"),
+			"business_line": doc.get("business_line"),
 			"company": doc.company
 		}
 		

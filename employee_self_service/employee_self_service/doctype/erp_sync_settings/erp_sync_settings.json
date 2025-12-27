@@ -1,6 +1,5 @@
 {
- "actions": [],
- "creation": "2025-12-27 15:00:00.000000",
+ "creation": "2025-12-27 15:00:00",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
@@ -14,9 +13,7 @@
   "section_break_7",
   "sync_employee",
   "sync_sales_order_pull",
-  "sync_leader_location",
-  "section_break_11",
-  "last_pull_time"
+  "sync_leader_location"
  ],
  "fields": [
   {
@@ -78,20 +75,9 @@
    "fieldname": "sync_leader_location",
    "fieldtype": "Check",
    "label": "Sync Leader Location"
-  },
-  {
-   "fieldname": "section_break_11",
-   "fieldtype": "Section Break",
-   "label": "Pull Status"
-  },
-  {
-   "fieldname": "last_pull_time",
-   "fieldtype": "Datetime",
-   "label": "Last Pull Time",
-   "read_only": 1
   }
  ],
- "modified": "2025-12-27 15:00:00.000000",
+ "modified": "2025-12-27 14:58:37.535362",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "ERP Sync Settings",
