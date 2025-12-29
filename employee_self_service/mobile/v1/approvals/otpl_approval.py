@@ -281,13 +281,11 @@ def get_employee_checkin_approval_list(start=0, page_length=10, log_type=None):
 def approve_employee_checkin():
     """
     Approve Employee Checkin
-    Accepts: name, log_time (optional)
     Sets approved to 1 (checked) and processes attendance
     """
     try:
         data = json.loads(frappe.request.get_data())
         checkin_name = data.get("name")
-        log_time = data.get("log_time")
         
         if not checkin_name:
             return gen_response(500, "Checkin name is required")
@@ -306,10 +304,6 @@ def approve_employee_checkin():
         # Check if already approved
         if checkin_doc.approved == 1:
             return gen_response(500, "Check-in is already approved")
-        
-        # Update log time if provided
-        if log_time:
-            checkin_doc.time = log_time
         
         # Set approved field
         checkin_doc.approved = 1
