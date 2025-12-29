@@ -5,6 +5,7 @@
  "engine": "InnoDB",
  "field_order": [
   "employee",
+  "employee_name",
   "datetime",
   "location"
  ],
@@ -12,6 +13,7 @@
   {
    "fieldname": "employee",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Employee",
    "options": "Employee Pull"
   },
@@ -24,9 +26,15 @@
    "fieldname": "location",
    "fieldtype": "Small Text",
    "label": "Location"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Read Only",
+   "in_list_view": 1,
+   "label": "Employee Name"
   }
  ],
- "modified": "2025-12-27 12:38:46.649785",
+ "modified": "2025-12-29 11:19:32.695710",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Leader Location",
