@@ -704,7 +704,7 @@ def get_dashboard():
                 "sales_order",
                 "external_sales_order",
                 "external_so",
-                "external_business_vertical"
+                "external_business_vertical",
             ],
         )
         notice_board = get_notice_board(emp_data.get("name"))
@@ -736,8 +736,16 @@ def get_dashboard():
             ),
             "check_in_request": 1 if emp_data.get("location") == "Site" else 0,
             "location": emp_data.get("location"),
-            "business_vertical": emp_data.get("business_vertical") if emp_data.get("external_sales_order") != 1 else emp_data.get("external_business_vertical"),
-            "sales_order": emp_data.get("sales_order") if emp_data.get("external_sales_order") != 1 else emp_data.get("external_so"),
+            "business_vertical": (
+                emp_data.get("business_vertical")
+                if emp_data.get("external_sales_order") != 1
+                else emp_data.get("external_business_vertical")
+            ),
+            "sales_order": (
+                emp_data.get("sales_order")
+                if emp_data.get("external_sales_order") != 1
+                else emp_data.get("external_so")
+            ),
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -748,11 +756,16 @@ def get_dashboard():
         dashboard_data["approval_manager"] = approval_manager or None
         dashboard_data["employee_image"] = emp_data.get("image")
         dashboard_data["employee_name"] = emp_data.get("employee_name")
-        
+
         # Check if user has "SITE EXPENSE INITIATOR" role
         user_roles = frappe.get_roles(frappe.session.user)
-        dashboard_data["allow_expense"] = 1 if "SITE EXPENSE INITIATOR" in user_roles else 0
-        
+        dashboard_data["allow_expense"] = (
+            1 if "SITE EXPENSE INITIATOR" in user_roles else 0
+        )
+
+        dashboard_data["allow_checkout"] = 1
+        dashboard_data["allow_checkin"] = 1
+
         get_latest_leave(dashboard_data, emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
         get_latest_ss(dashboard_data, emp_data.get("name"))
@@ -1808,11 +1821,11 @@ def auto_login_with_device_token(**kwargs):
             if employee_user:
                 validate_employee(employee_user)
                 emp_data = get_employee_by_user(employee_user)
-                
+
                 login_manager = LoginManager()
                 login_manager.user = employee_user
                 login_manager.post_login()
-                
+
                 if frappe.response["message"] == "Logged In":
                     frappe.response["user"] = login_manager.user
                     frappe.response["key_details"] = generate_key(login_manager.user)
@@ -1820,12 +1833,13 @@ def auto_login_with_device_token(**kwargs):
                     frappe.response["redirect_to_login"] = False
                 gen_response(200, frappe.response["message"])
                 return
-        
+
         # Device not registered - return 200 but indicate redirect needed
         frappe.response["redirect_to_login"] = True
         return gen_response(200, "Device not registered. Please login.")
     except Exception as e:
         return exception_handler(e)
+
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
@@ -1930,28 +1944,41 @@ def on_holiday_event():
 @ess_validate(methods=["GET"])
 def get_manager_login_status():
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["location","reports_to"])
+        emp_data = get_employee_by_user(
+            frappe.session.user, fields=["location", "reports_to"]
+        )
         if not emp_data.get("location") == "Site":
-            return gen_response(200, "Employee is not assigned to Site location", {"is_manager_logged_in": True})
+            return gen_response(
+                200,
+                "Employee is not assigned to Site location",
+                {"is_manager_logged_in": True},
+            )
         if "TEAM LEADER" in frappe.get_roles(frappe.session.user):
-            return gen_response(200, "Employee is a Team Leader", {"is_manager_logged_in": True})
+            return gen_response(
+                200, "Employee is a Team Leader", {"is_manager_logged_in": True}
+            )
         if emp_data.get("location") == "Site":
             # Get reporting manager's latest check-in for today
             latest_checkin = frappe.db.get_value(
                 "Employee Checkin",
-                {
-                    "employee": emp_data.get("reports_to"),
-                    "time": [">=", today()]
-                },
+                {"employee": emp_data.get("reports_to"), "time": [">=", today()]},
                 ["location"],
                 order_by="time desc",
-                as_dict=1
+                as_dict=1,
             )
-            
+
             if not latest_checkin or not latest_checkin.get("location"):
-                return gen_response(200, "Reporting manager has not checked in today. Please wait for manager to check in first.", {"is_manager_logged_in": False})
+                return gen_response(
+                    200,
+                    "Reporting manager has not checked in today. Please wait for manager to check in first.",
+                    {"is_manager_logged_in": False},
+                )
             else:
-                return gen_response(200, "Reporting manager is logged in today.", {"is_manager_logged_in": True})
+                return gen_response(
+                    200,
+                    "Reporting manager is logged in today.",
+                    {"is_manager_logged_in": True},
+                )
     except Exception as e:
         return exception_handler(e)
 
@@ -1960,65 +1987,81 @@ def get_manager_login_status():
 @ess_validate(methods=["GET"])
 def get_branch():
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["location","reports_to","external_reporting_manager","external_report_to"])
-        
-        if emp_data.get("location") == "Site" and not "TEAM LEADER" in frappe.get_roles(frappe.session.user):
+        emp_data = get_employee_by_user(
+            frappe.session.user,
+            fields=[
+                "location",
+                "reports_to",
+                "external_reporting_manager",
+                "external_report_to",
+            ],
+        )
+
+        if emp_data.get("location") == "Site" and not "TEAM LEADER" in frappe.get_roles(
+            frappe.session.user
+        ):
             # Check if reporting manager is assigned
             if not emp_data.get("external_reporting_manager") == 1:
                 if not emp_data.get("reports_to"):
-                    return gen_response(500, "Reporting manager not assigned. Please contact administrator.")
-                
+                    return gen_response(
+                        500,
+                        "Reporting manager not assigned. Please contact administrator.",
+                    )
+
                 # Get reporting manager's latest check-in for today
                 latest_checkin = frappe.db.get_value(
                     "Employee Checkin",
-                    {
-                        "employee": emp_data.get("reports_to"),
-                        "time": [">=", today()]
-                    },
+                    {"employee": emp_data.get("reports_to"), "time": [">=", today()]},
                     ["location"],
                     order_by="time desc",
-                    as_dict=1
+                    as_dict=1,
                 )
-                
+
                 if not latest_checkin or not latest_checkin.get("location"):
-                    return gen_response(200,"Branch", {})
+                    return gen_response(200, "Branch", {})
             else:
                 if not emp_data.get("external_report_to"):
-                    return gen_response(500, "External reporting manager not assigned. Please contact administrator.")
-                
+                    return gen_response(
+                        500,
+                        "External reporting manager not assigned. Please contact administrator.",
+                    )
+
                 # Get external reporting manager's latest check-in for today
                 latest_checkin = frappe.db.get_value(
                     "Leader Location",
                     {
                         "employee": emp_data.get("external_report_to"),
-                        "datetime": [">=", today()]
+                        "datetime": [">=", today()],
                     },
                     ["location"],
                     order_by="datetime desc",
-                    as_dict=1
+                    as_dict=1,
                 )
-                
+
                 if not latest_checkin or not latest_checkin.get("location"):
-                    return gen_response(200,"Branch", {})
-            
+                    return gen_response(200, "Branch", {})
+
             # Parse latitude and longitude from location field (comma-separated)
             location_parts = latest_checkin.get("location").split(",")
-            
+
             try:
                 latitude = float(location_parts[0].strip())
                 longitude = float(location_parts[1].strip())
             except (ValueError, AttributeError):
-                return gen_response(500, "Invalid latitude/longitude values for reporting manager's check-in.")
-            
+                return gen_response(
+                    500,
+                    "Invalid latitude/longitude values for reporting manager's check-in.",
+                )
+
             # Return reporting manager's check-in location with radius 50
             branch = {
                 "location": "Site",
                 "latitude": latitude,
                 "longitude": longitude,
-                "radius": 50
+                "radius": 50,
             }
             return gen_response(200, "Branch", branch)
-        
+
         # For non-Site employees, get location from ESS Location
         branch = frappe.db.get_value(
             "ESS Location",
