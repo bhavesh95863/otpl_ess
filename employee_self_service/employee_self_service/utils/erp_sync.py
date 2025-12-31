@@ -205,7 +205,7 @@ def get_sales_orders_for_sync(filters=None):
 		# Get all Sales Order records
 		sales_orders = frappe.get_all(
 			"Sales Order",
-			filters={"docstatus": 1},  # Only submitted sales orders
+			filters={},  # Only submitted sales orders
 			fields=field_names,
 			limit_page_length=None
 		)

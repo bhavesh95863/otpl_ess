@@ -33,7 +33,7 @@ after_migrate = "employee_self_service.setup.after_install"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-doctype_js = {"Employee Checkin": "public/js/employee_checkin.js"}
+doctype_js = {"Employee Checkin": "public/js/employee_checkin.js","Employee": "public/js/employee.js"}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -160,6 +160,9 @@ scheduler_events = {
         ],
         "0 0 * * *": [
             "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance"
+        ],
+        "0 21 * * *": [
+            "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_site_employees"
         ],
         "*/5 * * * *": [
             "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"

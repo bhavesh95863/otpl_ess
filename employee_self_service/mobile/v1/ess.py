@@ -762,9 +762,12 @@ def get_dashboard():
         dashboard_data["allow_expense"] = (
             1 if "SITE EXPENSE INITIATOR" in user_roles else 0
         )
-
-        dashboard_data["allow_checkout"] = 1
-        dashboard_data["allow_checkin"] = 1
+        if emp_data.get("location") == "Site":
+            dashboard_data["allow_checkout"] = 0
+            dashboard_data["allow_checkin"] = 1
+        else:
+            dashboard_data["allow_checkout"] = 1
+            dashboard_data["allow_checkin"] = 1
 
         get_latest_leave(dashboard_data, emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
@@ -1959,26 +1962,65 @@ def get_manager_login_status():
             )
         if emp_data.get("location") == "Site":
             # Get reporting manager's latest check-in for today
-            latest_checkin = frappe.db.get_value(
-                "Employee Checkin",
-                {"employee": emp_data.get("reports_to"), "time": [">=", today()]},
-                ["location"],
-                order_by="time desc",
-                as_dict=1,
-            )
+            if not emp_data.get("external_reporting_manager") == 1:
+                if not emp_data.get("reports_to"):
+                    return gen_response(
+                        500,
+                        "Reporting manager not assigned. Please contact administrator.",
+                    )
+            
+                latest_checkin = frappe.db.get_value(
+                    "Employee Checkin",
+                    {"employee": emp_data.get("reports_to"), "time": [">=", today()]},
+                    ["location"],
+                    order_by="time desc",
+                    as_dict=1,
+                )
 
-            if not latest_checkin or not latest_checkin.get("location"):
-                return gen_response(
-                    200,
-                    "Reporting manager has not checked in today. Please wait for manager to check in first.",
-                    {"is_manager_logged_in": False},
-                )
+                if not latest_checkin or not latest_checkin.get("location"):
+                    manager_name = frappe.db.get_value("Employee", emp_data.get("reports_to"), "employee_name")
+                    return gen_response(
+                        200,
+                        f"Reporting manager {manager_name} has not checked in today. Please wait for manager to check in first.",
+                        {"is_manager_logged_in": False},
+                    )
+                else:
+                    return gen_response(
+                        200,
+                        "Reporting manager is logged in today.",
+                        {"is_manager_logged_in": True},
+                    )
             else:
-                return gen_response(
-                    200,
-                    "Reporting manager is logged in today.",
-                    {"is_manager_logged_in": True},
+                if not emp_data.get("external_report_to"):
+                    return gen_response(
+                        500,
+                        "External reporting manager not assigned. Please contact administrator.",
+                    )
+
+                latest_checkin = frappe.db.get_value(
+                    "Leader Location",
+                    {
+                        "employee": emp_data.get("external_report_to"),
+                        "datetime": [">=", today()],
+                    },
+                    ["location"],
+                    order_by="datetime desc",
+                    as_dict=1,
                 )
+
+                if not latest_checkin or not latest_checkin.get("location"):
+                    manager_name = frappe.db.get_value("Employee Pull",{"employee": emp_data.get("external_report_to")}, "employee_name")
+                    return gen_response(
+                        200,
+                        f"External reporting manager {manager_name} has not checked in today. Please wait for manager to check in first.",
+                        {"is_manager_logged_in": False},
+                    )
+                else:
+                    return gen_response(
+                        200,
+                        "External reporting manager is logged in today.",
+                        {"is_manager_logged_in": True},
+                    )
     except Exception as e:
         return exception_handler(e)
 
