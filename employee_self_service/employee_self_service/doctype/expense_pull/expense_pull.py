@@ -5,6 +5,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.model.document import Document
+from frappe import _
 from employee_self_service.employee_self_service.utils.erp_sync import push_expense_status_to_source
 
 class ExpensePull(Document):
@@ -19,3 +20,34 @@ class ExpensePull(Document):
 		# Check if status or approval changed
 		if self.has_value_changed('status') or self.has_value_changed('approved_by_manager'):
 			push_expense_status_to_source(self)
+
+
+@frappe.whitelist()
+def approve_expense(docname, amount_approved):
+	"""
+	Approve an expense pull request with approved amount
+	This will update the approval status and trigger reverse sync to source ERP
+	"""
+	try:
+		doc = frappe.get_doc("Expense Pull", docname)
+		
+		# Validate amount
+		if not amount_approved:
+			frappe.throw(_("Amount Approved is required"))
+		
+		# Update the document
+		doc.approved_by_manager = 1
+		doc.amount_approved = amount_approved
+		doc.status = "Approved"
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		frappe.msgprint(_("Expense approved successfully and synced to source ERP"))
+		return {"success": True, "message": "Expense approved successfully"}
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error approving expense pull"
+		)
+		frappe.throw(_("Error approving expense: {0}").format(str(e)))

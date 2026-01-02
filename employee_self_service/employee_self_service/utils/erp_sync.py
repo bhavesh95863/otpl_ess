@@ -1254,7 +1254,7 @@ def push_leave_to_remote_erp(leave_doc):
 			"half_day": leave_doc.half_day,
 			"half_day_date": str(leave_doc.half_day_date) if leave_doc.half_day_date else None,
 			"status": leave_doc.status,
-			"approver": leave_doc.approver,
+			"approver": leave_doc.external_manager,
 			"alternate_mobile_no": leave_doc.alternate_mobile_no,
 			"reason": leave_doc.reason,
 			"approved_from_date": str(leave_doc.approved_from_date) if leave_doc.approved_from_date else None,
@@ -1267,13 +1267,24 @@ def push_leave_to_remote_erp(leave_doc):
 			queue_doc = frappe.get_doc({
 				"doctype": "ERP Sync Queue",
 				"erp_sync_settings": settings.name,
-				"sync_doctype": "OTPL Leave",
-				"sync_docname": leave_doc.name,
-				"sync_action": "Insert/Update",
+				"doctype_name": "OTPL Leave",
+				"document_name": leave_doc.name,
+				"sync_action": "Create/Update",
 				"sync_data": json.dumps(leave_data),
-				"status": "Queued"
+				"status": "Pending",
+				"retry_count": 0
 			})
 			queue_doc.insert(ignore_permissions=True)
+			
+			# Enqueue the sync job
+			frappe.enqueue(
+				"employee_self_service.employee_self_service.utils.erp_sync.process_leave_sync_queue",
+				queue="default",
+				timeout=300,
+				queue_name=queue_doc.name,
+				is_async=True,
+				now=False
+			)
 		
 		frappe.db.commit()
 		frappe.log_error(
@@ -1340,13 +1351,24 @@ def push_expense_to_remote_erp(expense_doc):
 			queue_doc = frappe.get_doc({
 				"doctype": "ERP Sync Queue",
 				"erp_sync_settings": settings.name,
-				"sync_doctype": "OTPL Expense",
-				"sync_docname": expense_doc.name,
-				"sync_action": "Insert/Update",
+				"doctype_name": "OTPL Expense",
+				"document_name": expense_doc.name,
+				"sync_action": "Create/Update",
 				"sync_data": json.dumps(expense_data),
-				"status": "Queued"
+				"status": "Pending",
+				"retry_count": 0
 			})
 			queue_doc.insert(ignore_permissions=True)
+			
+			# Enqueue the sync job
+			frappe.enqueue(
+				"employee_self_service.employee_self_service.utils.erp_sync.process_expense_sync_queue",
+				queue="default",
+				timeout=300,
+				queue_name=queue_doc.name,
+				is_async=True,
+				now=False
+			)
 		
 		frappe.db.commit()
 		frappe.log_error(

@@ -9,10 +9,21 @@ from employee_self_service.employee_self_service.utils.erp_sync import push_expe
 
 class OTPLExpense(Document):
 	def validate(self):
-		if not self.approval_manager:
-			report_to = frappe.db.get_value("Employee", self.sent_by, "reports_to")
-			if report_to:
-				self.approval_manager = frappe.db.get_value("Employee", report_to, "user_id")
+		if not self.approval_manager or not self.external_manager:
+			employee_doc = frappe.get_doc("Employee", self.sent_by)
+			if employee_doc.external_reporting_manager == 1:
+				external_report_to = employee_doc.external_report_to
+				report_to = frappe.db.get_value("Employee Pull", external_report_to, "employee")
+				self.is_external_manager = 1
+				self.external_manager = report_to
+				self.approval_manager = ""
+			else:
+				if employee_doc.reports_to:
+					user = frappe.db.get_value("Employee", employee_doc.reports_to, "user_id")
+					if user:
+						self.is_external_manager = 0
+						self.external_manager = ""
+						self.approval_manager = user
 		if not self.business_line:
 			self.business_line = frappe.db.get_value("Employee", self.sent_by, "business_vertical")
 	
