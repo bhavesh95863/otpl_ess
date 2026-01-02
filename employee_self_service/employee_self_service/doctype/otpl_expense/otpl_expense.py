@@ -5,6 +5,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.model.document import Document
+from employee_self_service.employee_self_service.utils.erp_sync import push_expense_to_remote_erp
 
 class OTPLExpense(Document):
 	def validate(self):
@@ -14,6 +15,13 @@ class OTPLExpense(Document):
 				self.approval_manager = frappe.db.get_value("Employee", report_to, "user_id")
 		if not self.business_line:
 			self.business_line = frappe.db.get_value("Employee", self.sent_by, "business_vertical")
+	
+	def on_update(self):
+		"""
+		Trigger sync to remote ERP when expense is saved with external manager
+		"""
+		# Push to remote ERP if external manager is set
+		push_expense_to_remote_erp(self)
 		
 	def approve_expense(self):
 		# Implement the logic for approving the expense here

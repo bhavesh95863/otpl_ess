@@ -154,6 +154,243 @@ def receive_leader_location(data, source_site=None):
 
 
 @frappe.whitelist()
+def receive_leave_pull(data, source_site=None):
+	"""
+	API endpoint to receive Leave Pull data from remote ERP
+	"""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+		
+		# Check if Leave Pull already exists
+		leave_id = data.get("leave_id")
+		existing = frappe.db.exists("Leave Pull", leave_id)
+		
+		if existing:
+			# Update existing
+			doc = frappe.get_doc("Leave Pull", leave_id)
+			doc.employee = data.get("employee")
+			doc.employee_name = data.get("employee_name")
+			doc.from_date = data.get("from_date")
+			doc.to_date = data.get("to_date")
+			doc.total_no_of_days = data.get("total_no_of_days")
+			doc.half_day = data.get("half_day", 0)
+			doc.half_day_date = data.get("half_day_date")
+			doc.status = data.get("status")
+			doc.approver = data.get("approver")
+			doc.alternate_mobile_no = data.get("alternate_mobile_no")
+			doc.reason = data.get("reason")
+			doc.approved_from_date = data.get("approved_from_date")
+			doc.approved_to_date = data.get("approved_to_date")
+			doc.total_no_of_approved_days = data.get("total_no_of_approved_days")
+			doc.source_erp = source_site
+			doc.flags.ignore_sync = True  # Prevent re-syncing back
+			doc.save(ignore_permissions=True)
+		else:
+			# Create new
+			doc = frappe.get_doc({
+				"doctype": "Leave Pull",
+				"leave_id": leave_id,
+				"employee": data.get("employee"),
+				"employee_name": data.get("employee_name"),
+				"from_date": data.get("from_date"),
+				"to_date": data.get("to_date"),
+				"total_no_of_days": data.get("total_no_of_days"),
+				"half_day": data.get("half_day", 0),
+				"half_day_date": data.get("half_day_date"),
+				"status": data.get("status"),
+				"approver": data.get("approver"),
+				"alternate_mobile_no": data.get("alternate_mobile_no"),
+				"reason": data.get("reason"),
+				"approved_from_date": data.get("approved_from_date"),
+				"approved_to_date": data.get("approved_to_date"),
+				"total_no_of_approved_days": data.get("total_no_of_approved_days"),
+				"source_erp": source_site
+			})
+			doc.flags.ignore_sync = True  # Prevent re-syncing back
+			doc.insert(ignore_permissions=True)
+		
+		frappe.db.commit()
+		return {"success": True, "message": "Leave Pull synced successfully"}
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error receiving Leave Pull data"
+		)
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def receive_expense_pull(data, source_site=None):
+	"""
+	API endpoint to receive Expense Pull data from remote ERP
+	"""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+		
+		# Check if Expense Pull already exists
+		expense_id = data.get("expense_id")
+		existing = frappe.db.exists("Expense Pull", expense_id)
+		
+		if existing:
+			# Update existing
+			doc = frappe.get_doc("Expense Pull", expense_id)
+			doc.sent_by = data.get("sent_by")
+			doc.employee_name = data.get("employee_name")
+			doc.date_of_entry = data.get("date_of_entry")
+			doc.date_of_expense = data.get("date_of_expense")
+			doc.amount = data.get("amount")
+			doc.details_of_expense = data.get("details_of_expense")
+			doc.invoice_upload = data.get("invoice_upload")
+			doc.sales_order = data.get("sales_order")
+			doc.amount_approved = data.get("amount_approved")
+			doc.purpose = data.get("purpose")
+			doc.query = data.get("query")
+			doc.status = data.get("status")
+			doc.expense_type = data.get("expense_type")
+			doc.approval_manager = data.get("approval_manager")
+			doc.business_line = data.get("business_line")
+			doc.expense_claim_type = data.get("expense_claim_type")
+			doc.approved_by_manager = data.get("approved_by_manager", 0)
+			doc.source_erp = source_site
+			doc.flags.ignore_sync = True  # Prevent re-syncing back
+			doc.save(ignore_permissions=True)
+		else:
+			# Create new
+			doc = frappe.get_doc({
+				"doctype": "Expense Pull",
+				"expense_id": expense_id,
+				"sent_by": data.get("sent_by"),
+				"employee_name": data.get("employee_name"),
+				"date_of_entry": data.get("date_of_entry"),
+				"date_of_expense": data.get("date_of_expense"),
+				"amount": data.get("amount"),
+				"details_of_expense": data.get("details_of_expense"),
+				"invoice_upload": data.get("invoice_upload"),
+				"sales_order": data.get("sales_order"),
+				"amount_approved": data.get("amount_approved"),
+				"purpose": data.get("purpose"),
+				"query": data.get("query"),
+				"status": data.get("status"),
+				"expense_type": data.get("expense_type"),
+				"approval_manager": data.get("approval_manager"),
+				"business_line": data.get("business_line"),
+				"expense_claim_type": data.get("expense_claim_type"),
+				"approved_by_manager": data.get("approved_by_manager", 0),
+				"source_erp": source_site
+			})
+			doc.flags.ignore_sync = True  # Prevent re-syncing back
+			doc.insert(ignore_permissions=True)
+		
+		frappe.db.commit()
+		return {"success": True, "message": "Expense Pull synced successfully"}
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error receiving Expense Pull data"
+		)
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def receive_leave_status_update(data, source_site=None):
+	"""
+	API endpoint to receive status updates for OTPL Leave from remote ERP
+	Updates the original OTPL Leave record when status changes in Leave Pull
+	"""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+		
+		leave_id = data.get("leave_id")
+		status = data.get("status")
+		
+		if not leave_id or not status:
+			return {"success": False, "message": "leave_id and status are required"}
+		
+		# Check if OTPL Leave exists
+		if not frappe.db.exists("OTPL Leave", leave_id):
+			return {"success": False, "message": "OTPL Leave {0} not found".format(leave_id)}
+		
+		# Update the OTPL Leave status
+		doc = frappe.get_doc("OTPL Leave", leave_id)
+		doc.status = status
+		
+		# Update approved dates if provided
+		if data.get("approved_from_date"):
+			doc.approved_from_date = data.get("approved_from_date")
+		if data.get("approved_to_date"):
+			doc.approved_to_date = data.get("approved_to_date")
+		if data.get("total_no_of_approved_days"):
+			doc.total_no_of_approved_days = data.get("total_no_of_approved_days")
+		
+		doc.flags.ignore_sync = True  # Prevent re-syncing back
+		doc.save(ignore_permissions=True)
+		
+		frappe.db.commit()
+		return {"success": True, "message": "Leave status updated successfully"}
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error receiving Leave status update"
+		)
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def receive_expense_status_update(data, source_site=None):
+	"""
+	API endpoint to receive approval updates for OTPL Expense from remote ERP
+	Updates the original OTPL Expense record when approved in Expense Pull
+	OTPL Expense uses checkbox (approved_by_manager) for approval management
+	"""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+		
+		expense_id = data.get("expense_id")
+		
+		if not expense_id:
+			return {"success": False, "message": "expense_id is required"}
+		
+		# Check if OTPL Expense exists
+		if not frappe.db.exists("OTPL Expense", expense_id):
+			return {"success": False, "message": "OTPL Expense {0} not found".format(expense_id)}
+		
+		# Update the OTPL Expense approval status
+		doc = frappe.get_doc("OTPL Expense", expense_id)
+		
+		# Primary field: approved_by_manager checkbox
+		if data.get("approved_by_manager") is not None:
+			doc.approved_by_manager = data.get("approved_by_manager")
+		
+		# Update amount_approved if provided
+		if data.get("amount_approved"):
+			doc.amount_approved = data.get("amount_approved")
+		
+		# Update status if provided (optional field)
+		if data.get("status"):
+			doc.status = data.get("status")
+		
+		doc.flags.ignore_sync = True  # Prevent re-syncing back
+		doc.save(ignore_permissions=True)
+		
+		frappe.db.commit()
+		return {"success": True, "message": "Expense approval status updated successfully"}
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error receiving Expense approval update"
+		)
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
 def get_employees_for_sync(filters=None):
 	"""
 	API endpoint to get all team leader employees for initial pull
@@ -249,19 +486,19 @@ def initial_pull_from_remote_erp(erp_sync_settings):
 			"errors": []
 		}
 		
-		# Pull Employees
-		if settings.sync_employee:
-			emp_result = pull_employees_from_remote(settings)
-			results["employees_pulled"] = emp_result.get("count", 0)
-			if emp_result.get("error"):
-				results["errors"].append(emp_result.get("error"))
-		
 		# Pull Sales Orders
 		if settings.sync_sales_order_pull:
 			so_result = pull_sales_orders_from_remote(settings)
 			results["sales_orders_pulled"] = so_result.get("count", 0)
 			if so_result.get("error"):
 				results["errors"].append(so_result.get("error"))
+		
+		# Pull Employees
+		if settings.sync_employee:
+			emp_result = pull_employees_from_remote(settings)
+			results["employees_pulled"] = emp_result.get("count", 0)
+			if emp_result.get("error"):
+				results["errors"].append(emp_result.get("error"))
 		
 		# Update last pull time
 		settings.last_pull_time = now()
@@ -599,6 +836,14 @@ def send_to_remote_erp(erp_url, api_key, api_secret, doctype_name, data, sync_ac
 			api_method = "receive_sales_order_pull"
 		elif doctype_name == "Leader Location":
 			api_method = "receive_leader_location"
+		elif doctype_name == "Leave Pull":
+			api_method = "receive_leave_pull"
+		elif doctype_name == "Expense Pull":
+			api_method = "receive_expense_pull"
+		elif doctype_name == "Leave Status Update":
+			api_method = "receive_leave_status_update"
+		elif doctype_name == "Expense Status Update":
+			api_method = "receive_expense_status_update"
 		else:
 			return False
 		
@@ -969,3 +1214,378 @@ def process_sync_queue_item_sales_order(queue_name):
 		
 	except Exception as e:
 		handle_sync_error(queue_name, str(e))
+
+
+# ==================== LEAVE AND EXPENSE SYNC FUNCTIONS ====================
+
+def push_leave_to_remote_erp(leave_doc):
+	"""
+	Push OTPL Leave data to all enabled remote ERPs when external manager is set
+	Called from OTPL Leave on_update hook
+	"""
+	try:
+		# Check if this is an external manager leave
+		if not leave_doc.is_external_manager or not leave_doc.external_manager:
+			return
+		
+		# Prevent infinite sync loop
+		if hasattr(leave_doc, 'flags') and leave_doc.flags.get('ignore_sync'):
+			return
+		
+		# Get all enabled ERP Sync Settings
+		sync_settings_list = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1},
+			fields=["name"]
+		)
+		
+		if not sync_settings_list:
+			frappe.log_error("No enabled ERP Sync Settings for Leave sync", "Leave Sync Debug")
+			return
+		
+		# Prepare leave data for sync
+		leave_data = {
+			"leave_id": leave_doc.name,
+			"employee": leave_doc.employee,
+			"employee_name": leave_doc.employee_name,
+			"from_date": str(leave_doc.from_date) if leave_doc.from_date else None,
+			"to_date": str(leave_doc.to_date) if leave_doc.to_date else None,
+			"total_no_of_days": leave_doc.total_no_of_days,
+			"half_day": leave_doc.half_day,
+			"half_day_date": str(leave_doc.half_day_date) if leave_doc.half_day_date else None,
+			"status": leave_doc.status,
+			"approver": leave_doc.approver,
+			"alternate_mobile_no": leave_doc.alternate_mobile_no,
+			"reason": leave_doc.reason,
+			"approved_from_date": str(leave_doc.approved_from_date) if leave_doc.approved_from_date else None,
+			"approved_to_date": str(leave_doc.approved_to_date) if leave_doc.approved_to_date else None,
+			"total_no_of_approved_days": leave_doc.total_no_of_approved_days
+		}
+		
+		# Queue sync for each enabled ERP Sync Settings
+		for settings in sync_settings_list:
+			queue_doc = frappe.get_doc({
+				"doctype": "ERP Sync Queue",
+				"erp_sync_settings": settings.name,
+				"sync_doctype": "OTPL Leave",
+				"sync_docname": leave_doc.name,
+				"sync_action": "Insert/Update",
+				"sync_data": json.dumps(leave_data),
+				"status": "Queued"
+			})
+			queue_doc.insert(ignore_permissions=True)
+		
+		frappe.db.commit()
+		frappe.log_error(
+			message="Queued Leave sync for {0} to {1} ERP(s)".format(leave_doc.name, len(sync_settings_list)),
+			title="Leave Sync Queue Success"
+		)
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error queueing Leave sync for {0}".format(leave_doc.name)
+		)
+
+
+def push_expense_to_remote_erp(expense_doc):
+	"""
+	Push OTPL Expense data to all enabled remote ERPs when external manager is set
+	Called from OTPL Expense on_update hook
+	"""
+	try:
+		# Check if this is an external manager expense
+		if not expense_doc.is_external_manager or not expense_doc.external_manager:
+			return
+		
+		# Prevent infinite sync loop
+		if hasattr(expense_doc, 'flags') and expense_doc.flags.get('ignore_sync'):
+			return
+		
+		# Get all enabled ERP Sync Settings
+		sync_settings_list = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1},
+			fields=["name"]
+		)
+		
+		if not sync_settings_list:
+			frappe.log_error("No enabled ERP Sync Settings for Expense sync", "Expense Sync Debug")
+			return
+		
+		# Prepare expense data for sync
+		expense_data = {
+			"expense_id": expense_doc.name,
+			"sent_by": expense_doc.sent_by,
+			"employee_name": expense_doc.employee_name,
+			"date_of_entry": str(expense_doc.date_of_entry) if expense_doc.date_of_entry else None,
+			"date_of_expense": str(expense_doc.date_of_expense) if expense_doc.date_of_expense else None,
+			"amount": expense_doc.amount,
+			"details_of_expense": expense_doc.details_of_expense,
+			"invoice_upload": expense_doc.invoice_upload,
+			"sales_order": expense_doc.sales_order,
+			"amount_approved": expense_doc.amount_approved,
+			"purpose": expense_doc.purpose,
+			"query": expense_doc.query,
+			"status": expense_doc.status,
+			"expense_type": expense_doc.expense_type,
+			"approval_manager": expense_doc.approval_manager,
+			"business_line": expense_doc.business_line,
+			"expense_claim_type": expense_doc.expense_claim_type,
+			"approved_by_manager": expense_doc.approved_by_manager
+		}
+		
+		# Queue sync for each enabled ERP Sync Settings
+		for settings in sync_settings_list:
+			queue_doc = frappe.get_doc({
+				"doctype": "ERP Sync Queue",
+				"erp_sync_settings": settings.name,
+				"sync_doctype": "OTPL Expense",
+				"sync_docname": expense_doc.name,
+				"sync_action": "Insert/Update",
+				"sync_data": json.dumps(expense_data),
+				"status": "Queued"
+			})
+			queue_doc.insert(ignore_permissions=True)
+		
+		frappe.db.commit()
+		frappe.log_error(
+			message="Queued Expense sync for {0} to {1} ERP(s)".format(expense_doc.name, len(sync_settings_list)),
+			title="Expense Sync Queue Success"
+		)
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error queueing Expense sync for {0}".format(expense_doc.name)
+		)
+
+
+def process_leave_sync_queue(queue_name):
+	"""
+	Process queued Leave sync from ERP Sync Queue
+	"""
+	try:
+		queue_doc = frappe.get_doc("ERP Sync Queue", queue_name)
+		queue_doc.status = "Processing"
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Get sync settings
+		sync_settings = frappe.get_doc("ERP Sync Settings", queue_doc.erp_sync_settings)
+		
+		if not sync_settings.enabled:
+			queue_doc.status = "Failed"
+			queue_doc.error_log = "ERP Sync Settings is disabled"
+			queue_doc.save(ignore_permissions=True)
+			frappe.db.commit()
+			return
+		
+		# Parse sync data
+		sync_data = json.loads(queue_doc.sync_data)
+		
+		# Send to remote ERP's receive_leave_pull endpoint
+		success = send_to_remote_erp(
+			sync_settings.erp_url,
+			sync_settings.get_password("api_key"),
+			sync_settings.get_password("api_secret"),
+			"Leave Pull",
+			sync_data,
+			queue_doc.sync_action
+		)
+		
+		if success:
+			queue_doc.status = "Completed"
+			queue_doc.error_log = ""
+		else:
+			raise Exception("Failed to sync Leave to remote ERP")
+		
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+	except Exception as e:
+		handle_sync_error(queue_name, str(e))
+
+
+def process_expense_sync_queue(queue_name):
+	"""
+	Process queued Expense sync from ERP Sync Queue
+	"""
+	try:
+		queue_doc = frappe.get_doc("ERP Sync Queue", queue_name)
+		queue_doc.status = "Processing"
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+		# Get sync settings
+		sync_settings = frappe.get_doc("ERP Sync Settings", queue_doc.erp_sync_settings)
+		
+		if not sync_settings.enabled:
+			queue_doc.status = "Failed"
+			queue_doc.error_log = "ERP Sync Settings is disabled"
+			queue_doc.save(ignore_permissions=True)
+			frappe.db.commit()
+			return
+		
+		# Parse sync data
+		sync_data = json.loads(queue_doc.sync_data)
+		
+		# Send to remote ERP's receive_expense_pull endpoint
+		success = send_to_remote_erp(
+			sync_settings.erp_url,
+			sync_settings.get_password("api_key"),
+			sync_settings.get_password("api_secret"),
+			"Expense Pull",
+			sync_data,
+			queue_doc.sync_action
+		)
+		
+		if success:
+			queue_doc.status = "Completed"
+			queue_doc.error_log = ""
+		else:
+			raise Exception("Failed to sync Expense to remote ERP")
+		
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		
+	except Exception as e:
+		handle_sync_error(queue_name, str(e))
+
+
+def push_leave_status_to_source(leave_pull_doc):
+	"""
+	Push Leave Pull status update back to source ERP's OTPL Leave
+	Called from Leave Pull on_update hook
+	"""
+	try:
+		# Check if this record came from an external source
+		if not leave_pull_doc.source_erp:
+			return
+		
+		# Prevent infinite sync loop
+		if hasattr(leave_pull_doc, 'flags') and leave_pull_doc.flags.get('ignore_sync'):
+			return
+		
+		# Find the ERP Sync Settings for the source ERP
+		sync_settings = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1, "erp_url": leave_pull_doc.source_erp},
+			fields=["name"],
+			limit=1
+		)
+		
+		if not sync_settings:
+			frappe.log_error(
+				"No ERP Sync Settings found for source ERP: {0}".format(leave_pull_doc.source_erp),
+				"Leave Status Sync Error"
+			)
+			return
+		
+		# Prepare status update data
+		status_data = {
+			"leave_id": leave_pull_doc.leave_id,
+			"status": leave_pull_doc.status,
+			"approved_from_date": str(leave_pull_doc.approved_from_date) if leave_pull_doc.approved_from_date else None,
+			"approved_to_date": str(leave_pull_doc.approved_to_date) if leave_pull_doc.approved_to_date else None,
+			"total_no_of_approved_days": leave_pull_doc.total_no_of_approved_days
+		}
+		
+		# Get sync settings
+		settings = frappe.get_doc("ERP Sync Settings", sync_settings[0].name)
+		
+		# Send status update directly (not queued for immediate update)
+		success = send_to_remote_erp(
+			settings.erp_url,
+			settings.get_password("api_key"),
+			settings.get_password("api_secret"),
+			"Leave Status Update",
+			status_data,
+			"Status Update"
+		)
+		
+		if success:
+			frappe.log_error(
+				message="Successfully synced Leave status for {0} to source ERP".format(leave_pull_doc.leave_id),
+				title="Leave Status Sync Success"
+			)
+		else:
+			frappe.log_error(
+				message="Failed to sync Leave status for {0} to source ERP".format(leave_pull_doc.leave_id),
+				title="Leave Status Sync Failed"
+			)
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error syncing Leave status to source for {0}".format(leave_pull_doc.leave_id)
+		)
+
+
+def push_expense_status_to_source(expense_pull_doc):
+	"""
+	Push Expense Pull approval status back to source ERP's OTPL Expense
+	Called from Expense Pull on_update hook
+	Syncs primarily the approved_by_manager checkbox
+	"""
+	try:
+		# Check if this record came from an external source
+		if not expense_pull_doc.source_erp:
+			return
+		
+		# Prevent infinite sync loop
+		if hasattr(expense_pull_doc, 'flags') and expense_pull_doc.flags.get('ignore_sync'):
+			return
+		
+		# Find the ERP Sync Settings for the source ERP
+		sync_settings = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1, "erp_url": expense_pull_doc.source_erp},
+			fields=["name"],
+			limit=1
+		)
+		
+		if not sync_settings:
+			frappe.log_error(
+				"No ERP Sync Settings found for source ERP: {0}".format(expense_pull_doc.source_erp),
+				"Expense Approval Sync Error"
+			)
+			return
+		
+		# Prepare approval update data - primarily checkbox based
+		status_data = {
+			"expense_id": expense_pull_doc.expense_id,
+			"approved_by_manager": expense_pull_doc.approved_by_manager,  # Primary field
+			"amount_approved": expense_pull_doc.amount_approved,
+			"status": expense_pull_doc.status  # Optional field
+		}
+		
+		# Get sync settings
+		settings = frappe.get_doc("ERP Sync Settings", sync_settings[0].name)
+		
+		# Send approval update directly (not queued for immediate update)
+		success = send_to_remote_erp(
+			settings.erp_url,
+			settings.get_password("api_key"),
+			settings.get_password("api_secret"),
+			"Expense Status Update",
+			status_data,
+			"Status Update"
+		)
+		
+		if success:
+			frappe.log_error(
+				message="Successfully synced Expense approval for {0} to source ERP".format(expense_pull_doc.expense_id),
+				title="Expense Approval Sync Success"
+			)
+		else:
+			frappe.log_error(
+				message="Failed to sync Expense approval for {0} to source ERP".format(expense_pull_doc.expense_id),
+				title="Expense Approval Sync Failed"
+			)
+		
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error syncing Expense approval to source for {0}".format(expense_pull_doc.expense_id)
+		)

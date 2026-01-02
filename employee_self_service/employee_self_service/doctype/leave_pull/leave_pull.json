@@ -1,0 +1,191 @@
+{
+ "autoname": "field:leave_id",
+ "creation": "2026-01-02 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "leave_id",
+  "employee",
+  "employee_name",
+  "column_break_2",
+  "from_date",
+  "to_date",
+  "section_break_5",
+  "total_no_of_days",
+  "half_day",
+  "half_day_date",
+  "column_break_8",
+  "status",
+  "approver",
+  "alternate_mobile_no",
+  "section_break_11",
+  "reason",
+  "section_break_13",
+  "approved_from_date",
+  "approved_to_date",
+  "total_no_of_approved_days",
+  "section_break_16",
+  "source_erp",
+  "sync_date"
+ ],
+ "fields": [
+  {
+   "fieldname": "leave_id",
+   "fieldtype": "Data",
+   "label": "Leave ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Employee",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "label": "Employee Name"
+  },
+  {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "From Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "To Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "total_no_of_days",
+   "fieldtype": "Int",
+   "label": "Total No of Days"
+  },
+  {
+   "default": "0",
+   "fieldname": "half_day",
+   "fieldtype": "Check",
+   "label": "Half Day"
+  },
+  {
+   "depends_on": "eval:doc.half_day==1",
+   "fieldname": "half_day_date",
+   "fieldtype": "Date",
+   "label": "Half Day Date"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Pending\nApproved\nRejected"
+  },
+  {
+   "fieldname": "approver",
+   "fieldtype": "Data",
+   "label": "Approver"
+  },
+  {
+   "fieldname": "alternate_mobile_no",
+   "fieldtype": "Data",
+   "label": "Alternate Mobile No"
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason"
+  },
+  {
+   "fieldname": "approved_from_date",
+   "fieldtype": "Date",
+   "label": "Approved From Date"
+  },
+  {
+   "fieldname": "approved_to_date",
+   "fieldtype": "Date",
+   "label": "Approved To Date"
+  },
+  {
+   "fieldname": "total_no_of_approved_days",
+   "fieldtype": "Int",
+   "label": "Total No of Approved Days"
+  },
+  {
+   "fieldname": "source_erp",
+   "fieldtype": "Data",
+   "label": "Source ERP",
+   "read_only": 1
+  },
+  {
+   "default": "now",
+   "fieldname": "sync_date",
+   "fieldtype": "Datetime",
+   "label": "Sync Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_5",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "column_break_8",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_11",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "section_break_13",
+   "fieldtype": "Section Break",
+   "label": "Approval Details"
+  },
+  {
+   "fieldname": "section_break_16",
+   "fieldtype": "Section Break",
+   "label": "Sync Information"
+  }
+ ],
+ "modified": "2026-01-02 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "Leave Pull",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Employee",
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

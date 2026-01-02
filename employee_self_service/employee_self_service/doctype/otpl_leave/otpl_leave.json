@@ -24,7 +24,9 @@
   "section_break_17",
   "reason",
   "section_break_19",
-  "approver"
+  "approver",
+  "is_external_manager",
+  "external_manager"
  ],
  "fields": [
   {
@@ -135,9 +137,21 @@
    "fieldname": "reason",
    "fieldtype": "Small Text",
    "label": "Reason"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_external_manager",
+   "fieldtype": "Check",
+   "label": "Is External Manager"
+  },
+  {
+   "depends_on": "eval:doc.is_external_manager==1",
+   "fieldname": "external_manager",
+   "fieldtype": "Data",
+   "label": "External Manager"
   }
  ],
- "modified": "2025-02-02 23:49:40.806452",
+ "modified": "2026-01-02 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Leave",
