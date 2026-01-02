@@ -822,10 +822,9 @@ def send_to_remote_erp(erp_url, api_key, api_secret, doctype_name, data, sync_ac
 	Send data to remote ERP via custom whitelisted API
 	"""
 	try:
-		# Prepare headers
+		# Prepare headers (no Content-Type for form data)
 		headers = {
-			"Authorization": "token {0}:{1}".format(api_key, api_secret),
-			"Content-Type": "application/json"
+			"Authorization": "token {0}:{1}".format(api_key, api_secret)
 		}
 		
 		# Determine the API endpoint based on doctype
@@ -851,12 +850,16 @@ def send_to_remote_erp(erp_url, api_key, api_secret, doctype_name, data, sync_ac
 			erp_url, api_method
 		)
 		
-		# Send data to remote ERP
+		# Get current site URL to pass as source_site
+		source_site = frappe.utils.get_url()
+		
+		# Send data to remote ERP as form data
 		payload = {
-			"data": json.dumps(data)
+			"data": json.dumps(data),
+			"source_site": source_site
 		}
 		
-		response = requests.post(url, headers=headers, json=payload, timeout=30)
+		response = requests.post(url, headers=headers, data=payload, timeout=30)
 		
 		# Check response
 		if response.status_code == 200:
