@@ -2,15 +2,15 @@
 # For license information, please see license.txt
 
 import frappe
-import pyfcm
 from frappe.model.document import Document
-from pyfcm import FCMNotification
 import json
 import datetime
 
 
 class PushNotification(Document):
     def after_insert(self):
+        from pyfcm import FCMNotification
+        
         server_key = frappe.db.get_single_value(
             "Employee Self Service Settings", "firebase_server_key"
         )
@@ -83,6 +83,8 @@ def send_single_notification(
     user=None,
     notification_type=None,
 ):
+    from pyfcm import FCMNotification
+    
     server_key = frappe.db.get_single_value(
         "Employee Self Service Settings", "firebase_server_key"
     )
@@ -112,6 +114,8 @@ def send_single_notification(
 def send_multiple_notification(
     registration_ids, users=None, title=None, message=None, notification_type=None
 ):
+    from pyfcm import FCMNotification
+    
     server_key = frappe.db.get_single_value(
         "Employee Self Service Settings", "firebase_server_key"
     )
