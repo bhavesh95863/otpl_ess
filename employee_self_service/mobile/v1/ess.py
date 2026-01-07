@@ -230,6 +230,52 @@ def get_leave_type(from_date=None, to_date=None):
         return exception_handler(e)
 
 
+# @frappe.whitelist()
+# @ess_validate(methods=["GET"])
+# def get_leave_application_list():
+#     """
+#     Get Leave Application which is already applied. Get Leave Balance Report
+#     """
+#     try:
+#         emp_data = get_employee_by_user(frappe.session.user)
+#         validate_employee_data(emp_data)
+#         leave_application_fields = [
+#             "name",
+#             "leave_type",
+#             "DATE_FORMAT(from_date, '%d-%m-%Y') as from_date",
+#             "DATE_FORMAT(to_date, '%d-%m-%Y') as to_date",
+#             "total_leave_days",
+#             "description",
+#             "status",
+#             "DATE_FORMAT(posting_date, '%d-%m-%Y') as posting_date",
+#         ]
+#         upcoming_leaves = frappe.get_all(
+#             "Leave Application",
+#             filters={"from_date": [">", today()], "employee": emp_data.get("name")},
+#             fields=leave_application_fields,
+#         )
+
+#         taken_leaves = frappe.get_all(
+#             "Leave Application",
+#             fields=leave_application_fields,
+#             filters={"from_date": ["<=", today()], "employee": emp_data.get("name")},
+#         )
+#         fiscal_year = get_fiscal_year(nowdate())[0]
+#         if not fiscal_year:
+#             return gen_response(500, "Fiscal year not set")
+#         res = get_leave_balance_report(
+#             emp_data.get("name"), emp_data.get("company"), fiscal_year
+#         )
+
+#         leave_applications = {
+#             "upcoming": upcoming_leaves,
+#             "taken": taken_leaves,
+#             "balance": res,
+#         }
+#         return gen_response(200, "Leave data getting successfully", leave_applications)
+#     except Exception as e:
+#         return exception_handler(e)
+
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_leave_application_list():
@@ -241,22 +287,22 @@ def get_leave_application_list():
         validate_employee_data(emp_data)
         leave_application_fields = [
             "name",
-            "leave_type",
+            "'NA' as leave_type",
             "DATE_FORMAT(from_date, '%d-%m-%Y') as from_date",
             "DATE_FORMAT(to_date, '%d-%m-%Y') as to_date",
-            "total_leave_days",
-            "description",
+            "total_no_of_days as 'total_leave_days'",
+            "reason as 'description'",
             "status",
-            "DATE_FORMAT(posting_date, '%d-%m-%Y') as posting_date",
+            "DATE_FORMAT(creation, '%d-%m-%Y') as posting_date",
         ]
         upcoming_leaves = frappe.get_all(
-            "Leave Application",
+            "OTPL Leave",
             filters={"from_date": [">", today()], "employee": emp_data.get("name")},
             fields=leave_application_fields,
         )
 
         taken_leaves = frappe.get_all(
-            "Leave Application",
+            "OTPL Leave",
             fields=leave_application_fields,
             filters={"from_date": ["<=", today()], "employee": emp_data.get("name")},
         )
@@ -288,27 +334,40 @@ def get_leave_application(name):
         validate_employee_data(emp_data)
 
         if not frappe.db.exists(
-            "Leave Application", {"name": name, "employee": emp_data.get("name")}
+            "OTPL Leave", {"name": name, "employee": emp_data.get("name")}
         ):
             return gen_response(500, "Leave application does not exists!")
 
         leave_application_fields = [
             "name",
-            "leave_type",
-            "total_leave_days",
-            "description",
+            "'NA' as 'leave_type'",
+            "total_no_of_days as 'total_leave_days'",
+            "reason as 'description'",
             "status",
             "half_day",
             "from_date",
             "to_date",
-            "posting_date",
+            "DATE_FORMAT(creation, '%%d-%%m-%%y') as 'posting_date'",
             "half_day_date",
-            "alternate_mobile_number",
+            "alternate_mobile_no as 'alternate_mobile_number'",
+            "approved_from_date",
+            "approved_to_date",
         ]
 
-        leave_application = frappe.db.get_value(
-            "Leave Application", name, leave_application_fields, as_dict=True
+        leave_application = frappe.db.sql(
+            f"""
+            SELECT {", ".join(leave_application_fields)}
+            FROM `tabOTPL Leave`
+            WHERE name = %s
+            """,
+            name,
+            as_dict=True
         )
+        
+        if leave_application:
+            leave_application = leave_application[0]
+        else:
+            return gen_response(500, "Leave application not found")
 
         return gen_response(200, "Leave data getting successfully", leave_application)
     except Exception as e:
