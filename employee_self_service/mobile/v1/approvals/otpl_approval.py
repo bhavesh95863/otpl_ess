@@ -393,6 +393,7 @@ def get_employee_checkin_approval_list(start=0, page_length=10, log_type=None):
                 "time",
                 "requested_from",
                 "reason",
+                "today_work",
                 "location",
             ],
             start=start,
