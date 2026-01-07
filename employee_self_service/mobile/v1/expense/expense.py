@@ -18,12 +18,13 @@ def create_expense(**data):
         from frappe.handler import upload_file
 
         emp_data = get_employee_by_user(
-        frappe.session.user, fields=["name", "image", "department","company", "sales_order"]
+        frappe.session.user, fields=["name", "image", "department","company", "sales_order","external_so"]
         )
         if not len(emp_data) >= 1:
             return gen_response(500, "Employee does not exists")
-        if not emp_data.get("sales_order"):
-            return gen_response(500, "Please assign sales order in employee master to create expense")
+        if not emp_data.get("external_so"):
+            if not emp_data.get("sales_order"):
+                return gen_response(500, "Please assign sales order in employee master to create expense")
         msg = ""
         if data.get("name"):
             expense_doc = frappe.get_doc("OTPL Expense",data.get("name"))
@@ -33,6 +34,7 @@ def create_expense(**data):
             expense_doc.sent_by = emp_data.get("name")
             expense_doc.date_of_entry = today()
             expense_doc.sales_order = emp_data.get("sales_order")
+            expense_doc.external_sales_order = emp_data.get("external_so")
             msg = "Expense create successfully"
         expense_doc.update(data)
         expense_doc.save()

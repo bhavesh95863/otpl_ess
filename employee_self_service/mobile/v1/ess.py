@@ -1793,15 +1793,20 @@ def employee_device_info(**kwargs):
             ).insert(ignore_permissions=True)
 
         emp_data = get_employee_by_user(frappe.session.user)
-        existing_registration = frappe.db.exists(
-            "Employee Device Registration", {"employee": emp_data.get("name")}
+
+        existing_registration = frappe.db.get_value(
+            "Employee Device Registration", {"unique_id": data.get("unique_id")}, ["name","employee"], as_dict=True
         )
-        if not existing_registration and data.get("unique_id"):
+        if not existing_registration:
             # Register the device if not exists
             doc = frappe.new_doc("Employee Device Registration")
             doc.employee = emp_data.get("name")
             doc.unique_id = data.get("unique_id")
             doc.insert(ignore_permissions=True)
+        if existing_registration:
+            if existing_registration.get("employee") != emp_data.get("name"):
+                return gen_response(500, "Device already registered with another employee.")
+
         return gen_response(200, "Device information saved successfully!")
     except Exception as e:
         return exception_handler(e)

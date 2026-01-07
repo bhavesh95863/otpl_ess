@@ -1343,7 +1343,7 @@ def push_expense_to_remote_erp(expense_doc):
 			"query": expense_doc.query,
 			"status": expense_doc.status,
 			"expense_type": expense_doc.expense_type,
-			"approval_manager": expense_doc.approval_manager,
+			"approval_manager": expense_doc.external_manager,
 			"business_line": expense_doc.business_line,
 			"expense_claim_type": expense_doc.expense_claim_type,
 			"approved_by_manager": expense_doc.approved_by_manager

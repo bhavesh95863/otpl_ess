@@ -256,6 +256,7 @@ def get_otpl_expense_approval_list(start=0, page_length=10):
                 "business_line",
                 "sales_order",
                 "invoice_upload",
+                "source_erp",
                 "modified",
             ],
             filters=[
@@ -276,9 +277,24 @@ def get_otpl_expense_approval_list(start=0, page_length=10):
         page_length = int(page_length)
         paginated_list = combined_list[start:start + page_length]
         
-        # Clean up response - remove internal fields
+        # Clean up response - remove internal fields and add full URL for invoice_upload
+        from frappe.utils import get_url
         for item in paginated_list:
             item.pop("modified", None)
+            # Convert invoice_upload to full URL based on source_erp presence
+            if item.get("invoice_upload"):
+                if item.get("source_erp"):
+                    # For Expense Pull, use source_erp as the base URL
+                    source_erp = item["source_erp"]
+                    if not source_erp.startswith("http"):
+                        source_erp = "https://" + source_erp
+                    item["invoice_upload"] = source_erp.rstrip("/") + item["invoice_upload"]
+                else:
+                    # For OTPL Expense, use current site's host
+                    item["invoice_upload"] = get_url(item["invoice_upload"])
+            
+            # Remove source_erp from response
+            item.pop("source_erp", None)
         
         return gen_response(
             200, "Expense approval list retrieved successfully", paginated_list
