@@ -9,6 +9,16 @@ from frappe import _
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_status_to_source
 
 class LeavePull(Document):
+	def before_save(self):
+		"""
+		Set approver_user from approver employee ID
+		"""
+		if self.approver and not self.approver_user:
+			# Get user_id from Employee
+			user_id = frappe.db.get_value("Employee", self.approver, "user_id")
+			if user_id:
+				self.approver_user = user_id
+	
 	def on_update(self):
 		"""
 		Sync status updates back to source ERP when approved/rejected

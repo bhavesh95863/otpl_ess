@@ -68,9 +68,9 @@ def auto_checkout_site_employees():
 					)
 		
 		if checkout_count > 0:
-            frappe.log_error(title="Auto Checkout Completed",message=f"Auto checkout completed. {checkout_count} employees checked out automatically.")
+			frappe.log_error(title="Auto Checkout Completed",message=f"Auto checkout completed. {checkout_count} employees checked out automatically.")
 		else:
 			frappe.logger().info("No employees required auto checkout today")
 			
 	except Exception as e:
-        frappe.log_error(title="Auto Checkout Error",message=frappe.get_traceback())
+		frappe.log_error(title="Auto Checkout Error",message=frappe.get_traceback())

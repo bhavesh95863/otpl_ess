@@ -18,6 +18,7 @@
   "column_break_8",
   "status",
   "approver",
+  "approver_user",
   "alternate_mobile_no",
   "section_break_11",
   "reason",
@@ -91,6 +92,13 @@
    "fieldname": "approver",
    "fieldtype": "Data",
    "label": "Approver"
+  },
+  {
+   "fieldname": "approver_user",
+   "fieldtype": "Link",
+   "label": "Approver User",
+   "options": "User",
+   "read_only": 1
   },
   {
    "fieldname": "alternate_mobile_no",
