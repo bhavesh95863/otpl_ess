@@ -9,6 +9,7 @@
   "sent_by",
   "employee_name",
   "approval_manager",
+  "approval_manager_user",
   "column_break_2",
   "date_of_entry",
   "date_of_expense",
@@ -118,6 +119,13 @@
    "fieldname": "approval_manager",
    "fieldtype": "Data",
    "label": "Approval Manager"
+  },
+  {
+   "fieldname": "approval_manager_user",
+   "fieldtype": "Link",
+   "label": "Approval Manager User",
+   "options": "User",
+   "read_only": 1
   },
   {
    "fieldname": "business_line",

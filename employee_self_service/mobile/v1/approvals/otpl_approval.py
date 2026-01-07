@@ -12,11 +12,13 @@ from employee_self_service.mobile.v1.api_utils import (
 @ess_validate(methods=["GET"])
 def get_otpl_leave_approval_list(start=0, page_length=10):
     """
-    Get OTPL Leave Applications that need approval
-    Filters: status='Pending' and approver is the session user
+    Get OTPL Leave and Leave Pull Applications that need approval
+    Filters: status='Pending' and approver is the session user (for OTPL Leave)
+             status!='Approved' and source_erp is set (for Leave Pull)
     """
     try:
-        leave_list = frappe.get_all(
+        # Get OTPL Leave records
+        otpl_leave_list = frappe.get_all(
             "OTPL Leave",
             fields=[
                 "name",
@@ -29,17 +31,56 @@ def get_otpl_leave_approval_list(start=0, page_length=10):
                 "half_day_date",
                 "alternate_mobile_no",
                 "reason",
+                "status",
+                "modified",
             ],
-            start=start,
-            page_length=page_length,
-            order_by="modified desc",
             filters={"status": "Pending", "approver": frappe.session.user},
         )
+        
+        # Get Leave Pull records that need approval
+        leave_pull_list = frappe.get_all(
+            "Leave Pull",
+            fields=[
+                "name",
+                "employee",
+                "employee_name",
+                "from_date",
+                "to_date",
+                "total_no_of_days",
+                "half_day",
+                "half_day_date",
+                "alternate_mobile_no",
+                "reason",
+                "status",
+                "modified",
+            ],
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "!=", "Approved"],
+                ["approver_user", "=", frappe.session.user]
+            ],
+        )
+        
+        # Combine both lists
+        combined_list = otpl_leave_list + leave_pull_list
+        
+        # Sort by modified date descending
+        combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
+        
+        # Apply pagination
+        start = int(start)
+        page_length = int(page_length)
+        paginated_list = combined_list[start:start + page_length]
+        
+        # Clean up response - remove internal fields
+        for item in paginated_list:
+            item.pop("modified", None)
+        
         return gen_response(
-            200, "Leave approval list retrieved successfully", leave_list
+            200, "Leave approval list retrieved successfully", paginated_list
         )
     except frappe.PermissionError:
-        return gen_response(500, "Not permitted to read OTPL Leave")
+        return gen_response(500, "Not permitted to read leave records")
     except Exception as e:
         return exception_handler(e)
 
@@ -48,7 +89,7 @@ def get_otpl_leave_approval_list(start=0, page_length=10):
 @ess_validate(methods=["POST"])
 def approve_otpl_leave():
     """
-    Approve OTPL Leave Application
+    Approve OTPL Leave or Leave Pull Application (auto-detects doctype)
     Accepts: name, approved_from_date, approved_to_date
     Sets status to 'Approved'
     """
@@ -66,31 +107,55 @@ def approve_otpl_leave():
                 500, "Approved from date and approved to date are required"
             )
 
-        # Check if leave exists
-        if not frappe.db.exists("OTPL Leave", leave_name):
+        # Auto-detect if it's a Leave Pull or OTPL Leave
+        is_leave_pull = frappe.db.exists("Leave Pull", leave_name)
+        is_otpl_leave = frappe.db.exists("OTPL Leave", leave_name)
+        
+        if not is_leave_pull and not is_otpl_leave:
             return gen_response(500, "Leave application does not exist")
+        
+        # Handle Leave Pull records
+        if is_leave_pull:
+            leave_doc = frappe.get_doc("Leave Pull", leave_name)
+            
+            # Check if already approved
+            if leave_doc.status == "Approved":
+                return gen_response(500, "Leave application is already approved")
+            
+            # Calculate approved days
+            from frappe.utils import date_diff
+            approved_days = date_diff(approved_to_date, approved_from_date) + 1
+            
+            # Update Leave Pull
+            leave_doc.status = "Approved"
+            leave_doc.approved_from_date = approved_from_date
+            leave_doc.approved_to_date = approved_to_date
+            leave_doc.total_no_of_approved_days = approved_days
+            leave_doc.save(ignore_permissions=True)
+            
+            return gen_response(200, "Leave application approved successfully")
+        
+        # Handle OTPL Leave records
+        else:
+            leave_doc = frappe.get_doc("OTPL Leave", leave_name)
 
-        # Get leave document
-        leave_doc = frappe.get_doc("OTPL Leave", leave_name)
+            # Verify that the current user is the approver
+            if leave_doc.approver != frappe.session.user:
+                return gen_response(
+                    500, "You are not authorized to approve this leave application"
+                )
 
-        # Verify that the current user is the approver
-        if leave_doc.approver != frappe.session.user:
-            return gen_response(
-                500, "You are not authorized to approve this leave application"
-            )
+            # Check if already approved or rejected
+            if leave_doc.status != "Pending":
+                return gen_response(500, f"Leave application is already {leave_doc.status}")
 
-        # Check if already approved or rejected
-        if leave_doc.status != "Pending":
-            return gen_response(500, f"Leave application is already {leave_doc.status}")
+            # Update leave document
+            leave_doc.status = "Approved"
+            leave_doc.approved_from_date = approved_from_date
+            leave_doc.approved_to_date = approved_to_date
+            leave_doc.save(ignore_permissions=True)
 
-        # Update leave document
-        doc = frappe.get_doc("OTPL Leave", leave_name)
-        doc.status = "Approved"
-        doc.approved_from_date = approved_from_date
-        doc.approved_to_date = approved_to_date
-        doc.save(ignore_permissions=True)
-
-        return gen_response(200, "Leave application approved successfully")
+            return gen_response(200, "Leave application approved successfully")
 
     except frappe.PermissionError:
         return gen_response(500, "Not permitted to approve OTPL Leave")
@@ -147,11 +212,13 @@ def reject_otpl_leave():
 @ess_validate(methods=["GET"])
 def get_otpl_expense_approval_list(start=0, page_length=10):
     """
-    Get OTPL Expense Applications that need approval
-    Filters: approved_by_manager=0 and approval_manager is the session user
+    Get OTPL Expense and Expense Pull Applications that need approval
+    Filters: approved_by_manager=0 and approval_manager is the session user (for OTPL Expense)
+             approved_by_manager=0 and source_erp is set (for Expense Pull)
     """
     try:
-        expense_list = frappe.get_all(
+        # Get OTPL Expense records
+        otpl_expense_list = frappe.get_all(
             "OTPL Expense",
             fields=[
                 "name",
@@ -167,17 +234,57 @@ def get_otpl_expense_approval_list(start=0, page_length=10):
                 "business_line",
                 "sales_order",
                 "invoice_upload",
+                "modified",
             ],
-            start=start,
-            page_length=page_length,
-            order_by="modified desc",
             filters={"approved_by_manager": 0, "approval_manager": frappe.session.user},
         )
+        
+        # Get Expense Pull records that need approval
+        expense_pull_list = frappe.get_all(
+            "Expense Pull",
+            fields=[
+                "name",
+                "sent_by",
+                "employee_name",
+                "date_of_expense",
+                "expense_type",
+                "expense_claim_type",
+                "amount",
+                "details_of_expense",
+                "purpose",
+                "status",
+                "business_line",
+                "sales_order",
+                "invoice_upload",
+                "modified",
+            ],
+            filters=[
+                ["source_erp", "is", "set"],
+                ["approved_by_manager", "=", 0],
+                ["approval_manager_user", "=", frappe.session.user]
+            ],
+        )
+        
+        # Combine both lists
+        combined_list = otpl_expense_list + expense_pull_list
+        
+        # Sort by modified date descending
+        combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
+        
+        # Apply pagination
+        start = int(start)
+        page_length = int(page_length)
+        paginated_list = combined_list[start:start + page_length]
+        
+        # Clean up response - remove internal fields
+        for item in paginated_list:
+            item.pop("modified", None)
+        
         return gen_response(
-            200, "Expense approval list retrieved successfully", expense_list
+            200, "Expense approval list retrieved successfully", paginated_list
         )
     except frappe.PermissionError:
-        return gen_response(500, "Not permitted to read OTPL Expense")
+        return gen_response(500, "Not permitted to read expense records")
     except Exception as e:
         return exception_handler(e)
 
@@ -186,7 +293,7 @@ def get_otpl_expense_approval_list(start=0, page_length=10):
 @ess_validate(methods=["POST"])
 def approve_otpl_expense():
     """
-    Approve OTPL Expense
+    Approve OTPL Expense or Expense Pull (auto-detects doctype)
     Accepts: name, amount_approved
     Sets approved_by_manager to 1 (checked)
     """
@@ -209,27 +316,47 @@ def approve_otpl_expense():
         except (ValueError, TypeError):
             return gen_response(500, "Invalid amount approved")
 
-        # Check if expense exists
-        if not frappe.db.exists("OTPL Expense", expense_name):
+        # Auto-detect if it's an Expense Pull or OTPL Expense
+        is_expense_pull = frappe.db.exists("Expense Pull", expense_name)
+        is_otpl_expense = frappe.db.exists("OTPL Expense", expense_name)
+        
+        if not is_expense_pull and not is_otpl_expense:
             return gen_response(500, "Expense application does not exist")
+        
+        # Handle Expense Pull records
+        if is_expense_pull:
+            expense_doc = frappe.get_doc("Expense Pull", expense_name)
+            
+            # Check if already approved
+            if expense_doc.approved_by_manager == 1:
+                return gen_response(500, "Expense is already approved")
+            
+            # Update Expense Pull
+            expense_doc.amount_approved = amount_approved
+            expense_doc.approved_by_manager = 1
+            expense_doc.status = "Approved"
+            expense_doc.save(ignore_permissions=True)
+            
+            return gen_response(200, "Expense approved successfully")
+        
+        # Handle OTPL Expense records
+        else:
+            expense_doc = frappe.get_doc("OTPL Expense", expense_name)
 
-        # Get expense document
-        expense_doc = frappe.get_doc("OTPL Expense", expense_name)
+            # Verify that the current user is the approval manager
+            if expense_doc.approval_manager != frappe.session.user:
+                return gen_response(500, "You are not authorized to approve this expense")
 
-        # Verify that the current user is the approval manager
-        if expense_doc.approval_manager != frappe.session.user:
-            return gen_response(500, "You are not authorized to approve this expense")
+            # Check if already approved
+            if expense_doc.approved_by_manager == 1:
+                return gen_response(500, "Expense is already approved")
 
-        # Check if already approved
-        if expense_doc.approved_by_manager == 1:
-            return gen_response(500, "Expense is already approved")
+            # Update expense document
+            expense_doc.amount_approved = amount_approved
+            expense_doc.approved_by_manager = 1
+            expense_doc.save(ignore_permissions=True)
 
-        # Update expense document
-        expense_doc.amount_approved = amount_approved
-        expense_doc.approved_by_manager = 1
-        expense_doc.save(ignore_permissions=True)
-
-        return gen_response(200, "Expense approved successfully")
+            return gen_response(200, "Expense approved successfully")
 
     except frappe.PermissionError:
         return gen_response(500, "Not permitted to approve OTPL Expense")

@@ -134,8 +134,8 @@ def make_leave_application(*args, **kwargs):
         if not len(emp_data) >= 1:
             return gen_response(500, "Employee does not exists!")
         validate_employee_data(emp_data)
-        if not emp_data.get("leave_approver"):
-            frappe.throw("Leave approver not selected in employee record.")
+        # if not emp_data.get("leave_approver"):
+        #     frappe.throw("Leave approver not selected in employee record.")
         leave_application_doc = frappe.get_doc(
             dict(
                 doctype="OTPL Leave",
