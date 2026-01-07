@@ -5,6 +5,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.model.document import Document
+from frappe.utils import date_diff
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
 
 class OTPLLeave(Document):
@@ -12,6 +13,10 @@ class OTPLLeave(Document):
 		"""
 		Validate OTPL Leave before saving
 		"""
+		# Calculate total number of days
+		if self.from_date and self.to_date:
+			self.total_no_of_days = date_diff(self.to_date, self.from_date) + 1
+		
 		# Add any necessary validation logic here
 		employee_doc = frappe.get_doc("Employee", self.employee)
 		if employee_doc.external_reporting_manager == 1:
