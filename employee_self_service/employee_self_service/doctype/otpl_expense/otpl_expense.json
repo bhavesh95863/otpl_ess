@@ -22,6 +22,7 @@
   "details_of_expense",
   "invoice_upload",
   "sales_order",
+  "external_sales_order",
   "column_break_10",
   "amount_approved",
   "journal_entry",
@@ -95,13 +96,13 @@
    "fieldtype": "Currency",
    "label": "Amount Approved"
   },
-    {
-     "fieldname": "journal_entry",
-     "fieldtype": "Link",
-     "label": "Journal Entry",
-     "options": "Journal Entry",
-     "read_only": 1
-    },
+  {
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "label": "Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1
+  },
   {
    "fieldname": "purpose",
    "fieldtype": "Small Text",
@@ -182,10 +183,15 @@
    "fieldname": "approve",
    "fieldtype": "Button",
    "label": "Approve"
+  },
+  {
+   "fieldname": "external_sales_order",
+   "fieldtype": "Read Only",
+   "label": "External Sales Order"
   }
  ],
  "is_submittable": 1,
- "modified": "2026-01-02 12:00:00.000000",
+ "modified": "2026-01-07 15:03:27.441972",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Expense",
@@ -200,6 +206,17 @@
    "read": 1,
    "report": 1,
    "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "SITE EXPENSE INITIATOR",
    "share": 1,
    "write": 1
   }

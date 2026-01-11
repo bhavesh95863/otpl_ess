@@ -18,6 +18,7 @@
   "column_break_8",
   "status",
   "approver",
+  "approver_user",
   "alternate_mobile_no",
   "section_break_11",
   "reason",
@@ -93,6 +94,13 @@
    "label": "Approver"
   },
   {
+   "fieldname": "approver_user",
+   "fieldtype": "Link",
+   "label": "Approver User",
+   "options": "User",
+   "read_only": 1
+  },
+  {
    "fieldname": "alternate_mobile_no",
    "fieldtype": "Data",
    "label": "Alternate Mobile No"
@@ -157,7 +165,7 @@
    "label": "Sync Information"
   }
  ],
- "modified": "2026-01-02 12:00:00.000000",
+ "modified": "2026-01-07 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Leave Pull",

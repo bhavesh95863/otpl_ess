@@ -9,6 +9,16 @@ from frappe import _
 from employee_self_service.employee_self_service.utils.erp_sync import push_expense_status_to_source
 
 class ExpensePull(Document):
+	def before_save(self):
+		"""
+		Set approval_manager_user from approval_manager employee ID
+		"""
+		if self.approval_manager and not self.approval_manager_user:
+			# Get user_id from Employee
+			user_id = frappe.db.get_value("Employee", self.approval_manager, "user_id")
+			if user_id:
+				self.approval_manager_user = user_id
+	
 	def on_update(self):
 		"""
 		Sync status updates back to source ERP when approved/rejected

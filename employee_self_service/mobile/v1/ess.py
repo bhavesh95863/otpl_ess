@@ -144,8 +144,8 @@ def make_leave_application(*args, **kwargs):
         if not len(emp_data) >= 1:
             return gen_response(500, "Employee does not exists!")
         validate_employee_data(emp_data)
-        if not emp_data.get("leave_approver"):
-            frappe.throw("Leave approver not selected in employee record.")
+        # if not emp_data.get("leave_approver"):
+        #     frappe.throw("Leave approver not selected in employee record.")
         leave_application_doc = frappe.get_doc(
             dict(
                 doctype="OTPL Leave",
@@ -240,6 +240,52 @@ def get_leave_type(from_date=None, to_date=None):
         return exception_handler(e)
 
 
+# @frappe.whitelist()
+# @ess_validate(methods=["GET"])
+# def get_leave_application_list():
+#     """
+#     Get Leave Application which is already applied. Get Leave Balance Report
+#     """
+#     try:
+#         emp_data = get_employee_by_user(frappe.session.user)
+#         validate_employee_data(emp_data)
+#         leave_application_fields = [
+#             "name",
+#             "leave_type",
+#             "DATE_FORMAT(from_date, '%d-%m-%Y') as from_date",
+#             "DATE_FORMAT(to_date, '%d-%m-%Y') as to_date",
+#             "total_leave_days",
+#             "description",
+#             "status",
+#             "DATE_FORMAT(posting_date, '%d-%m-%Y') as posting_date",
+#         ]
+#         upcoming_leaves = frappe.get_all(
+#             "Leave Application",
+#             filters={"from_date": [">", today()], "employee": emp_data.get("name")},
+#             fields=leave_application_fields,
+#         )
+
+#         taken_leaves = frappe.get_all(
+#             "Leave Application",
+#             fields=leave_application_fields,
+#             filters={"from_date": ["<=", today()], "employee": emp_data.get("name")},
+#         )
+#         fiscal_year = get_fiscal_year(nowdate())[0]
+#         if not fiscal_year:
+#             return gen_response(500, "Fiscal year not set")
+#         res = get_leave_balance_report(
+#             emp_data.get("name"), emp_data.get("company"), fiscal_year
+#         )
+
+#         leave_applications = {
+#             "upcoming": upcoming_leaves,
+#             "taken": taken_leaves,
+#             "balance": res,
+#         }
+#         return gen_response(200, "Leave data getting successfully", leave_applications)
+#     except Exception as e:
+#         return exception_handler(e)
+
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_leave_application_list():
@@ -251,22 +297,22 @@ def get_leave_application_list():
         validate_employee_data(emp_data)
         leave_application_fields = [
             "name",
-            "leave_type",
+            "'NA' as leave_type",
             "DATE_FORMAT(from_date, '%d-%m-%Y') as from_date",
             "DATE_FORMAT(to_date, '%d-%m-%Y') as to_date",
-            "total_leave_days",
-            "description",
+            "total_no_of_days as 'total_leave_days'",
+            "reason as 'description'",
             "status",
-            "DATE_FORMAT(posting_date, '%d-%m-%Y') as posting_date",
+            "DATE_FORMAT(creation, '%d-%m-%Y') as posting_date",
         ]
         upcoming_leaves = frappe.get_all(
-            "Leave Application",
+            "OTPL Leave",
             filters={"from_date": [">", today()], "employee": emp_data.get("name")},
             fields=leave_application_fields,
         )
 
         taken_leaves = frappe.get_all(
-            "Leave Application",
+            "OTPL Leave",
             fields=leave_application_fields,
             filters={"from_date": ["<=", today()], "employee": emp_data.get("name")},
         )
@@ -298,27 +344,41 @@ def get_leave_application(name):
         validate_employee_data(emp_data)
 
         if not frappe.db.exists(
-            "Leave Application", {"name": name, "employee": emp_data.get("name")}
+            "OTPL Leave", {"name": name, "employee": emp_data.get("name")}
         ):
             return gen_response(500, "Leave application does not exists!")
 
         leave_application_fields = [
             "name",
-            "leave_type",
-            "total_leave_days",
-            "description",
+            "'NA' as 'leave_type'",
+            "total_no_of_days as 'total_leave_days'",
+            "reason as 'description'",
             "status",
             "half_day",
             "from_date",
             "to_date",
-            "posting_date",
+            "DATE_FORMAT(creation, '%%d-%%m-%%y') as 'posting_date'",
             "half_day_date",
-            "alternate_mobile_number",
+            "alternate_mobile_no as 'alternate_mobile_number'",
+            "approved_from_date",
+            "approved_to_date",
+            "total_no_of_approved_days"
         ]
 
-        leave_application = frappe.db.get_value(
-            "Leave Application", name, leave_application_fields, as_dict=True
+        leave_application = frappe.db.sql(
+            f"""
+            SELECT {", ".join(leave_application_fields)}
+            FROM `tabOTPL Leave`
+            WHERE name = %s
+            """,
+            name,
+            as_dict=True
         )
+        
+        if leave_application:
+            leave_application = leave_application[0]
+        else:
+            return gen_response(500, "Leave application not found")
 
         return gen_response(200, "Leave data getting successfully", leave_application)
     except Exception as e:
@@ -1293,6 +1353,9 @@ def update_task_progress(task_id=None, progress=None):
         return exception_handler(e)
 
 
+
+
+
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_holiday_list(year=None):
@@ -1335,6 +1398,52 @@ def get_holiday_list(year=None):
                     "description": holiday.description,
                 }
             )
+        return gen_response(200, "Holiday list get successfully", holiday_list)
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_holiday_list_v2():
+    try:
+        global_defaults = get_global_defaults()
+        default_company = global_defaults.get("default_company")
+        
+        if not default_company:
+            return gen_response(500, "Default company not set in Global Defaults")
+        
+        # Get default holiday list from company
+        default_holiday_list = frappe.db.get_value(
+            "Company", default_company, "default_holiday_list"
+        )
+        
+        if not default_holiday_list:
+            return gen_response(500, "Default holiday list not set for company")
+        
+        # Fetch all holidays from the holiday list
+        holidays = frappe.get_all(
+            "Holiday",
+            filters={"parent": default_holiday_list},
+            fields=["description", "holiday_date"],
+            order_by="holiday_date asc",
+        )
+        
+        if len(holidays) == 0:
+            return gen_response(200, "Holiday list get successfully", [])
+        
+        holiday_list = []
+        for holiday in holidays:
+            holiday_date = frappe.utils.data.getdate(holiday.holiday_date)
+            holiday_list.append(
+                {
+                    "year": holiday_date.strftime("%Y"),
+                    "date": holiday_date.strftime("%d %b"),
+                    "day": holiday_date.strftime("%A"),
+                    "description": holiday.description,
+                }
+            )
+        
         return gen_response(200, "Holiday list get successfully", holiday_list)
     except Exception as e:
         return exception_handler(e)
@@ -1579,7 +1688,6 @@ def upload_documents():
     except Exception as e:
         return exception_handler(e)
 
-
 def get_file_size(file_path, unit="auto"):
     file_size = os.path.getsize(file_path)
 
@@ -1803,15 +1911,20 @@ def employee_device_info(**kwargs):
             ).insert(ignore_permissions=True)
 
         emp_data = get_employee_by_user(frappe.session.user)
-        existing_registration = frappe.db.exists(
-            "Employee Device Registration", {"employee": emp_data.get("name")}
+
+        existing_registration = frappe.db.get_value(
+            "Employee Device Registration", {"unique_id": data.get("unique_id")}, ["name","employee"], as_dict=True
         )
-        if not existing_registration and data.get("unique_id"):
+        if not existing_registration:
             # Register the device if not exists
             doc = frappe.new_doc("Employee Device Registration")
             doc.employee = emp_data.get("name")
             doc.unique_id = data.get("unique_id")
             doc.insert(ignore_permissions=True)
+        if existing_registration:
+            if existing_registration.get("employee") != emp_data.get("name"):
+                return gen_response(500, "Device already registered with another employee.")
+
         return gen_response(200, "Device information saved successfully!")
     except Exception as e:
         return exception_handler(e)
@@ -2748,6 +2861,121 @@ def get_attendance_details_by_month(year, month):
         attendance_details = get_attendance_details(emp_data, year, month)
         return gen_response(
             200, "Leave balance data get successfully", attendance_details
+        )
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def upload_employee_documents(document_type):
+    """
+    Upload employee document based on document type.
+    document_type can be: Aadhar, Pan, Photograph, Cheque
+    """
+    try:
+        emp_data = get_employee_by_user(frappe.session.user)
+        
+        # Map document types to employee fields
+        document_field_mapping = {
+            "Aadhar": "aadhar_card_document",
+            "Pan": "pan_card_document",
+            "Photograph": "photograph_document",
+            "Cheque": "cancelled_cheque_document"
+        }
+        
+        if document_type not in document_field_mapping:
+            return gen_response(
+                400, 
+                f"Invalid document type. Allowed types are: {', '.join(document_field_mapping.keys())}"
+            )
+        
+        field_name = document_field_mapping[document_type]
+        
+        # Check if file is present in request
+        if "file" not in frappe.request.files:
+            return gen_response(400, "No file uploaded")
+        
+        # Delete old document if exists
+        old_file_url = frappe.db.get_value("Employee", emp_data.get("name"), field_name)
+        if old_file_url:
+            # Get the file doc and delete it
+            file_doc = frappe.db.get_value("File", {"file_url": old_file_url}, "name")
+            if file_doc:
+                frappe.delete_doc("File", file_doc, ignore_permissions=True)
+        
+        # Upload new file
+        uploaded_file = upload_file()
+        uploaded_file.attached_to_doctype = "Employee"
+        uploaded_file.attached_to_name = emp_data.get("name")
+        uploaded_file.attached_to_field = field_name
+        uploaded_file.save(ignore_permissions=True)
+        
+        # Update employee document field
+        frappe.db.set_value(
+            "Employee", 
+            emp_data.get("name"), 
+            field_name, 
+            uploaded_file.file_url
+        )
+        
+        return gen_response(
+            200, 
+            f"{document_type} document uploaded successfully",
+            {
+                "file_url": uploaded_file.file_url,
+                "file_name": uploaded_file.file_name,
+                "document_type": document_type
+            }
+        )
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_employee_documents():
+    """
+    Get all employee documents
+    """
+    try:
+        emp_data = get_employee_by_user(frappe.session.user)
+        
+        employee = frappe.get_doc("Employee", emp_data.get("name"))
+        
+        documents = {
+            "Aadhar": {
+                "file_url": employee.aadhar_card_document or None,
+                "file_name": None
+            },
+            "Pan": {
+                "file_url": employee.pan_card_document or None,
+                "file_name": None
+            },
+            "Photograph": {
+                "file_url": employee.photograph_document or None,
+                "file_name": None
+            },
+            "Cheque": {
+                "file_url": employee.cancelled_cheque_document or None,
+                "file_name": None
+            }
+        }
+        
+        # Get file names for each document
+        for doc_type, doc_data in documents.items():
+            if doc_data["file_url"]:
+                file_name = frappe.db.get_value(
+                    "File", 
+                    {"file_url": doc_data["file_url"]}, 
+                    "file_name"
+                )
+                doc_data["file_name"] = file_name
+        
+        return gen_response(
+            200, 
+            "Employee documents retrieved successfully",
+            documents
         )
     except Exception as e:
         return exception_handler(e)
