@@ -1343,6 +1343,9 @@ def update_task_progress(task_id=None, progress=None):
         return exception_handler(e)
 
 
+
+
+
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_holiday_list(year=None):
@@ -1385,6 +1388,52 @@ def get_holiday_list(year=None):
                     "description": holiday.description,
                 }
             )
+        return gen_response(200, "Holiday list get successfully", holiday_list)
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_holiday_list_v2():
+    try:
+        global_defaults = get_global_defaults()
+        default_company = global_defaults.get("default_company")
+        
+        if not default_company:
+            return gen_response(500, "Default company not set in Global Defaults")
+        
+        # Get default holiday list from company
+        default_holiday_list = frappe.db.get_value(
+            "Company", default_company, "default_holiday_list"
+        )
+        
+        if not default_holiday_list:
+            return gen_response(500, "Default holiday list not set for company")
+        
+        # Fetch all holidays from the holiday list
+        holidays = frappe.get_all(
+            "Holiday",
+            filters={"parent": default_holiday_list},
+            fields=["description", "holiday_date"],
+            order_by="holiday_date asc",
+        )
+        
+        if len(holidays) == 0:
+            return gen_response(200, "Holiday list get successfully", [])
+        
+        holiday_list = []
+        for holiday in holidays:
+            holiday_date = frappe.utils.data.getdate(holiday.holiday_date)
+            holiday_list.append(
+                {
+                    "year": holiday_date.strftime("%Y"),
+                    "date": holiday_date.strftime("%d %b"),
+                    "day": holiday_date.strftime("%A"),
+                    "description": holiday.description,
+                }
+            )
+        
         return gen_response(200, "Holiday list get successfully", holiday_list)
     except Exception as e:
         return exception_handler(e)
@@ -1628,7 +1677,6 @@ def upload_documents():
         return gen_response(200, "Document added successfully")
     except Exception as e:
         return exception_handler(e)
-
 
 def get_file_size(file_path, unit="auto"):
     file_size = os.path.getsize(file_path)
@@ -2803,6 +2851,121 @@ def get_attendance_details_by_month(year, month):
         attendance_details = get_attendance_details(emp_data, year, month)
         return gen_response(
             200, "Leave balance data get successfully", attendance_details
+        )
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def upload_employee_documents(document_type):
+    """
+    Upload employee document based on document type.
+    document_type can be: Aadhar, Pan, Photograph, Cheque
+    """
+    try:
+        emp_data = get_employee_by_user(frappe.session.user)
+        
+        # Map document types to employee fields
+        document_field_mapping = {
+            "Aadhar": "aadhar_card_document",
+            "Pan": "pan_card_document",
+            "Photograph": "photograph_document",
+            "Cheque": "cancelled_cheque_document"
+        }
+        
+        if document_type not in document_field_mapping:
+            return gen_response(
+                400, 
+                f"Invalid document type. Allowed types are: {', '.join(document_field_mapping.keys())}"
+            )
+        
+        field_name = document_field_mapping[document_type]
+        
+        # Check if file is present in request
+        if "file" not in frappe.request.files:
+            return gen_response(400, "No file uploaded")
+        
+        # Delete old document if exists
+        old_file_url = frappe.db.get_value("Employee", emp_data.get("name"), field_name)
+        if old_file_url:
+            # Get the file doc and delete it
+            file_doc = frappe.db.get_value("File", {"file_url": old_file_url}, "name")
+            if file_doc:
+                frappe.delete_doc("File", file_doc, ignore_permissions=True)
+        
+        # Upload new file
+        uploaded_file = upload_file()
+        uploaded_file.attached_to_doctype = "Employee"
+        uploaded_file.attached_to_name = emp_data.get("name")
+        uploaded_file.attached_to_field = field_name
+        uploaded_file.save(ignore_permissions=True)
+        
+        # Update employee document field
+        frappe.db.set_value(
+            "Employee", 
+            emp_data.get("name"), 
+            field_name, 
+            uploaded_file.file_url
+        )
+        
+        return gen_response(
+            200, 
+            f"{document_type} document uploaded successfully",
+            {
+                "file_url": uploaded_file.file_url,
+                "file_name": uploaded_file.file_name,
+                "document_type": document_type
+            }
+        )
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_employee_documents():
+    """
+    Get all employee documents
+    """
+    try:
+        emp_data = get_employee_by_user(frappe.session.user)
+        
+        employee = frappe.get_doc("Employee", emp_data.get("name"))
+        
+        documents = {
+            "Aadhar": {
+                "file_url": employee.aadhar_card_document or None,
+                "file_name": None
+            },
+            "Pan": {
+                "file_url": employee.pan_card_document or None,
+                "file_name": None
+            },
+            "Photograph": {
+                "file_url": employee.photograph_document or None,
+                "file_name": None
+            },
+            "Cheque": {
+                "file_url": employee.cancelled_cheque_document or None,
+                "file_name": None
+            }
+        }
+        
+        # Get file names for each document
+        for doc_type, doc_data in documents.items():
+            if doc_data["file_url"]:
+                file_name = frappe.db.get_value(
+                    "File", 
+                    {"file_url": doc_data["file_url"]}, 
+                    "file_name"
+                )
+                doc_data["file_name"] = file_name
+        
+        return gen_response(
+            200, 
+            "Employee documents retrieved successfully",
+            documents
         )
     except Exception as e:
         return exception_handler(e)
