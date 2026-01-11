@@ -96,7 +96,17 @@ def register_device(employee, unique_id):
         )
 
         if existing_unique_id and not existing_registration:
-            gen_response(500, "Device not recognized. Please contact admin.")
+            # Get the employee name associated with this device
+            associated_employee = frappe.db.get_value(
+                "Employee Device Registration", existing_unique_id, "employee"
+            )
+            employee_name = frappe.db.get_value(
+                "Employee", associated_employee, "employee_name"
+            )
+            gen_response(
+                500, 
+                f"Device is already associated with {employee_name} ({associated_employee}). Please contact admin."
+            )
             return False
 
         if not existing_registration:
