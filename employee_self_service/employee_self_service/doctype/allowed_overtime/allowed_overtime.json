@@ -1,0 +1,115 @@
+{
+ "autoname": "format:AO-{date}-{employee}",
+ "creation": "2026-01-18 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "date",
+  "employee",
+  "employee_name",
+  "column_break_1",
+  "overtime_allowed",
+  "early_entry_allowed",
+  "late_exit_allowed"
+ ],
+ "fields": [
+  {
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employee",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "label": "Employee Name",
+   "read_only": 1,
+   "fetch_from": "employee.employee_name"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "overtime_allowed",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Overtime Allowed",
+   "options": "No\\nYes",
+   "default": "No",
+   "reqd": 1
+  },
+  {
+   "fieldname": "early_entry_allowed",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Early Entry Allowed",
+   "options": "No\\nYes",
+   "default": "No",
+   "reqd": 1
+  },
+  {
+   "fieldname": "late_exit_allowed",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Late Exit Allowed",
+   "options": "No\\nYes",
+   "default": "No",
+   "reqd": 1
+  }
+ ],
+ "modified": "2026-01-18 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "Allowed Overtime",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR User",
+   "share": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "employee_name",
+ "track_changes": 1
+}

@@ -162,7 +162,8 @@ scheduler_events = {
             "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance"
         ],
         "0 21 * * *": [
-            "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_site_employees"
+            "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_site_employees",
+            "employee_self_service.employee_self_service.utils.worker_attendance.auto_checkout_workers"
         ],
         "*/5 * * * *": [
             "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"

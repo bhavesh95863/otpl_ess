@@ -98,6 +98,13 @@ def process_employee_attendance(employee, location, date, no_check_in=0):
 	if is_holiday(employee, date):
 		return "Skipped"
 	
+	# Check for Worker-specific attendance processing
+	from employee_self_service.employee_self_service.utils.worker_attendance import process_worker_attendance_with_hours
+	
+	worker_result = process_worker_attendance_with_hours(employee, location, date)
+	if worker_result:
+		return worker_result
+	
 	# If employee has no_check_in enabled, directly mark as present
 	if no_check_in:
 		create_attendance_record(

@@ -60,16 +60,19 @@ def login(usr, pwd, unique_id=None):
         login_manager.authenticate(usr, pwd)
         validate_employee(login_manager.user)
         emp_data = get_employee_by_user(login_manager.user)
-        # Register device (throws exception if device is not valid)
-        if unique_id:
-            if not register_device(emp_data.get("name"), unique_id):
-                return
+        
+        # Register device and get unique_id before post_login
+        registered_unique_id = register_device(emp_data.get("name"), unique_id)
+        if not registered_unique_id:
+            # Device registration failed, error already set in register_device
+            return
 
         login_manager.post_login()
         if frappe.response["message"] == "Logged In":
             frappe.response["user"] = login_manager.user
             frappe.response["key_details"] = generate_key(login_manager.user)
             frappe.response["employee_id"] = emp_data.get("name")
+            frappe.response["unique_id"] = registered_unique_id
         gen_response(200, frappe.response["message"])
     except frappe.AuthenticationError:
         gen_response(500, frappe.response["message"])
@@ -78,55 +81,77 @@ def login(usr, pwd, unique_id=None):
 
 
 def register_device(employee, unique_id):
-    # check if device registration exists for this employee
-    # if not enter the given number and create registration
-    # if exists than validate the given number with existing number
-    # if number mataches than allow login
-    # else through frappe exceptions
+    """
+    Register device for employee - each employee should be linked to only one unique device
+    Logic:
+    1. If unique_id is provided: 
+       - Check if employee has existing registration, validate it matches
+       - If no registration, check if unique_id belongs to another employee
+    2. If unique_id is None: 
+       - Check if employee already has registration, if yes throw error
+       - If no registration, generate new unique_id and register
+    Returns: unique_id string on success, False on failure
+    """
     try:
         ess_settings = get_ess_settings()
         if not ess_settings.get("enable_device_restrictions"):
-            return True
+            return unique_id if unique_id else frappe.generate_hash(length=20)
 
-        existing_registration = frappe.db.exists(
-            "Employee Device Registration", {"employee": employee}
+        # Get employee's existing device registration
+        existing_registration = frappe.db.get_value(
+            "Employee Device Registration", 
+            {"employee": employee}, 
+            ["name", "unique_id"],
+            as_dict=True
         )
-        existing_unique_id = frappe.db.exists(
-            "Employee Device Registration", {"unique_id": unique_id}
-        )
 
-        if existing_unique_id and not existing_registration:
-            # Get the employee name associated with this device
-            associated_employee = frappe.db.get_value(
-                "Employee Device Registration", existing_unique_id, "employee"
-            )
-            employee_name = frappe.db.get_value(
-                "Employee", associated_employee, "employee_name"
-            )
-            gen_response(
-                500, 
-                f"Device is already associated with {employee_name} ({associated_employee}). Please contact admin."
-            )
-            return False
-
-        if not existing_registration:
-            # Register the device if not exists
-            doc = frappe.new_doc("Employee Device Registration")
-            doc.employee = employee
-            doc.unique_id = unique_id
-            doc.insert(ignore_permissions=True)
+        # Case 1: unique_id is provided
+        if unique_id:
+            if existing_registration:
+                # Employee has a device registered - validate it matches
+                if existing_registration.unique_id != unique_id:
+                    gen_response(500, "Device not recognized. Please contact admin.")
+                    return False
+                # Device matches, allow login
+                return unique_id
+            else:
+                # Employee has no device registered
+                # Check if this unique_id is already registered to another employee
+                other_employee = frappe.db.get_value(
+                    "Employee Device Registration",
+                    {"unique_id": unique_id},
+                    "employee"
+                )
+                if other_employee:
+                    employee_name = frappe.db.get_value("Employee", other_employee, "employee_name")
+                    gen_response(500, f"Device is already associated with {employee_name} ({other_employee}) another employee.")
+                    return False
+                
+                # Register this device for this employee
+                doc = frappe.new_doc("Employee Device Registration")
+                doc.employee = employee
+                doc.unique_id = unique_id
+                doc.insert(ignore_permissions=True)
+                return unique_id
+        
+        # Case 2: unique_id is None/null
         else:
-            # Fetch the existing device_id to compare
-            registered_device_id = frappe.db.get_value(
-                "Employee Device Registration", existing_registration, "unique_id"
-            )
-            if registered_device_id != unique_id:
-                gen_response(500, "Device not recognized. Please contact admin.")
+            if existing_registration:
+                # Employee already has a device registered
+                gen_response(500, "Device already registered for this employee.")
                 return False
-        return True
+            else:
+                # Generate new unique_id and register
+                new_unique_id = frappe.generate_hash(length=20)
+                doc = frappe.new_doc("Employee Device Registration")
+                doc.employee = employee
+                doc.unique_id = new_unique_id
+                doc.insert(ignore_permissions=True)
+                return new_unique_id
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "register_device_error")
-        frappe.throw("An error occurred during device registration.")
+        gen_response(500, "An error occurred during device registration.")
+        return False
 
 
 def validate_employee(user):
@@ -1118,7 +1143,63 @@ def create_employee_log(
             log_doc.save(ignore_permissions=True)
 
         # update_shift_last_sync(emp_data)
-        return gen_response(200, "Employee log added")
+        return gen_response(200, "Employee log added",log_doc)
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def attach_checkin_image(checkin_id):
+    """
+    Attach an image to an existing Employee Checkin document
+    Args:
+        checkin_id: Employee Checkin document ID
+    """
+    try:
+        # Validate checkin document exists
+        if not frappe.db.exists("Employee Checkin", checkin_id):
+            return gen_response(404, "Employee Checkin not found")
+        
+        # Get the checkin document
+        checkin_doc = frappe.get_doc("Employee Checkin", checkin_id)
+        
+        # Verify the checkin belongs to the current user's employee
+        emp_data = get_employee_by_user(frappe.session.user)
+        if checkin_doc.employee != emp_data.get("name"):
+            return gen_response(403, "You don't have permission to attach image to this checkin")
+        
+        # Check if file is in request
+        if "file" not in frappe.request.files:
+            return gen_response(400, "No file provided")
+        
+        # Delete old image if exists
+        if checkin_doc.attendance_image:
+            old_file_url = checkin_doc.attendance_image
+            file_doc = frappe.db.get_value("File", {"file_url": old_file_url}, "name")
+            if file_doc:
+                frappe.delete_doc("File", file_doc, ignore_permissions=True)
+        
+        # Upload new file
+        file = upload_file()
+        file.attached_to_doctype = "Employee Checkin"
+        file.attached_to_name = checkin_doc.name
+        file.attached_to_field = "attendance_image"
+        file.save(ignore_permissions=True)
+        
+        # Update checkin document with image URL
+        checkin_doc.attendance_image = file.get("file_url")
+        checkin_doc.save(ignore_permissions=True)
+        
+        return gen_response(
+            200, 
+            "Image attached successfully",
+            {
+                "checkin_id": checkin_doc.name,
+                "file_url": file.get("file_url"),
+                "file_name": file.get("file_name")
+            }
+        )
     except Exception as e:
         return exception_handler(e)
 
@@ -1912,18 +1993,18 @@ def employee_device_info(**kwargs):
 
         emp_data = get_employee_by_user(frappe.session.user)
 
-        existing_registration = frappe.db.get_value(
-            "Employee Device Registration", {"unique_id": data.get("unique_id")}, ["name","employee"], as_dict=True
-        )
-        if not existing_registration:
-            # Register the device if not exists
-            doc = frappe.new_doc("Employee Device Registration")
-            doc.employee = emp_data.get("name")
-            doc.unique_id = data.get("unique_id")
-            doc.insert(ignore_permissions=True)
-        if existing_registration:
-            if existing_registration.get("employee") != emp_data.get("name"):
-                return gen_response(500, "Device already registered with another employee.")
+        # existing_registration = frappe.db.get_value(
+        #     "Employee Device Registration", {"unique_id": data.get("unique_id")}, ["name","employee"], as_dict=True
+        # )
+        # if not existing_registration:
+        #     # Register the device if not exists
+        #     doc = frappe.new_doc("Employee Device Registration")
+        #     doc.employee = emp_data.get("name")
+        #     doc.unique_id = data.get("unique_id")
+        #     doc.insert(ignore_permissions=True)
+        # if existing_registration:
+        #     if existing_registration.get("employee") != emp_data.get("name"):
+        #         return gen_response(500, "Device already registered with another employee.")
 
         return gen_response(200, "Device information saved successfully!")
     except Exception as e:

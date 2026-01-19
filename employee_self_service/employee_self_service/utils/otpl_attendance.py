@@ -3,6 +3,23 @@ import json
 
 
 def after_employee_checkin_insert(doc, method):
+    # Validate Worker check-in/check-out with time adjustments
+    from employee_self_service.employee_self_service.utils.worker_attendance import validate_worker_checkin
+    
+    is_valid, message, adjusted_time = validate_worker_checkin(doc.employee, doc.log_type, doc.time)
+    
+    if not is_valid:
+        # Delete the checkin if not valid
+        frappe.db.delete("Employee Checkin", {"name": doc.name})
+        frappe.db.commit()
+        frappe.throw(message)
+    
+    # Adjust time if needed
+    if adjusted_time and adjusted_time != doc.time:
+        doc.time = adjusted_time
+        doc.save(ignore_permissions=True)
+        frappe.msgprint(message, alert=True, indicator="orange")
+    
     if doc.reason or doc.today_work:
         doc.approval_required = 1
         doc.manager = frappe.db.get_value("Employee", doc.requested_from, "user_id")

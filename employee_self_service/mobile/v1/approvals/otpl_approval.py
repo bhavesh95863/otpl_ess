@@ -558,3 +558,332 @@ def reject_employee_checkin():
         return gen_response(500, "Not permitted to reject Employee Checkin")
     except Exception as e:
         return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_pending_approval_counts():
+    """
+    Get total count of pending approvals for all types
+    Returns: {
+        leave: count,
+        expense: count,
+        checkin: count,
+        checkout: count,
+        total: total_count
+    }
+    """
+    try:
+        current_user = frappe.session.user
+        
+        # Count OTPL Leave records
+        otpl_leave_count = frappe.db.count(
+            "OTPL Leave",
+            filters={"status": "Pending", "approver": current_user}
+        )
+        
+        # Count Leave Pull records - use get_all with count
+        leave_pull_list = frappe.get_all(
+            "Leave Pull",
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "!=", "Approved"],
+                ["approver_user", "=", current_user]
+            ],
+            fields=["name"]
+        )
+        leave_pull_count = len(leave_pull_list)
+        
+        # Total leave count
+        leave_count = otpl_leave_count + leave_pull_count
+        
+        # Count OTPL Expense records
+        otpl_expense_count = frappe.db.count(
+            "OTPL Expense",
+            filters={"approved_by_manager": 0, "approval_manager": current_user}
+        )
+        
+        # Count Expense Pull records - use get_all with count
+        expense_pull_list = frappe.get_all(
+            "Expense Pull",
+            filters=[
+                ["source_erp", "is", "set"],
+                ["approved_by_manager", "=", 0],
+                ["approval_manager_user", "=", current_user]
+            ],
+            fields=["name"]
+        )
+        expense_pull_count = len(expense_pull_list)
+        
+        # Total expense count
+        expense_count = otpl_expense_count + expense_pull_count
+        
+        # Count Check-in records (log_type = IN)
+        checkin_count = frappe.db.count(
+            "Employee Checkin",
+            filters={
+                "approval_required": 1,
+                "approved": 0,
+                "manager": current_user,
+                "log_type": "IN"
+            }
+        )
+        
+        # Count Check-out records (log_type = OUT)
+        checkout_count = frappe.db.count(
+            "Employee Checkin",
+            filters={
+                "approval_required": 1,
+                "approved": 0,
+                "manager": current_user,
+                "log_type": "OUT"
+            }
+        )
+        
+        # Calculate total
+        total_count = leave_count + expense_count + checkin_count + checkout_count
+        
+        # Prepare response data
+        result = {
+            "leave": leave_count,
+            "expense": expense_count,
+            "checkin": checkin_count,
+            "checkout": checkout_count,
+            "total": total_count
+        }
+        
+        return gen_response(
+            200, "Pending approval counts retrieved successfully", result
+        )
+        
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to read approval records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_otpl_leave_approved_list(start=0, page_length=10):
+    """
+    Get OTPL Leave and Leave Pull Applications that have been approved
+    Filters: status='Approved' and approver is the session user (for OTPL Leave)
+             status='Approved' and source_erp is set (for Leave Pull)
+    """
+    try:
+        # Get OTPL Leave approved records
+        otpl_leave_list = frappe.get_all(
+            "OTPL Leave",
+            fields=[
+                "name",
+                "employee",
+                "employee_name",
+                "from_date",
+                "to_date",
+                "total_no_of_days",
+                "half_day",
+                "half_day_date",
+                "alternate_mobile_no",
+                "reason",
+                "status",
+                "approved_from_date",
+                "approved_to_date",
+                "modified",
+            ],
+            filters={"status": "Approved", "approver": frappe.session.user},
+        )
+        
+        # Get Leave Pull approved records
+        leave_pull_list = frappe.get_all(
+            "Leave Pull",
+            fields=[
+                "name",
+                "employee",
+                "employee_name",
+                "from_date",
+                "to_date",
+                "total_no_of_days",
+                "half_day",
+                "half_day_date",
+                "alternate_mobile_no",
+                "reason",
+                "status",
+                "approved_from_date",
+                "approved_to_date",
+                "total_no_of_approved_days",
+                "modified",
+            ],
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "=", "Approved"],
+                ["approver_user", "=", frappe.session.user]
+            ],
+        )
+        
+        # Combine both lists
+        combined_list = otpl_leave_list + leave_pull_list
+        
+        # Sort by modified date descending
+        combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
+        
+        # Apply pagination
+        start = int(start)
+        page_length = int(page_length)
+        paginated_list = combined_list[start:start + page_length]
+        
+        # Clean up response - remove internal fields
+        for item in paginated_list:
+            item.pop("modified", None)
+        
+        return gen_response(
+            200, "Approved leave list retrieved successfully", paginated_list
+        )
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to read leave records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_otpl_expense_approved_list(start=0, page_length=10):
+    """
+    Get OTPL Expense and Expense Pull Applications that have been approved
+    Filters: approved_by_manager=1 and approval_manager is the session user (for OTPL Expense)
+             approved_by_manager=1 and source_erp is set (for Expense Pull)
+    """
+    try:
+        # Get OTPL Expense approved records
+        otpl_expense_list = frappe.get_all(
+            "OTPL Expense",
+            fields=[
+                "name",
+                "sent_by",
+                "employee_name",
+                "date_of_expense",
+                "expense_type",
+                "expense_claim_type",
+                "amount",
+                "details_of_expense",
+                "purpose",
+                "status",
+                "business_line",
+                "sales_order",
+                "invoice_upload",
+                "amount_approved",
+                "modified",
+            ],
+            filters={"approved_by_manager": 1, "approval_manager": frappe.session.user},
+        )
+        
+        # Get Expense Pull approved records
+        expense_pull_list = frappe.get_all(
+            "Expense Pull",
+            fields=[
+                "name",
+                "sent_by",
+                "employee_name",
+                "date_of_expense",
+                "expense_type",
+                "expense_claim_type",
+                "amount",
+                "details_of_expense",
+                "purpose",
+                "status",
+                "business_line",
+                "sales_order",
+                "invoice_upload",
+                "amount_approved",
+                "source_erp",
+                "modified",
+            ],
+            filters=[
+                ["source_erp", "is", "set"],
+                ["approved_by_manager", "=", 1],
+                ["approval_manager_user", "=", frappe.session.user]
+            ],
+        )
+        
+        # Combine both lists
+        combined_list = otpl_expense_list + expense_pull_list
+        
+        # Sort by modified date descending
+        combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
+        
+        # Apply pagination
+        start = int(start)
+        page_length = int(page_length)
+        paginated_list = combined_list[start:start + page_length]
+        
+        # Clean up response - remove internal fields and add full URL for invoice_upload
+        from frappe.utils import get_url
+        for item in paginated_list:
+            item.pop("modified", None)
+            # Convert invoice_upload to full URL based on source_erp presence
+            if item.get("invoice_upload"):
+                if item.get("source_erp"):
+                    # For Expense Pull, use source_erp as the base URL
+                    source_erp = item["source_erp"]
+                    if not source_erp.startswith("http"):
+                        source_erp = "https://" + source_erp
+                    item["invoice_upload"] = source_erp.rstrip("/") + item["invoice_upload"]
+                else:
+                    # For OTPL Expense, use current site's host
+                    item["invoice_upload"] = get_url(item["invoice_upload"])
+            
+            # Remove source_erp from response
+            item.pop("source_erp", None)
+        
+        return gen_response(
+            200, "Approved expense list retrieved successfully", paginated_list
+        )
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to read expense records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_employee_checkin_approved_list(start=0, page_length=10, log_type=None):
+    """
+    Get Employee Checkin records that have been approved
+    Filters: approval_required=1, approved=1, manager is the session user
+    Optional: log_type filter (IN/OUT)
+    """
+    try:
+        filters = {
+            "approval_required": 1,
+            "approved": 1,
+            "manager": frappe.session.user,
+        }
+
+        # Add log_type filter if provided
+        if log_type:
+            filters["log_type"] = log_type
+
+        checkin_list = frappe.get_all(
+            "Employee Checkin",
+            fields=[
+                "name",
+                "employee",
+                "employee_name",
+                "log_type",
+                "time",
+                "requested_from",
+                "reason",
+                "today_work",
+                "location",
+            ],
+            start=start,
+            page_length=page_length,
+            order_by="modified desc",
+            filters=filters,
+        )
+        return gen_response(
+            200, "Approved checkin list retrieved successfully", checkin_list
+        )
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to read Employee Checkin")
+    except Exception as e:
+        return exception_handler(e)
