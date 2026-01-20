@@ -1,6 +1,6 @@
 {
  "autoname": "format:AO-{date}-{employee}",
- "creation": "2026-01-18 00:00:00.000000",
+ "creation": "2026-01-18 00:00:00",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
@@ -30,45 +30,45 @@
    "reqd": 1
   },
   {
+   "fetch_from": "employee.employee_name",
    "fieldname": "employee_name",
    "fieldtype": "Data",
    "label": "Employee Name",
-   "read_only": 1,
-   "fetch_from": "employee.employee_name"
+   "read_only": 1
   },
   {
    "fieldname": "column_break_1",
    "fieldtype": "Column Break"
   },
   {
+   "default": "No",
    "fieldname": "overtime_allowed",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Overtime Allowed",
-   "options": "No\\nYes",
-   "default": "No",
+   "options": "No\nYes",
    "reqd": 1
   },
   {
+   "default": "No",
    "fieldname": "early_entry_allowed",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Early Entry Allowed",
-   "options": "No\\nYes",
-   "default": "No",
+   "options": "No\nYes",
    "reqd": 1
   },
   {
+   "default": "No",
    "fieldname": "late_exit_allowed",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Late Exit Allowed",
-   "options": "No\\nYes",
-   "default": "No",
+   "options": "No\nYes",
    "reqd": 1
   }
  ],
- "modified": "2026-01-18 00:00:00.000000",
+ "modified": "2026-01-21 02:08:48.483734",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Allowed Overtime",
