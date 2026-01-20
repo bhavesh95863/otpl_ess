@@ -867,7 +867,7 @@ def get_dashboard():
         get_latest_leave(dashboard_data, emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
         get_latest_ss(dashboard_data, emp_data.get("name"))
-        get_last_log_type(dashboard_data, emp_data.get("name"))
+        #get_last_log_type(dashboard_data, emp_data.get("name"))
         return gen_response(200, "Dashboard data get successfully", dashboard_data)
 
     except Exception as e:
