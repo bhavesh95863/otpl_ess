@@ -9,6 +9,14 @@ from frappe import _
 from employee_self_service.employee_self_service.utils.erp_sync import push_expense_status_to_source
 
 class ExpensePull(Document):
+	def validate(self):
+		"""
+		Validate amount_approved cannot exceed original amount
+		"""
+		if self.amount_approved and self.amount:
+			if self.amount_approved > self.amount:
+				frappe.throw(_("Amount Approved cannot be greater than the original Amount"))
+	
 	def before_save(self):
 		"""
 		Set approval_manager_user from approval_manager employee ID

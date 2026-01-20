@@ -15,9 +15,21 @@ def process_daily_attendance():
 	"""
 	yesterday = add_days(getdate(), -1)
 	
+	# Check if yesterday is a holiday based on Global Defaults company
+	if is_holiday_for_company(yesterday):
+		return {
+			"date": str(yesterday),
+			"message": "Holiday - Attendance processing skipped",
+			"processed": 0,
+			"absent": 0,
+			"skipped": 0,
+			"errors": 0,
+			"total": 0
+		}
+	
 	employees = frappe.get_all("Employee", 
 		filters={"status": "Active"}, 
-		fields=["name", "employee_name", "location", "company", "no_check_in"]
+		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type"]
 	)
 	
 	processed_count = 0
@@ -27,7 +39,7 @@ def process_daily_attendance():
 	
 	for emp in employees:
 		try:
-			result = process_employee_attendance(emp.name, emp.location, yesterday, emp.get("no_check_in", 0))
+			result = process_employee_attendance(emp.name, emp.location, yesterday, emp.get("no_check_in", 0), emp.get("staff_type"))
 			
 			if result == "Processed":
 				processed_count += 1
@@ -61,7 +73,7 @@ def process_daily_attendance():
 	}
 
 
-def process_employee_attendance(employee, location, date, no_check_in=0):
+def process_employee_attendance(employee, location, date, no_check_in=0, staff_type=None):
 	"""
 	Process attendance for a single employee
 	Returns: Processed, Skipped, Absent, or Error
@@ -93,10 +105,6 @@ def process_employee_attendance(employee, location, date, no_check_in=0):
 					title="Cancel Existing Attendance: {0}".format(employee),
 					message=frappe.get_traceback()
 				)
-	
-	# Check if it's a holiday
-	if is_holiday(employee, date):
-		return "Skipped"
 	
 	# Check for Worker-specific attendance processing
 	from employee_self_service.employee_self_service.utils.worker_attendance import process_worker_attendance_with_hours
@@ -163,6 +171,20 @@ def process_employee_attendance(employee, location, date, no_check_in=0):
 			remarks="No check-in and check-out records"
 		)
 		return "Absent"
+	
+	# For non-Worker employees with location != "Site": Mark as Absent if check-in or check-out is missing
+	if staff_type != "Worker" and location and location != "Site":
+		if not checkin_time or not checkout_time:
+			create_attendance_record(
+				employee=employee,
+				date=date,
+				status="Absent",
+				late_entry=False,
+				early_exit=False,
+				working_hours=0,
+				remarks="Missing check-in or check-out (Non-Worker)"
+			)
+			return "Absent"
 	
 	# Get ESS Location rules if location is set
 	location_rules = None
@@ -389,14 +411,24 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 		raise
 
 
-def is_holiday(employee, date):
-	"""Check if date is a holiday or weekly off"""
+def is_holiday_for_company(date):
+	"""Check if date is a holiday based on Global Defaults company holiday list"""
 	try:
 		from erpnext.hr.doctype.holiday_list.holiday_list import is_holiday as check_holiday
 		
-		emp = frappe.get_doc("Employee", employee)
-		if emp.holiday_list:
-			return check_holiday(emp.holiday_list, date)
+		# Get default company from Global Defaults
+		default_company = frappe.db.get_single_value("Global Defaults", "default_company")
+		if not default_company:
+			# No default company set, skip holiday check
+			return False
+		
+		# Get company's default holiday list
+		holiday_list = frappe.get_cached_value("Company", default_company, "default_holiday_list")
+		if not holiday_list:
+			# No holiday list defined, skip holiday check
+			return False
+		
+		return check_holiday(holiday_list, date)
 	except:
 		pass
 	

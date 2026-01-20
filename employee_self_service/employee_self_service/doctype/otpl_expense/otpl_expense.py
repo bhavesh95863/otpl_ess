@@ -26,6 +26,11 @@ class OTPLExpense(Document):
 						self.approval_manager = user
 		if not self.business_line:
 			self.business_line = frappe.db.get_value("Employee", self.sent_by, "business_vertical")
+		
+		# Validate amount_approved cannot exceed original amount
+		if self.amount_approved and self.amount:
+			if self.amount_approved > self.amount:
+				frappe.throw("Amount Approved cannot be greater than the original Amount")
 	
 	def on_update(self):
 		"""

@@ -60,6 +60,7 @@ def get_expense_list(start=0, page_length=10, filters={}):
         )
         if isinstance(filters,str):
             filters = json.loads(filters)
+        filters.update({"sent_by":emp_data.get("name")})
         expense_list = frappe.get_list(
             "OTPL Expense",
             fields=["*"],
