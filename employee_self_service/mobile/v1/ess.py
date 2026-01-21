@@ -804,8 +804,26 @@ def get_dashboard():
         )
         notice_board = get_notice_board(emp_data.get("name"))
         # attendance_details = get_attendance_details(emp_data)
-        log_details = get_last_log_details(emp_data.get("name"))
+        today_logs = get_last_log_details(emp_data.get("name"))
         settings = get_ess_settings()
+        
+        # Process today's logs to determine last log type and time
+        last_log_type = "OUT"
+        last_log_time = ""
+        has_checkin = False
+        has_checkout = False
+        
+        if today_logs:
+            # Get the latest log
+            last_log_type = today_logs[0].get("log_type")
+            last_log_time = today_logs[0].get("time").strftime("%I:%M%p")
+            
+            # Check if there's a check-in and check-out today
+            for log in today_logs:
+                if log.get("log_type") == "IN":
+                    has_checkin = True
+                elif log.get("log_type") == "OUT":
+                    has_checkout = True
 
         dashboard_data = {
             "notice_board": notice_board,
@@ -814,15 +832,11 @@ def get_dashboard():
             "latest_expense": {},
             "latest_salary_slip": {},
             "stop_location_validate": settings.get("location_validate"),
-            "last_log_type": log_details.get("log_type"),
+            "last_log_type": last_log_type,
             "version": settings.get("version") or "1.0",
             "update_version_forcefully": settings.get("update_version_forcefully") or 1,
             "company": emp_data.get("company") or "Employee Dashboard",
-            "last_log_time": (
-                log_details.get("time").strftime("%I:%M%p")
-                if log_details.get("time")
-                else ""
-            ),
+            "last_log_time": last_log_time,
             "check_in_with_image": settings.get("check_in_with_image"),
             "check_in_with_location": settings.get("check_in_with_location"),
             "quick_task": settings.get("quick_task"),
@@ -857,12 +871,27 @@ def get_dashboard():
         dashboard_data["allow_expense"] = (
             1 if "SITE EXPENSE INITIATOR" in user_roles else 0
         )
+        
+        # Determine allow_checkin and allow_checkout based on location and today's logs
         if emp_data.get("location") == "Site":
+            # Site employees: only allow check-in, no check-out
             dashboard_data["allow_checkout"] = 0
             dashboard_data["allow_checkin"] = 1
         else:
-            dashboard_data["allow_checkout"] = 1
-            dashboard_data["allow_checkin"] = 1
+            # Non-site employees: follow check-in/check-out rules
+            # Rule: One check-in and one check-out per day
+            if has_checkin and has_checkout:
+                # Both check-in and check-out done today - don't allow either
+                dashboard_data["allow_checkin"] = 0
+                dashboard_data["allow_checkout"] = 0
+            elif has_checkin and not has_checkout:
+                # Only check-in done - allow check-out, don't allow check-in
+                dashboard_data["allow_checkin"] = 0
+                dashboard_data["allow_checkout"] = 1
+            else:
+                # No check-in yet or only check-out (shouldn't happen) - allow check-in
+                dashboard_data["allow_checkin"] = 1
+                dashboard_data["allow_checkout"] = 0
 
         get_latest_leave(dashboard_data, emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
@@ -903,6 +932,7 @@ def get_attendance_details_dashboard():
 
 
 def get_last_log_details(employee):
+    """Get all logs for today for the employee"""
     log_details = frappe.db.sql(
         """SELECT log_type,
         time
@@ -914,10 +944,7 @@ def get_last_log_details(employee):
         as_dict=1,
     )
 
-    if log_details:
-        return log_details[0]
-    else:
-        return {"log_type": "OUT", "time": None}
+    return log_details
 
 
 def get_notice_board(employee=None):
@@ -950,7 +977,8 @@ def get_attendance_details(emp_data, year=None, month=None):
     last_date = get_last_day(today())
     first_date = get_first_day(today())
     total_days = date_diff(last_date, first_date) + 1
-    till_date_days = date_diff(today(), first_date) + 1
+    # Don't include today in till_date_days calculation to avoid marking today as absent
+    till_date_days = date_diff(today(), first_date)
     days_off = 0
     absent = 0
     total_present = 0
@@ -1003,18 +1031,35 @@ def get_attendance_details(emp_data, year=None, month=None):
 
 @frappe.whitelist()
 def run_attendance_report(employee, company):
-    filters = {
+    filters = frappe._dict({
         "month": cstr(get_month_name(frappe.utils.getdate().month)),
         "year": cstr(frappe.utils.getdate().year),
         "company": company,
         "employee": employee,
         "summarized_view": 1,
-    }
-    from frappe.desk.query_report import run
+    })
+    # Directly call execute function to avoid permission issues
+    from erpnext.hr.report.monthly_attendance_sheet.monthly_attendance_sheet import execute
 
-    attendance_report = run("Monthly Attendance Sheet", filters=filters)
-    if attendance_report.get("result"):
-        return attendance_report.get("result")[0]
+    columns, data = execute(filters)
+    if data:
+        # Convert list data to dictionary format
+        # The data structure is: [employee, employee_name, branch, dept, designation, company, day1...dayN, total_present, total_leaves, total_absent]
+        row = data[0]
+        total_days_in_month = filters["total_days_in_month"]
+        
+        # Count holidays from the daily data (days marked with <b>H</b>)
+        total_holidays = 0
+        for i in range(6, 6 + total_days_in_month):
+            if row[i] == "<b>H</b>":
+                total_holidays += 1
+        
+        return {
+            "total_present": row[6 + total_days_in_month],  # Total Present is after all days
+            "total_leaves": row[6 + total_days_in_month + 1],  # Total Leaves is after Total Present
+            "total_absent": row[6 + total_days_in_month + 2],  # Total Absent is after Total Leaves
+            "total_holidays": total_holidays
+        }
 
 
 def get_month_name(month):

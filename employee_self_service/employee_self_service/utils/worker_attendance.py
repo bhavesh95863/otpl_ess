@@ -41,6 +41,12 @@ def validate_worker_checkin(employee, log_type, checkin_time=None):
 	shift_start = location_settings.shift_start_time
 	shift_end = location_settings.shift_end_time
 	
+	# Convert timedelta to time objects for comparison
+	if shift_start and isinstance(shift_start, type(shift_start)):
+		shift_start = (datetime.min + shift_start).time()
+	if shift_end and isinstance(shift_end, type(shift_end)):
+		shift_end = (datetime.min + shift_end).time()
+	
 	# Check if it's a holiday
 	if is_holiday_for_employee(employee, checkin_date):
 		# Check Allowed Overtime for holiday check-in
