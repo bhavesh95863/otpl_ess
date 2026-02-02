@@ -26,7 +26,9 @@
   "section_break_19",
   "approver",
   "is_external_manager",
-  "external_manager"
+  "external_manager",
+  "section_break_23",
+  "leave_applications"
  ],
  "fields": [
   {
@@ -77,7 +79,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Status",
-   "options": "Pending\nApproved\nRejected",
+   "options": "Pending\nApproved\nRejected\nCancelled",
    "reqd": 1
   },
   {
@@ -148,9 +150,19 @@
    "fieldname": "external_manager",
    "fieldtype": "Data",
    "label": "External Manager"
+  },
+  {
+   "fieldname": "leave_applications",
+   "fieldtype": "Small Text",
+   "label": "Leave Applications",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_23",
+   "fieldtype": "Section Break"
   }
  ],
- "modified": "2026-01-02 18:35:21.559399",
+ "modified": "2026-02-02 02:34:05.292643",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Leave",

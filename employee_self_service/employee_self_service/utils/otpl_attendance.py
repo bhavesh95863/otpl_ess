@@ -1,25 +1,27 @@
 import frappe
 import json
+import math
+import requests
 
 
 def after_employee_checkin_insert(doc, method):
     # Validate Worker check-in/check-out with time adjustments
     from employee_self_service.employee_self_service.utils.worker_attendance import validate_worker_checkin
-    
+
     is_valid, message, adjusted_time = validate_worker_checkin(doc.employee, doc.log_type, doc.time)
-    
+
     if not is_valid:
         # Delete the checkin if not valid
         frappe.db.delete("Employee Checkin", {"name": doc.name})
         frappe.db.commit()
         frappe.throw(message)
-    
+
     # Adjust time if needed
     if adjusted_time and adjusted_time != doc.time:
         doc.time = adjusted_time
         doc.save(ignore_permissions=True)
         frappe.msgprint(message, alert=True, indicator="orange")
-    
+
     if doc.reason or doc.today_work:
         doc.approval_required = 1
         doc.manager = frappe.db.get_value("Employee", doc.requested_from, "user_id")
@@ -27,6 +29,9 @@ def after_employee_checkin_insert(doc, method):
 
     # Sync to remote ERPs as Leader Location if employee is team leader
     sync_leader_location_to_remote(doc)
+    distance_validation(doc)
+    fetch_employee_details(doc)
+    doc.save(ignore_permissions=True)
 
 
 def sync_leader_location_to_remote(checkin_doc):
@@ -99,6 +104,65 @@ def sync_leader_location_to_remote(checkin_doc):
                 checkin_doc.name
             ),
         )
+
+def distance_validation(doc):
+    if not doc.employee or not doc.location:
+        return
+
+    is_team_leader = frappe.db.get_value(
+        "Employee",
+        doc.employee,
+        "is_team_leader"
+    )
+
+    if not is_team_leader:
+        return
+
+    last_checkin = frappe.db.get_all(
+        "Employee Checkin",
+        filters={
+            "employee": doc.employee,
+            "log_type":"IN",
+            "name": ["!=", doc.name],
+            "location": ["!=", ""]
+        },
+        fields=["location"],
+        order_by="creation desc",
+        limit=1
+    )
+
+    if not last_checkin:
+        return
+
+    try:
+        current_lat, current_lon = map(float, doc.location.split(","))
+        last_lat, last_lon = map(float, last_checkin[0].location.split(","))
+    except Exception:
+        return
+
+    address = get_address_from_lat_long(current_lat, current_lon)
+    if address:
+        doc.address = address
+
+    distance = calculate_distance_km(
+        current_lat, current_lon,
+        last_lat, last_lon
+    )
+    if distance > 100:
+        doc.team_leader_location_changed = 1
+
+def calculate_distance_km(lat1, lon1, lat2, lon2):
+    R = 6371  # Earth radius in KM
+
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+
+    return R * c
 
 
 @frappe.whitelist()
@@ -173,3 +237,80 @@ def approve_checkin(checkin_name, log_time=None):
         }
 
     return {"status": "success", "message": "Check-in approved successfully"}
+
+def fetch_employee_details(doc):
+    employee_details = frappe.db.get_value(
+        "Employee",
+        doc.employee,
+        ["name","business_vertical","sales_order","external_sales_order",
+        "external_order","external_so","external_business_vertical","staff_type","location","external_reporting_manager","external_report_to","reports_to"],as_dict=True)
+
+
+    # field mapping
+    if employee_details.external_sales_order:
+        doc.sales_order = employee_details.external_order
+    else:
+        doc.sales_order = employee_details.sales_order
+
+    if employee_details.external_business_vertical:
+        doc.business_vertical = employee_details.external_business_vertical
+    else:
+        doc.business_vertical = employee_details.business_vertical
+
+    if employee_details.external_reporting_manager:
+        doc.reports_to = employee_details.external_report_to
+    else:
+        doc.reports_to = employee_details.reports_to
+
+    doc.employee_location = employee_details.location
+    doc.staff_type = employee_details.staff_type
+
+def get_address_from_lat_long(lat, lon):
+    try:
+        url = "https://nominatim.openstreetmap.org/reverse"
+
+        params = {
+            "format": "json",
+            "lat": lat,
+            "lon": lon,
+            "zoom": 18,
+            "addressdetails": 1
+        }
+
+        headers = {
+            "User-Agent": "Frappe-HRMS-Checkin/1.0"
+        }
+
+        response = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+
+        if data.get("display_name"):
+            return data["display_name"]
+
+        address = data.get("address", {})
+        parts = [
+            address.get("road"),
+            address.get("city"),
+            address.get("state"),
+            address.get("postcode"),
+            address.get("country"),
+        ]
+
+        return ", ".join([p for p in parts if p])
+
+    except Exception:
+        frappe.log_error(
+            title="Reverse Geocoding Failed",
+            message=frappe.get_traceback()
+        )
+
+    return None

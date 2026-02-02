@@ -114,12 +114,6 @@ doctype_js = {"Employee Checkin": "public/js/employee_checkin.js","Employee": "p
 # 	}
 # }
 doc_events = {
-    "Leave Application": {
-        "on_update": "employee_self_service.mobile.v1.ess.on_leave_application_update"
-    },
-    "Expense Claim": {
-        "on_submit": "employee_self_service.mobile.v1.ess.on_expense_submit"
-    },
     "ToDo": {
         "after_insert": "employee_self_service.mobile.v1.ess.send_notification_for_task_assign"
     },
@@ -141,6 +135,17 @@ doc_events = {
     "User": {
         "on_update": "employee_self_service.employee_self_service.utils.user_role_sync.sync_employee_fields_from_user_roles"
     },
+    "Leave Application": {
+        "before_cancel": "employee_self_service.employee_self_service.doctype.otpl_leave.otpl_leave.validate_leave_application_cancel"
+    },
+    "*": {
+        "after_insert": "employee_self_service.send_notification.notification",
+        "on_update": "employee_self_service.send_notification.notification",
+        "on_change": "employee_self_service.send_notification.notification",
+        "on_submit": "employee_self_service.send_notification.notification",
+        "before_cancel": "employee_self_service.send_notification.notification",
+        "after_cancel": "employee_self_service.send_notification.notification"
+    }
     # "Comment": {
     #     "after_insert": "employee_self_service.mobile.ess.send_notification_on_task_comment"
     # },

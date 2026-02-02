@@ -1,0 +1,55 @@
+{
+ "creation": "2026-01-29 18:08:56.338442",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "receiver_by_document_field",
+  "receiver_by_employee_field",
+  "receiver_by_role",
+  "send_to_all_assignees"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "fieldname": "receiver_by_document_field",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Receiver by document field"
+  },
+  {
+   "columns": 3,
+   "fieldname": "receiver_by_employee_field",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Receiver by employee field"
+  },
+  {
+   "columns": 3,
+   "fieldname": "receiver_by_role",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Receiver By Role",
+   "options": "Role"
+  },
+  {
+   "columns": 2,
+   "default": "0",
+   "fieldname": "send_to_all_assignees",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Send to All Assignees"
+  }
+ ],
+ "istable": 1,
+ "modified": "2026-01-29 23:38:58.345390",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "ESS Notification Recipient",
+ "owner": "Administrator",
+ "permissions": [],
+ "quick_entry": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

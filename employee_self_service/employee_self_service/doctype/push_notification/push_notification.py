@@ -56,6 +56,25 @@ class PushNotification(Document):
                     self.notification_type,
                 )
 
+        elif self.send_for == "Send to Group":
+            group_users = frappe.get_all("Employee Group Employees",filters={"parent":self.employee_group,"parenttype":"OTPL Employee Group"},fields=["user"]) or []
+            users = [gu.user for gu in group_users]
+            device_infos = frappe.db.get_list(
+                "Employee Device Info",
+                filters=[
+                    ["Employee Device Info", "user", "in", users],
+                    ["Employee Device Info", "token", "is", "set"],
+                ],
+                fields=["token", "user"],
+            )
+            if device_infos:
+                send_multiple_notification(
+                    device_infos,
+                    self.title,
+                    self.message,
+                    self.notification_type,
+                )
+
 
 @frappe.whitelist()
 def send_single_notification(
@@ -110,7 +129,7 @@ def send_multiple_notification(
             notification_log.reference_name = reference_name
             notification_log.other_info = other_info
             notification_log.insert(ignore_permissions=True)
-        
+
         frappe.db.commit()
         return {"success": True, "message": f"{len(device_infos)} notification logs created"}
     except Exception as e:

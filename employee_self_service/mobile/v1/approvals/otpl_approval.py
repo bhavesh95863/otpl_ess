@@ -36,7 +36,7 @@ def get_otpl_leave_approval_list(start=0, page_length=10):
             ],
             filters={"status": "Pending", "approver": frappe.session.user},
         )
-        
+
         # Get Leave Pull records that need approval
         leave_pull_list = frappe.get_all(
             "Leave Pull",
@@ -60,22 +60,22 @@ def get_otpl_leave_approval_list(start=0, page_length=10):
                 ["approver_user", "=", frappe.session.user]
             ],
         )
-        
+
         # Combine both lists
         combined_list = otpl_leave_list + leave_pull_list
-        
+
         # Sort by modified date descending
         combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
-        
+
         # Apply pagination
         start = int(start)
         page_length = int(page_length)
         paginated_list = combined_list[start:start + page_length]
-        
+
         # Clean up response - remove internal fields
         for item in paginated_list:
             item.pop("modified", None)
-        
+
         return gen_response(
             200, "Leave approval list retrieved successfully", paginated_list
         )
@@ -110,31 +110,31 @@ def approve_otpl_leave():
         # Auto-detect if it's a Leave Pull or OTPL Leave
         is_leave_pull = frappe.db.exists("Leave Pull", leave_name)
         is_otpl_leave = frappe.db.exists("OTPL Leave", leave_name)
-        
+
         if not is_leave_pull and not is_otpl_leave:
             return gen_response(500, "Leave application does not exist")
-        
+
         # Handle Leave Pull records
         if is_leave_pull:
             leave_doc = frappe.get_doc("Leave Pull", leave_name)
-            
+
             # Check if already approved
             if leave_doc.status == "Approved":
                 return gen_response(500, "Leave application is already approved")
-            
+
             # Calculate approved days
             from frappe.utils import date_diff
             approved_days = date_diff(approved_to_date, approved_from_date) + 1
-            
+
             # Update Leave Pull
             leave_doc.status = "Approved"
             leave_doc.approved_from_date = approved_from_date
             leave_doc.approved_to_date = approved_to_date
             leave_doc.total_no_of_approved_days = approved_days
             leave_doc.save(ignore_permissions=True)
-            
+
             return gen_response(200, "Leave application approved successfully")
-        
+
         # Handle OTPL Leave records
         else:
             leave_doc = frappe.get_doc("OTPL Leave", leave_name)
@@ -238,7 +238,7 @@ def get_otpl_expense_approval_list(start=0, page_length=10):
             ],
             filters={"approved_by_manager": 0, "approval_manager": frappe.session.user},
         )
-        
+
         # Get Expense Pull records that need approval
         expense_pull_list = frappe.get_all(
             "Expense Pull",
@@ -265,18 +265,18 @@ def get_otpl_expense_approval_list(start=0, page_length=10):
                 ["approval_manager_user", "=", frappe.session.user]
             ],
         )
-        
+
         # Combine both lists
         combined_list = otpl_expense_list + expense_pull_list
-        
+
         # Sort by modified date descending
         combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
-        
+
         # Apply pagination
         start = int(start)
         page_length = int(page_length)
         paginated_list = combined_list[start:start + page_length]
-        
+
         # Clean up response - remove internal fields and add full URL for invoice_upload
         from frappe.utils import get_url
         for item in paginated_list:
@@ -292,10 +292,10 @@ def get_otpl_expense_approval_list(start=0, page_length=10):
                 else:
                     # For OTPL Expense, use current site's host
                     item["invoice_upload"] = get_url(item["invoice_upload"])
-            
+
             # Remove source_erp from response
             item.pop("source_erp", None)
-        
+
         return gen_response(
             200, "Expense approval list retrieved successfully", paginated_list
         )
@@ -335,26 +335,26 @@ def approve_otpl_expense():
         # Auto-detect if it's an Expense Pull or OTPL Expense
         is_expense_pull = frappe.db.exists("Expense Pull", expense_name)
         is_otpl_expense = frappe.db.exists("OTPL Expense", expense_name)
-        
+
         if not is_expense_pull and not is_otpl_expense:
             return gen_response(500, "Expense application does not exist")
-        
+
         # Handle Expense Pull records
         if is_expense_pull:
             expense_doc = frappe.get_doc("Expense Pull", expense_name)
-            
+
             # Check if already approved
             if expense_doc.approved_by_manager == 1:
                 return gen_response(500, "Expense is already approved")
-            
+
             # Update Expense Pull
             expense_doc.amount_approved = amount_approved
             expense_doc.approved_by_manager = 1
             expense_doc.status = "Approved"
             expense_doc.save(ignore_permissions=True)
-            
+
             return gen_response(200, "Expense approved successfully")
-        
+
         # Handle OTPL Expense records
         else:
             expense_doc = frappe.get_doc("OTPL Expense", expense_name)
@@ -392,6 +392,7 @@ def get_employee_checkin_approval_list(start=0, page_length=10, log_type=None):
         filters = {
             "approval_required": 1,
             "approved": 0,
+            "rejected":0,
             "manager": frappe.session.user,
         }
 
@@ -549,7 +550,10 @@ def reject_employee_checkin():
             return gen_response(500, "Cannot reject an already approved check-in")
 
         # Delete the checkin record
-        frappe.delete_doc("Employee Checkin", checkin_name, ignore_permissions=True)
+        # frappe.delete_doc("Employee Checkin", checkin_name, ignore_permissions=True)
+
+        # Mark as a rejected
+        frappe.db.set_value("Employee Checkin", checkin_name,"rejected",1)
         frappe.db.commit()
 
         return gen_response(200, "Check-in rejected successfully")
@@ -575,13 +579,13 @@ def get_pending_approval_counts():
     """
     try:
         current_user = frappe.session.user
-        
+
         # Count OTPL Leave records
         otpl_leave_count = frappe.db.count(
             "OTPL Leave",
             filters={"status": "Pending", "approver": current_user}
         )
-        
+
         # Count Leave Pull records - use get_all with count
         leave_pull_list = frappe.get_all(
             "Leave Pull",
@@ -593,16 +597,16 @@ def get_pending_approval_counts():
             fields=["name"]
         )
         leave_pull_count = len(leave_pull_list)
-        
+
         # Total leave count
         leave_count = otpl_leave_count + leave_pull_count
-        
+
         # Count OTPL Expense records
         otpl_expense_count = frappe.db.count(
             "OTPL Expense",
             filters={"approved_by_manager": 0, "approval_manager": current_user}
         )
-        
+
         # Count Expense Pull records - use get_all with count
         expense_pull_list = frappe.get_all(
             "Expense Pull",
@@ -614,35 +618,37 @@ def get_pending_approval_counts():
             fields=["name"]
         )
         expense_pull_count = len(expense_pull_list)
-        
+
         # Total expense count
         expense_count = otpl_expense_count + expense_pull_count
-        
+
         # Count Check-in records (log_type = IN)
         checkin_count = frappe.db.count(
             "Employee Checkin",
             filters={
                 "approval_required": 1,
                 "approved": 0,
+                "rejected":0,
                 "manager": current_user,
                 "log_type": "IN"
             }
         )
-        
+
         # Count Check-out records (log_type = OUT)
         checkout_count = frappe.db.count(
             "Employee Checkin",
             filters={
                 "approval_required": 1,
                 "approved": 0,
+                "rejected":0,
                 "manager": current_user,
                 "log_type": "OUT"
             }
         )
-        
+
         # Calculate total
         total_count = leave_count + expense_count + checkin_count + checkout_count
-        
+
         # Prepare response data
         result = {
             "leave": leave_count,
@@ -651,11 +657,11 @@ def get_pending_approval_counts():
             "checkout": checkout_count,
             "total": total_count
         }
-        
+
         return gen_response(
             200, "Pending approval counts retrieved successfully", result
         )
-        
+
     except frappe.PermissionError:
         return gen_response(500, "Not permitted to read approval records")
     except Exception as e:
@@ -692,7 +698,7 @@ def get_otpl_leave_approved_list(start=0, page_length=10):
             ],
             filters={"status": "Approved", "approver": frappe.session.user},
         )
-        
+
         # Get Leave Pull approved records
         leave_pull_list = frappe.get_all(
             "Leave Pull",
@@ -719,22 +725,22 @@ def get_otpl_leave_approved_list(start=0, page_length=10):
                 ["approver_user", "=", frappe.session.user]
             ],
         )
-        
+
         # Combine both lists
         combined_list = otpl_leave_list + leave_pull_list
-        
+
         # Sort by modified date descending
         combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
-        
+
         # Apply pagination
         start = int(start)
         page_length = int(page_length)
         paginated_list = combined_list[start:start + page_length]
-        
+
         # Clean up response - remove internal fields
         for item in paginated_list:
             item.pop("modified", None)
-        
+
         return gen_response(
             200, "Approved leave list retrieved successfully", paginated_list
         )
@@ -775,7 +781,7 @@ def get_otpl_expense_approved_list(start=0, page_length=10):
             ],
             filters={"approved_by_manager": 1, "approval_manager": frappe.session.user},
         )
-        
+
         # Get Expense Pull approved records
         expense_pull_list = frappe.get_all(
             "Expense Pull",
@@ -803,22 +809,23 @@ def get_otpl_expense_approved_list(start=0, page_length=10):
                 ["approval_manager_user", "=", frappe.session.user]
             ],
         )
-        
+
         # Combine both lists
         combined_list = otpl_expense_list + expense_pull_list
-        
+
         # Sort by modified date descending
         combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
-        
+
         # Apply pagination
         start = int(start)
         page_length = int(page_length)
         paginated_list = combined_list[start:start + page_length]
-        
+
         # Clean up response - remove internal fields and add full URL for invoice_upload
         from frappe.utils import get_url
         for item in paginated_list:
             item.pop("modified", None)
+            item["status"] = "Approved" if item.get("approved_by_manager") == 1 else "Pending"
             # Convert invoice_upload to full URL based on source_erp presence
             if item.get("invoice_upload"):
                 if item.get("source_erp"):
@@ -830,10 +837,10 @@ def get_otpl_expense_approved_list(start=0, page_length=10):
                 else:
                     # For OTPL Expense, use current site's host
                     item["invoice_upload"] = get_url(item["invoice_upload"])
-            
+
             # Remove source_erp from response
             item.pop("source_erp", None)
-        
+
         return gen_response(
             200, "Approved expense list retrieved successfully", paginated_list
         )
@@ -854,7 +861,6 @@ def get_employee_checkin_approved_list(start=0, page_length=10, log_type=None):
     try:
         filters = {
             "approval_required": 1,
-            "approved": 1,
             "manager": frappe.session.user,
         }
 
@@ -874,12 +880,24 @@ def get_employee_checkin_approved_list(start=0, page_length=10, log_type=None):
                 "reason",
                 "today_work",
                 "location",
+                "approved",
+                "rejected"
             ],
             start=start,
             page_length=page_length,
             order_by="modified desc",
             filters=filters,
+            or_filters=[
+                {"approved": 1},
+                {"rejected": 1},
+            ],
         )
+        for item in checkin_list:
+            if item.get("approved") == 1:
+                item["status"] = "Approved"
+            elif item.get("rejected") == 1:
+                item["status"] = "Rejected"
+
         return gen_response(
             200, "Approved checkin list retrieved successfully", checkin_list
         )

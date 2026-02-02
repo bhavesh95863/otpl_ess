@@ -1,9 +1,7 @@
 {
- "actions": [],
  "allow_rename": 1,
  "autoname": "NOTIFICATION.#####",
  "creation": "2023-03-13 16:25:47.456814",
- "default_view": "List",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
@@ -12,6 +10,7 @@
   "message",
   "reference_section",
   "send_for",
+  "employee_group",
   "user",
   "users",
   "notification_type",
@@ -60,23 +59,28 @@
    "fieldname": "users",
    "fieldtype": "Table MultiSelect",
    "label": "Users",
-   "mandatory_depends_on": "eval:doc.apply_for == \"Specific Employees\"",
    "options": "Notification User"
   },
   {
    "fieldname": "send_for",
    "fieldtype": "Select",
    "label": "Send for ",
-   "options": "\nSingle User\nMultiple User\nAll User"
+   "options": "\nSingle User\nMultiple User\nAll User\nSend to Group"
+  },
+  {
+   "depends_on": "eval: doc.send_for == \"Send to Group\"",
+   "fieldname": "employee_group",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employee Group",
+   "options": "OTPL Employee Group",
+   "reqd": 1
   }
  ],
- "index_web_pages_for_search": 1,
- "links": [],
- "modified": "2023-03-16 11:54:01.576526",
+ "modified": "2026-01-31 00:48:07.710815",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Push Notification",
- "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
@@ -93,6 +97,5 @@
   }
  ],
  "sort_field": "modified",
- "sort_order": "DESC",
- "states": []
+ "sort_order": "DESC"
 }

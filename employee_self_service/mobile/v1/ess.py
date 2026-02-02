@@ -60,7 +60,7 @@ def login(usr, pwd, unique_id=None):
         login_manager.authenticate(usr, pwd)
         validate_employee(login_manager.user)
         emp_data = get_employee_by_user(login_manager.user)
-        
+
         # Register device and get unique_id before post_login
         registered_unique_id = register_device(emp_data.get("name"), unique_id)
         if not registered_unique_id:
@@ -84,10 +84,10 @@ def register_device(employee, unique_id):
     """
     Register device for employee - each employee should be linked to only one unique device
     Logic:
-    1. If unique_id is provided: 
+    1. If unique_id is provided:
        - Check if employee has existing registration, validate it matches
        - If no registration, check if unique_id belongs to another employee
-    2. If unique_id is None: 
+    2. If unique_id is None:
        - Check if employee already has registration, if yes throw error
        - If no registration, generate new unique_id and register
     Returns: unique_id string on success, False on failure
@@ -99,8 +99,8 @@ def register_device(employee, unique_id):
 
         # Get employee's existing device registration
         existing_registration = frappe.db.get_value(
-            "Employee Device Registration", 
-            {"employee": employee}, 
+            "Employee Device Registration",
+            {"employee": employee},
             ["name", "unique_id"],
             as_dict=True
         )
@@ -126,14 +126,14 @@ def register_device(employee, unique_id):
                     employee_name = frappe.db.get_value("Employee", other_employee, "employee_name")
                     gen_response(500, f"Device is already associated with {employee_name} ({other_employee}) another employee.")
                     return False
-                
+
                 # Register this device for this employee
                 doc = frappe.new_doc("Employee Device Registration")
                 doc.employee = employee
                 doc.unique_id = unique_id
                 doc.insert(ignore_permissions=True)
                 return unique_id
-        
+
         # Case 2: unique_id is None/null
         else:
             if existing_registration:
@@ -399,7 +399,7 @@ def get_leave_application(name):
             name,
             as_dict=True
         )
-        
+
         if leave_application:
             leave_application = leave_application[0]
         else:
@@ -786,8 +786,9 @@ def download_pdf(doctype, name, format=None, doc=None, no_letterhead=0):
 @ess_validate(methods=["GET"])
 def get_dashboard():
     try:
+        user = frappe.session.user
         emp_data = get_employee_by_user(
-            frappe.session.user,
+            user,
             fields=[
                 "name",
                 "company",
@@ -806,18 +807,19 @@ def get_dashboard():
         # attendance_details = get_attendance_details(emp_data)
         today_logs = get_last_log_details(emp_data.get("name"))
         settings = get_ess_settings()
-        
+        wms_task = get_wms_task_flag(user)
+
         # Process today's logs to determine last log type and time
         last_log_type = "OUT"
         last_log_time = ""
         has_checkin = False
         has_checkout = False
-        
+
         if today_logs:
             # Get the latest log
             last_log_type = today_logs[0].get("log_type")
             last_log_time = today_logs[0].get("time").strftime("%I:%M%p")
-            
+
             # Check if there's a check-in and check-out today
             for log in today_logs:
                 if log.get("log_type") == "IN":
@@ -855,6 +857,7 @@ def get_dashboard():
                 if emp_data.get("external_sales_order") != 1
                 else emp_data.get("external_so")
             ),
+            "wms_task": wms_task
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -871,7 +874,7 @@ def get_dashboard():
         dashboard_data["allow_expense"] = (
             1 if "SITE EXPENSE INITIATOR" in user_roles else 0
         )
-        
+
         # Determine allow_checkin and allow_checkout based on location and today's logs
         if emp_data.get("location") == "Site":
             # Site employees: only allow check-in, no check-out
@@ -902,6 +905,11 @@ def get_dashboard():
     except Exception as e:
         return exception_handler(e)
 
+def get_wms_task_flag(user):
+    wms_roles = {"WMS User", "WMS Manager", "WMS Admin"}
+    user_roles = set(frappe.get_roles(user))
+
+    return 1 if user_roles.intersection(wms_roles) else 0
 
 @frappe.whitelist()
 def get_leave_balance_dashboard():
@@ -1047,13 +1055,13 @@ def run_attendance_report(employee, company):
         # The data structure is: [employee, employee_name, branch, dept, designation, company, day1...dayN, total_present, total_leaves, total_absent]
         row = data[0]
         total_days_in_month = filters["total_days_in_month"]
-        
+
         # Count holidays from the daily data (days marked with <b>H</b>)
         total_holidays = 0
         for i in range(6, 6 + total_days_in_month):
             if row[i] == "<b>H</b>":
                 total_holidays += 1
-        
+
         return {
             "total_present": row[6 + total_days_in_month],  # Total Present is after all days
             "total_leaves": row[6 + total_days_in_month + 1],  # Total Leaves is after Total Present
@@ -1205,39 +1213,39 @@ def attach_checkin_image(checkin_id):
         # Validate checkin document exists
         if not frappe.db.exists("Employee Checkin", checkin_id):
             return gen_response(404, "Employee Checkin not found")
-        
+
         # Get the checkin document
         checkin_doc = frappe.get_doc("Employee Checkin", checkin_id)
-        
+
         # Verify the checkin belongs to the current user's employee
         emp_data = get_employee_by_user(frappe.session.user)
         if checkin_doc.employee != emp_data.get("name"):
             return gen_response(403, "You don't have permission to attach image to this checkin")
-        
+
         # Check if file is in request
         if "file" not in frappe.request.files:
             return gen_response(400, "No file provided")
-        
+
         # Delete old image if exists
         if checkin_doc.attendance_image:
             old_file_url = checkin_doc.attendance_image
             file_doc = frappe.db.get_value("File", {"file_url": old_file_url}, "name")
             if file_doc:
                 frappe.delete_doc("File", file_doc, ignore_permissions=True)
-        
+
         # Upload new file
         file = upload_file()
         file.attached_to_doctype = "Employee Checkin"
         file.attached_to_name = checkin_doc.name
         file.attached_to_field = "attendance_image"
         file.save(ignore_permissions=True)
-        
+
         # Update checkin document with image URL
         checkin_doc.attendance_image = file.get("file_url")
         checkin_doc.save(ignore_permissions=True)
-        
+
         return gen_response(
-            200, 
+            200,
             "Image attached successfully",
             {
                 "checkin_id": checkin_doc.name,
@@ -1325,7 +1333,7 @@ def get_employees_having_an_event_today(event_type, date=None):
 			WHERE
 				DATE_PART('day', {condition_column}) = date_part('day', %(today)s)
 			AND
-				DATE_PART('month', {condition_column}) = date_part('month', %(today)s)    
+				DATE_PART('month', {condition_column}) = date_part('month', %(today)s)
 			AND
 				"status" = 'Active'
 		""",
@@ -1535,18 +1543,18 @@ def get_holiday_list_v2():
     try:
         global_defaults = get_global_defaults()
         default_company = global_defaults.get("default_company")
-        
+
         if not default_company:
             return gen_response(500, "Default company not set in Global Defaults")
-        
+
         # Get default holiday list from company
         default_holiday_list = frappe.db.get_value(
             "Company", default_company, "default_holiday_list"
         )
-        
+
         if not default_holiday_list:
             return gen_response(500, "Default holiday list not set for company")
-        
+
         # Fetch all holidays from the holiday list
         holidays = frappe.get_all(
             "Holiday",
@@ -1554,10 +1562,10 @@ def get_holiday_list_v2():
             fields=["description", "holiday_date"],
             order_by="holiday_date asc",
         )
-        
+
         if len(holidays) == 0:
             return gen_response(200, "Holiday list get successfully", [])
-        
+
         holiday_list = []
         for holiday in holidays:
             holiday_date = frappe.utils.data.getdate(holiday.holiday_date)
@@ -1569,7 +1577,7 @@ def get_holiday_list_v2():
                     "description": holiday.description,
                 }
             )
-        
+
         return gen_response(200, "Holiday list get successfully", holiday_list)
     except Exception as e:
         return exception_handler(e)
@@ -2101,7 +2109,7 @@ def notification_list():
         filters = [
             ["ESS Notification Log", "recipient", "=", frappe.session.user]
         ]
-        
+
         notification = frappe.get_all(
             "ESS Notification Log",
             filters=filters,
@@ -2135,20 +2143,20 @@ def mark_notification_as_read():
     try:
         data = frappe.local.form_dict
         notification_name = data.get("notification_name")
-        
+
         if not notification_name:
             return gen_response(400, "notification_name is required")
-        
+
         doc = frappe.get_doc("ESS Notification Log", notification_name)
-        
+
         # Check if the notification belongs to the current user
         if doc.recipient != frappe.session.user:
             return gen_response(403, "Not authorized to mark this notification as read")
-        
+
         doc.read = 1
         doc.save(ignore_permissions=True)
         frappe.db.commit()
-        
+
         return gen_response(200, "Notification marked as read successfully")
     except Exception as e:
         return exception_handler(e)
@@ -2235,7 +2243,7 @@ def get_manager_login_status():
                         500,
                         "Reporting manager not assigned. Please contact administrator.",
                     )
-            
+
                 latest_checkin = frappe.db.get_value(
                     "Employee Checkin",
                     {"employee": emp_data.get("reports_to"), "time": [">=", today()]},
@@ -3019,7 +3027,7 @@ def upload_employee_documents(document_type):
     """
     try:
         emp_data = get_employee_by_user(frappe.session.user)
-        
+
         # Map document types to employee fields
         document_field_mapping = {
             "Aadhar": "aadhar_card_document",
@@ -3027,19 +3035,19 @@ def upload_employee_documents(document_type):
             "Photograph": "photograph_document",
             "Cheque": "cancelled_cheque_document"
         }
-        
+
         if document_type not in document_field_mapping:
             return gen_response(
-                400, 
+                400,
                 f"Invalid document type. Allowed types are: {', '.join(document_field_mapping.keys())}"
             )
-        
+
         field_name = document_field_mapping[document_type]
-        
+
         # Check if file is present in request
         if "file" not in frappe.request.files:
             return gen_response(400, "No file uploaded")
-        
+
         # Delete old document if exists
         old_file_url = frappe.db.get_value("Employee", emp_data.get("name"), field_name)
         if old_file_url:
@@ -3047,24 +3055,24 @@ def upload_employee_documents(document_type):
             file_doc = frappe.db.get_value("File", {"file_url": old_file_url}, "name")
             if file_doc:
                 frappe.delete_doc("File", file_doc, ignore_permissions=True)
-        
+
         # Upload new file
         uploaded_file = upload_file()
         uploaded_file.attached_to_doctype = "Employee"
         uploaded_file.attached_to_name = emp_data.get("name")
         uploaded_file.attached_to_field = field_name
         uploaded_file.save(ignore_permissions=True)
-        
+
         # Update employee document field
         frappe.db.set_value(
-            "Employee", 
-            emp_data.get("name"), 
-            field_name, 
+            "Employee",
+            emp_data.get("name"),
+            field_name,
             uploaded_file.file_url
         )
-        
+
         return gen_response(
-            200, 
+            200,
             f"{document_type} document uploaded successfully",
             {
                 "file_url": uploaded_file.file_url,
@@ -3084,9 +3092,9 @@ def get_employee_documents():
     """
     try:
         emp_data = get_employee_by_user(frappe.session.user)
-        
+
         employee = frappe.get_doc("Employee", emp_data.get("name"))
-        
+
         documents = {
             "Aadhar": {
                 "file_url": employee.aadhar_card_document or None,
@@ -3105,19 +3113,19 @@ def get_employee_documents():
                 "file_name": None
             }
         }
-        
+
         # Get file names for each document
         for doc_type, doc_data in documents.items():
             if doc_data["file_url"]:
                 file_name = frappe.db.get_value(
-                    "File", 
-                    {"file_url": doc_data["file_url"]}, 
+                    "File",
+                    {"file_url": doc_data["file_url"]},
                     "file_name"
                 )
                 doc_data["file_name"] = file_name
-        
+
         return gen_response(
-            200, 
+            200,
             "Employee documents retrieved successfully",
             documents
         )
