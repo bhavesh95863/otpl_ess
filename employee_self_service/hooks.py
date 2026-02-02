@@ -124,7 +124,8 @@ doc_events = {
         "on_update": [
             "employee_self_service.employee_self_service.utils.employee_worker_sync.update_worker_fields_from_manager",
             "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
-        ]
+        ],
+        "validate": "employee_self_service.employee_self_service.utils.employee.validate_employee"
     },
     "Employee Pull": {
         "on_update": "employee_self_service.employee_self_service.utils.employee_worker_sync.update_workers_from_employee_pull"

@@ -6,9 +6,12 @@
  "engine": "InnoDB",
  "field_order": [
   "location",
+  "location_depend_team_leader",
+  "column_break_3",
   "latitude",
   "longitude",
   "radius",
+  "team_leader_radius",
   "section_break_1",
   "shift_start_time",
   "shift_end_time",
@@ -35,25 +38,25 @@
    "unique": 1
   },
   {
+   "depends_on": "eval:doc.location_depend_team_leader == 0",
    "fieldname": "latitude",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Latitude",
-   "reqd": 1
+   "label": "Latitude"
   },
   {
+   "depends_on": "eval:doc.location_depend_team_leader == 0",
    "fieldname": "longitude",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Longitude",
-   "reqd": 1
+   "label": "Longitude"
   },
   {
+   "depends_on": "eval:doc.location_depend_team_leader == 0",
    "fieldname": "radius",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Radius",
-   "reqd": 1
+   "label": "Radius"
   },
   {
    "fieldname": "section_break_1",
@@ -77,16 +80,16 @@
    "fieldtype": "Column Break"
   },
   {
+   "description": "Arrival after this time will be marked as Late (L)",
    "fieldname": "late_arrival_threshold",
    "fieldtype": "Time",
-   "label": "Late Arrival Threshold",
-   "description": "Arrival after this time will be marked as Late (L)"
+   "label": "Late Arrival Threshold"
   },
   {
+   "description": "Exit before this time will be marked as Late (L)",
    "fieldname": "early_exit_threshold",
    "fieldtype": "Time",
-   "label": "Early Exit Threshold",
-   "description": "Exit before this time will be marked as Late (L)"
+   "label": "Early Exit Threshold"
   },
   {
    "fieldname": "section_break_2",
@@ -94,16 +97,16 @@
    "label": "Half Day Thresholds"
   },
   {
+   "description": "Arrival on/after this time will be marked as Half Day (H)",
    "fieldname": "half_day_arrival_time",
    "fieldtype": "Time",
-   "label": "Half Day Arrival Time",
-   "description": "Arrival on/after this time will be marked as Half Day (H)"
+   "label": "Half Day Arrival Time"
   },
   {
+   "description": "Departure on/before this time will be marked as Half Day (H)",
    "fieldname": "half_day_departure_time",
    "fieldtype": "Time",
-   "label": "Half Day Departure Time",
-   "description": "Departure on/before this time will be marked as Half Day (H)"
+   "label": "Half Day Departure Time"
   },
   {
    "fieldname": "section_break_3",
@@ -111,39 +114,55 @@
    "label": "Leave Deduction Rules"
   },
   {
+   "default": "3",
+   "description": "Number of Late (L) marks to deduct half day leave",
    "fieldname": "late_count_for_half_day",
    "fieldtype": "Int",
-   "label": "Late Count for Half Day Leave",
-   "default": "3",
-   "description": "Number of Late (L) marks to deduct half day leave"
+   "label": "Late Count for Half Day Leave"
   },
   {
+   "default": "5",
+   "description": "Number of Late (L) marks to deduct full day leave",
    "fieldname": "late_count_for_full_day",
    "fieldtype": "Int",
-   "label": "Late Count for Full Day Leave",
-   "default": "5",
-   "description": "Number of Late (L) marks to deduct full day leave"
+   "label": "Late Count for Full Day Leave"
   },
   {
    "fieldname": "column_break_3",
    "fieldtype": "Column Break"
   },
   {
+   "description": "Leave type to be used for automatic deduction",
    "fieldname": "leave_type_for_deduction",
    "fieldtype": "Link",
    "label": "Leave Type for Deduction",
-   "options": "Leave Type",
-   "description": "Leave type to be used for automatic deduction"
+   "options": "Leave Type"
   },
   {
+   "default": "5",
+   "description": "After this many late marks in a month, each subsequent late mark will be treated as Half Day (H) instead of counting towards leave deduction",
    "fieldname": "treat_late_as_half_day_after",
    "fieldtype": "Int",
-   "label": "Treat Late as Half Day After",
-   "default": "5",
-   "description": "After this many late marks in a month, each subsequent late mark will be treated as Half Day (H) instead of counting towards leave deduction"
+   "label": "Treat Late as Half Day After"
+  },
+  {
+   "default": "0",
+   "fieldname": "location_depend_team_leader",
+   "fieldtype": "Check",
+   "label": "Location Depend Team Leader"
+  },
+  {
+   "depends_on": "eval:doc.location_depend_team_leader == 1",
+   "fieldname": "team_leader_radius",
+   "fieldtype": "Int",
+   "label": "Team Leader Radius"
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
   }
  ],
- "modified": "2025-12-19 11:00:00.000000",
+ "modified": "2026-02-02 20:16:36.503967",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "ESS Location",
@@ -162,7 +181,6 @@
    "write": 1
   }
  ],
- "quick_entry": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
  "track_changes": 1

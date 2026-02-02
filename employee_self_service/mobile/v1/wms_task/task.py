@@ -8,7 +8,7 @@ from employee_self_service.mobile.v1.api_utils import (
     exception_handler,
     get_employee_by_user,
 )
-from frappe.utils import get_datetime
+from frappe.utils import get_datetime,nowdate,add_days
 
 @frappe.whitelist()
 @ess_validate(methods=["POST"])
@@ -36,8 +36,37 @@ def create_task(**data):
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
-def get_task_list(start=0, page_length=10, filters=None):
+def get_task_list(start=0, page_length=10, filters=None,type=None):
     try:
+        if not filters:
+            filters = {}
+
+        today = nowdate()
+
+        # Validate and apply type-based filters
+        if type:
+            allowed_types = [
+                "Overdue",
+                "due today",
+                "due in 3 days",
+                "issued by you"
+            ]
+
+            if type not in allowed_types:
+                return gen_response(400, "Invalid type value")
+
+            if type == "Overdue":
+                filters["status"] = "Overdue"
+
+            elif type == "due today":
+                filters["due_date"] = today
+
+            elif type == "due in 3 days":
+                filters["due_date"] = ["between", [today, add_days(today, 3)]]
+
+            elif type == "issued by you":
+                filters["assign_by"] = frappe.session.user
+
         timesheet_list = frappe.get_list(
             "WMS Task",
             fields=[
@@ -66,7 +95,7 @@ def get_task_list(start=0, page_length=10, filters=None):
         return gen_response(500, "Not permitted read WMS Task")
     except Exception as e:
         return exception_handler(e)
-    
+
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_task_details(**data):
@@ -132,7 +161,7 @@ def approve_extend_request(**data):
     except frappe.PermissionError:
         return gen_response(500, "Not permitted for write WMS Task")
     except Exception as e:
-        return exception_handler(e)    
+        return exception_handler(e)
 
 
 @frappe.whitelist()
@@ -147,7 +176,7 @@ def reject_extend_request(**data):
     except frappe.PermissionError:
         return gen_response(500, "Not permitted for write WMS Task")
     except Exception as e:
-        return exception_handler(e)    
+        return exception_handler(e)
 
 @frappe.whitelist()
 @ess_validate(methods=["POST"])
@@ -159,7 +188,7 @@ def reopen_task(**data):
     except frappe.PermissionError:
         return gen_response(500, "Not permitted for write WMS Task")
     except Exception as e:
-        return exception_handler(e)  
+        return exception_handler(e)
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
@@ -174,7 +203,7 @@ def get_user_list(start=0, page_length=10,filters=None):
         return gen_response(500, "Not permitted for read user")
     except Exception as e:
         return exception_handler(e)
-    
+
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_status_list():

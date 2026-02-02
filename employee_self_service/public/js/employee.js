@@ -19,5 +19,12 @@ frappe.ui.form.on('Employee', {
         } else {
             frm.set_df_property("business_vertical", 'read_only', 0);
         }
+    },
+    advance_to_be_deducted(frm) {
+        if (frm.doc.advance_to_be_deducted > 0) {
+            frm.set_value("basic_salary",frm.doc.advance_to_be_deducted / 2)
+        } else {
+            frm.set_value("basic_salary",0)
+        }
     }
 })
