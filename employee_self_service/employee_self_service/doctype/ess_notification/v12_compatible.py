@@ -2,7 +2,12 @@ import frappe
 import datetime
 from frappe import _
 from frappe.utils import flt, cint, cstr, getdate, get_datetime
-from typing import Any, Literal, Optional, TypeVar
+from typing import Any, Optional, TypeVar
+
+try:
+	from typing import Literal
+except ImportError:
+	from typing_extensions import Literal
 
 
 def get_timedelta(time=None):
