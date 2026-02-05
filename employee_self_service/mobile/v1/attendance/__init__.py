@@ -42,74 +42,44 @@ def get_attendance_list_by_date(date=None):
             ],
         )
 
-        if not attendance_list:
-            return gen_response(500, "no attendance found for this year and month", [])
+        # Fetch Employee Checkin records for the date using SQL
+        checkins = frappe.db.sql("""
+            SELECT log_type, time, location, log_location
+            FROM `tabEmployee Checkin`
+            WHERE employee = %s
+            AND DATE(time) = %s
+            ORDER BY time ASC
+        """, (employee_name, date), as_dict=1)
 
-        # Get user and system time zones
-        user_time_zone = frappe.db.get_value("User", frappe.session.user, "time_zone")
-        system_timezone = get_system_timezone()
-        to_convert_timezone = user_time_zone != system_timezone
-
-        # Get all related check-ins in one query to minimize DB calls
-        attendance_names = [att["name"] for att in attendance_list]
-        checkins = frappe.get_all(
-            "Employee Checkin",
-            filters={"attendance": ["in", attendance_names]},
-            fields=["attendance", "log_type", "time", "location", "log_location"],
-        )
-
-        # Create a mapping for check-ins
-        checkin_map = {}
+        # Format checkin times
+        employee_checkin_detail = []
         for checkin in checkins:
-            checkin_time = (
-                convert_timezone(
-                    checkin["time"], system_timezone, user_time_zone
-                ).strftime("%I:%M %p")
-                if to_convert_timezone
-                else checkin["time"].strftime("%I:%M %p")
-            )
-            checkin_map.setdefault(checkin["attendance"], []).append(
-                {
-                    "log_type": checkin["log_type"],
-                    "time": checkin_time,
-                    "location": checkin.get("location"),
-                    "log_location": checkin.get("log_location"),
-                }
-            )
+            checkin_time = checkin["time"].strftime("%I:%M %p") if checkin["time"] else None
+            employee_checkin_detail.append({
+                "log_type": checkin["log_type"],
+                "time": checkin_time,
+                "location": checkin.get("location"),
+                "log_location": checkin.get("log_location"),
+            })
 
         # Process attendance records
         for attendance in attendance_list:
-            # if to_convert_timezone:
-            #     if attendance["in_time"]:
-            #         attendance["in_time"] = convert_timezone(
-            #             attendance["in_time"], system_timezone, user_time_zone
-            #         ).strftime("%I:%M %p")
-            #     if attendance["out_time"]:
-            #         attendance["out_time"] = convert_timezone(
-            #             attendance["out_time"], system_timezone, user_time_zone
-            #         ).strftime("%I:%M %p")
-            # else:
-            #     attendance["in_time"] = (
-            #         attendance["in_time"].strftime("%I:%M %p")
-            #         if attendance["in_time"]
-            #         else None
-            #     )
-            #     attendance["out_time"] = (
-            #         attendance["out_time"].strftime("%I:%M %p")
-            #         if attendance["out_time"]
-            #         else None
-            #     )
-
-            attendance["employee_checkin_detail"] = checkin_map.get(
-                attendance["name"], []
-            )
-
-            # Remove unnecessary fields
+            attendance["employee_checkin_detail"] = employee_checkin_detail
+            # Remove unnecessary field
             attendance.pop("name", None)
-            attendance.pop("status", None)
-            attendance.pop("late_entry", None)
+        
+        # If no attendance but checkins exist, create a response
+        if not attendance_list and employee_checkin_detail:
+            attendance_list = [{
+                "attendance_date": getdate(date).strftime("%d %W"),
+                "status": "No Record",
+                "working_hours": None,
+                "late_entry": 0,
+                "employee_checkin_detail": employee_checkin_detail
+            }]
+            
         return gen_response(
-            200, "Attendance data retrieved successfully", attendance_list
+            200, "Attendance data retrieved successfully", attendance_list if attendance_list else []
         )
     except Exception as e:
         return exception_handler(e)

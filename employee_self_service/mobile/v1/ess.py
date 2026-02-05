@@ -982,25 +982,34 @@ def get_notice_board(employee=None):
 
 
 def get_attendance_details(emp_data, year=None, month=None):
-    last_date = get_last_day(today())
     first_date = get_first_day(today())
+    last_date = get_last_day(today())
+    yesterday = add_days(today(), -1)
     total_days = date_diff(last_date, first_date) + 1
-    # Don't include today in till_date_days calculation to avoid marking today as absent
-    till_date_days = date_diff(today(), first_date)
-    days_off = 0
-    absent = 0
-    total_present = 0
-    attendance_report = run_attendance_report(
-        emp_data.get("name"), emp_data.get("company")
+    till_date_days = date_diff(yesterday, first_date) + 1  # Count till yesterday only
+    
+    # Get present days count from Attendance records using SQL (till yesterday)
+    total_present = frappe.db.sql("""
+        SELECT COUNT(*) 
+        FROM `tabAttendance` 
+        WHERE employee = %s 
+        AND attendance_date BETWEEN %s AND %s
+        AND status = 'Present'
+        AND docstatus = 1
+    """, (emp_data.get("name"), first_date, yesterday))[0][0] or 0
+    
+    # Get holidays from company's holiday list (this is days off) - till yesterday
+    days_off = get_holidays_for_employee(
+        emp_data.get("name"),
+        emp_data.get("company"),
+        first_date,
+        yesterday
     )
-    if attendance_report:
-        days_off = flt(attendance_report.get("total_leaves")) + flt(
-            attendance_report.get("total_holidays")
-        )
-        absent = till_date_days - (
-            flt(days_off) + flt(attendance_report.get("total_present"))
-        )
-        total_present = attendance_report.get("total_present")
+    
+    # Calculate absent days (till_date_days - present - days_off)
+    # Absent includes any day not marked as Present and not a holiday
+    absent = max(0, till_date_days - flt(total_present) - flt(days_off))
+    
     attendance_details = {
         "month_title": f"{frappe.utils.getdate().strftime('%B')} Details",
         "data": [
@@ -1034,11 +1043,31 @@ def get_attendance_details(emp_data, year=None, month=None):
             },
         ],
     }
+    frappe.log_error(title="Attendance Details", message=attendance_details)
     return attendance_details
+
+
+def get_holidays_for_employee(employee, company, from_date, to_date):
+    """Get holidays from company's holiday list for the given date range"""
+    holiday_list = frappe.get_cached_value("Company", company, "default_holiday_list")
+    
+    if not holiday_list:
+        return 0
+    
+    # Count holidays in the date range using SQL
+    holidays = frappe.db.sql("""
+        SELECT COUNT(*) 
+        FROM `tabHoliday` 
+        WHERE parent = %s 
+        AND holiday_date BETWEEN %s AND %s
+    """, (holiday_list, from_date, to_date))[0][0]
+    
+    return holidays
 
 
 @frappe.whitelist()
 def run_attendance_report(employee, company):
+    """Run attendance report for the current month (kept for backward compatibility)"""
     filters = frappe._dict({
         "month": cstr(get_month_name(frappe.utils.getdate().month)),
         "year": cstr(frappe.utils.getdate().year),
@@ -1046,28 +1075,44 @@ def run_attendance_report(employee, company):
         "employee": employee,
         "summarized_view": 1,
     })
-    # Directly call execute function to avoid permission issues
-    from erpnext.hr.report.monthly_attendance_sheet.monthly_attendance_sheet import execute
-
-    columns, data = execute(filters)
-    if data:
-        # Convert list data to dictionary format
-        # The data structure is: [employee, employee_name, branch, dept, designation, company, day1...dayN, total_present, total_leaves, total_absent]
-        row = data[0]
-        total_days_in_month = filters["total_days_in_month"]
-
-        # Count holidays from the daily data (days marked with <b>H</b>)
-        total_holidays = 0
-        for i in range(6, 6 + total_days_in_month):
-            if row[i] == "<b>H</b>":
-                total_holidays += 1
-
-        return {
-            "total_present": row[6 + total_days_in_month],  # Total Present is after all days
-            "total_leaves": row[6 + total_days_in_month + 1],  # Total Leaves is after Total Present
-            "total_absent": row[6 + total_days_in_month + 2],  # Total Absent is after Total Leaves
-            "total_holidays": total_holidays
-        }
+    
+    try:
+        # Directly call execute function to avoid permission issues
+        from erpnext.hr.report.monthly_attendance_sheet.monthly_attendance_sheet import execute
+        
+        columns, data = execute(filters)
+        if data and len(data) > 0:
+            # Convert list data to dictionary format
+            # The data structure is: [employee, employee_name, branch, dept, designation, company, day1...dayN, total_present, total_leaves, total_absent]
+            row = data[0]
+            
+            # Get total days in month from calendar
+            import calendar
+            year = int(filters.get("year"))
+            month = frappe.utils.getdate().month
+            total_days_in_month = calendar.monthrange(year, month)[1]
+            
+            # Count holidays from the daily data (days marked with <b>H</b>)
+            total_holidays = 0
+            for i in range(6, 6 + total_days_in_month):
+                if i < len(row) and row[i] == "<b>H</b>":
+                    total_holidays += 1
+            
+            # The summary columns are at the end
+            total_present = row[6 + total_days_in_month] if len(row) > 6 + total_days_in_month else 0
+            total_leaves = row[6 + total_days_in_month + 1] if len(row) > 6 + total_days_in_month + 1 else 0
+            total_absent = row[6 + total_days_in_month + 2] if len(row) > 6 + total_days_in_month + 2 else 0
+            
+            return {
+                "total_present": total_present,
+                "total_leaves": total_leaves,
+                "total_absent": total_absent,
+                "total_holidays": total_holidays
+            }
+    except Exception as e:
+        frappe.log_error(title="Attendance Report Error", message=str(e))
+    
+    return None
 
 
 def get_month_name(month):

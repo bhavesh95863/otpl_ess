@@ -8,7 +8,7 @@ from employee_self_service.mobile.v1.api_utils import (
     exception_handler,
     get_employee_by_user,
 )
-from frappe.utils import get_datetime,nowdate,add_days
+from frappe.utils import get_datetime,nowdate,add_days,getdate
 
 @frappe.whitelist()
 @ess_validate(methods=["POST"])
@@ -38,7 +38,10 @@ def create_task(**data):
 @ess_validate(methods=["GET"])
 def get_task_list(start=0, page_length=10, filters=None,type=None):
     try:
-        if not filters:
+        if filters:
+            if isinstance(filters, str):
+                filters = json.loads(filters)
+        else:
             filters = {}
 
         today = nowdate()
@@ -51,23 +54,28 @@ def get_task_list(start=0, page_length=10, filters=None,type=None):
                 "due in 3 days",
                 "issued by you"
             ]
+            frappe.log_error(title="Type Filter", message=str(type))
 
             if type not in allowed_types:
                 return gen_response(400, "Invalid type value")
 
             if type == "Overdue":
                 filters["status"] = "Overdue"
+                filters["assign_to"] = frappe.session.user
 
             elif type == "due today":
-                filters["due_date"] = today
+                filters["due_date"] = str(getdate(today))
+                filters["assign_to"] = frappe.session.user
 
             elif type == "due in 3 days":
-                filters["due_date"] = ["between", [today, add_days(today, 3)]]
+                end_date = str(getdate(add_days(today, 3)))
+                filters["due_date"] = ["between", [str(getdate(today)), end_date]]
+                filters["assign_to"] = frappe.session.user
 
             elif type == "issued by you":
                 filters["assign_by"] = frappe.session.user
 
-        timesheet_list = frappe.get_list(
+        task_list = frappe.get_all(
             "WMS Task",
             fields=[
                 "name",
@@ -90,7 +98,7 @@ def get_task_list(start=0, page_length=10, filters=None,type=None):
             order_by="modified desc",
             filters=filters,
         )
-        return gen_response(200, "Task List getting Successfully", timesheet_list)
+        return gen_response(200, "Task List getting Successfully", task_list)
     except frappe.PermissionError:
         return gen_response(500, "Not permitted read WMS Task")
     except Exception as e:
