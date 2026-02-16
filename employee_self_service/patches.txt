@@ -1,2 +1,3 @@
 employee_self_service.setup.custom_fields
 employee_self_service.patches.update_employee_basic_salary
+employee_self_service.patches.create_wpe_roles

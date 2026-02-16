@@ -34,7 +34,7 @@ after_migrate = "employee_self_service.setup.after_install"
 
 # include js in doctype views
 doctype_js = {"Employee Checkin": "public/js/employee_checkin.js","Employee": "public/js/employee.js"}
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+doctype_list_js = {"Employee Group" : "public/js/employee_group.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
@@ -125,7 +125,7 @@ doc_events = {
             "employee_self_service.employee_self_service.utils.employee_worker_sync.update_worker_fields_from_manager",
             "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
         ],
-        "validate": "employee_self_service.employee_self_service.utils.employee.validate_employee"
+        "before_validate": "employee_self_service.employee_self_service.utils.employee.validate_employee"
     },
     "Employee Pull": {
         "on_update": "employee_self_service.employee_self_service.utils.employee_worker_sync.update_workers_from_employee_pull"
@@ -235,7 +235,6 @@ fixtures = [
     {
         "dt": "Custom Field",
         "filters": [["dt", "in", [
-            "Employee",
             "Employee Checkin",
             "Branch"
         ]]],

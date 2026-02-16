@@ -460,16 +460,24 @@ def approve_employee_checkin():
         checkin_doc.approved = 1
         checkin_doc.save(ignore_permissions=True)
 
-        # Process attendance for the employee on that day
+        # Process attendance for the employee on that day only if it's not the current day
         try:
             from employee_self_service.employee_self_service.utils.daily_attendance import (
                 process_employee_attendance,
             )
-            from frappe.utils import getdate
+            from frappe.utils import getdate, today
 
             attendance_date = getdate(checkin_doc.time)
+            current_date = getdate(today())
             employee = checkin_doc.employee
             employee_location = frappe.db.get_value("Employee", employee, "location")
+
+            # Only auto-process attendance if the checkin is for a past day (not current day)
+            if attendance_date >= current_date:
+                return gen_response(
+                    200,
+                    "Check-in approved successfully.",
+                )
 
             # Check if attendance already exists
             existing_attendance = frappe.db.get_value(
@@ -488,7 +496,7 @@ def approve_employee_checkin():
                     # Leave-based attendance exists, don't process
                     return gen_response(
                         200,
-                        "Check-in approved successfully. Attendance not processed due to existing leave application.",
+                        "Check-in approved successfully.",
                     )
                 else:
                     # Cancel existing attendance to reprocess
@@ -496,7 +504,7 @@ def approve_employee_checkin():
                     att_doc.cancel()
                     frappe.db.commit()
 
-            # Process attendance for the day
+            # Process attendance for the past day
             process_employee_attendance(employee, employee_location, attendance_date)
 
             return gen_response(
@@ -510,7 +518,7 @@ def approve_employee_checkin():
             )
             return gen_response(
                 200,
-                "Check-in approved successfully but attendance processing failed. Please check error logs.",
+                "Check-in approved successfully",
             )
 
     except frappe.PermissionError:
@@ -578,85 +586,7 @@ def get_pending_approval_counts():
     }
     """
     try:
-        current_user = frappe.session.user
-
-        # Count OTPL Leave records
-        otpl_leave_count = frappe.db.count(
-            "OTPL Leave",
-            filters={"status": "Pending", "approver": current_user}
-        )
-
-        # Count Leave Pull records - use get_all with count
-        leave_pull_list = frappe.get_all(
-            "Leave Pull",
-            filters=[
-                ["source_erp", "is", "set"],
-                ["status", "!=", "Approved"],
-                ["approver_user", "=", current_user]
-            ],
-            fields=["name"]
-        )
-        leave_pull_count = len(leave_pull_list)
-
-        # Total leave count
-        leave_count = otpl_leave_count + leave_pull_count
-
-        # Count OTPL Expense records
-        otpl_expense_count = frappe.db.count(
-            "OTPL Expense",
-            filters={"approved_by_manager": 0, "approval_manager": current_user}
-        )
-
-        # Count Expense Pull records - use get_all with count
-        expense_pull_list = frappe.get_all(
-            "Expense Pull",
-            filters=[
-                ["source_erp", "is", "set"],
-                ["approved_by_manager", "=", 0],
-                ["approval_manager_user", "=", current_user]
-            ],
-            fields=["name"]
-        )
-        expense_pull_count = len(expense_pull_list)
-
-        # Total expense count
-        expense_count = otpl_expense_count + expense_pull_count
-
-        # Count Check-in records (log_type = IN)
-        checkin_count = frappe.db.count(
-            "Employee Checkin",
-            filters={
-                "approval_required": 1,
-                "approved": 0,
-                "rejected":0,
-                "manager": current_user,
-                "log_type": "IN"
-            }
-        )
-
-        # Count Check-out records (log_type = OUT)
-        checkout_count = frappe.db.count(
-            "Employee Checkin",
-            filters={
-                "approval_required": 1,
-                "approved": 0,
-                "rejected":0,
-                "manager": current_user,
-                "log_type": "OUT"
-            }
-        )
-
-        # Calculate total
-        total_count = leave_count + expense_count + checkin_count + checkout_count
-
-        # Prepare response data
-        result = {
-            "leave": leave_count,
-            "expense": expense_count,
-            "checkin": checkin_count,
-            "checkout": checkout_count,
-            "total": total_count
-        }
+        result = pending_approval_counts()
 
         return gen_response(
             200, "Pending approval counts retrieved successfully", result
@@ -905,3 +835,143 @@ def get_employee_checkin_approved_list(start=0, page_length=10, log_type=None):
         return gen_response(500, "Not permitted to read Employee Checkin")
     except Exception as e:
         return exception_handler(e)
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def has_pending_notification_or_approval():
+    try:
+        current_user = frappe.session.user
+
+        unread_notification_exists = frappe.db.exists(
+            "ESS Notification Log",
+            {
+                "recipient": current_user,
+                "read": 0
+            }
+        )
+
+        if unread_notification_exists:
+            return gen_response(
+                200,
+                "Pending notification found",
+                {"has_pending": 1}
+            )
+
+        result = pending_approval_counts()
+        if result.get("total", 0) > 0:
+            return gen_response(
+                200,
+                "Pending approval found",
+                {"has_pending": 1}
+            )
+
+        return gen_response(
+            200,
+            "No pending notification or approval",
+            {"has_pending": 0}
+        )
+
+    except frappe.PermissionError:
+        return gen_response(403, "Not permitted")
+    except Exception as e:
+        return exception_handler(e)
+
+
+def pending_approval_counts():
+    """
+    Get total count of pending approvals for all types
+    Returns: {
+        leave: count,
+        expense: count,
+        checkin: count,
+        checkout: count,
+        total: total_count
+    }
+    """
+    try:
+        current_user = frappe.session.user
+
+        # Count OTPL Leave records
+        otpl_leave_count = frappe.db.count(
+            "OTPL Leave",
+            filters={"status": "Pending", "approver": current_user}
+        )
+
+        # Count Leave Pull records - use get_all with count
+        leave_pull_list = frappe.get_all(
+            "Leave Pull",
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "!=", "Approved"],
+                ["approver_user", "=", current_user]
+            ],
+            fields=["name"]
+        )
+        leave_pull_count = len(leave_pull_list)
+
+        # Total leave count
+        leave_count = otpl_leave_count + leave_pull_count
+
+        # Count OTPL Expense records
+        otpl_expense_count = frappe.db.count(
+            "OTPL Expense",
+            filters={"approved_by_manager": 0, "approval_manager": current_user}
+        )
+
+        # Count Expense Pull records - use get_all with count
+        expense_pull_list = frappe.get_all(
+            "Expense Pull",
+            filters=[
+                ["source_erp", "is", "set"],
+                ["approved_by_manager", "=", 0],
+                ["approval_manager_user", "=", current_user]
+            ],
+            fields=["name"]
+        )
+        expense_pull_count = len(expense_pull_list)
+
+        # Total expense count
+        expense_count = otpl_expense_count + expense_pull_count
+
+        # Count Check-in records (log_type = IN)
+        checkin_count = frappe.db.count(
+            "Employee Checkin",
+            filters={
+                "approval_required": 1,
+                "approved": 0,
+                "rejected":0,
+                "manager": current_user,
+                "log_type": "IN"
+            }
+        )
+
+        # Count Check-out records (log_type = OUT)
+        checkout_count = frappe.db.count(
+            "Employee Checkin",
+            filters={
+                "approval_required": 1,
+                "approved": 0,
+                "rejected":0,
+                "manager": current_user,
+                "log_type": "OUT"
+            }
+        )
+
+        # Calculate total
+        total_count = leave_count + expense_count + checkin_count + checkout_count
+
+        # Prepare response data
+        result = {
+            "leave": leave_count,
+            "expense": expense_count,
+            "checkin": checkin_count,
+            "checkout": checkout_count,
+            "total": total_count
+        }
+
+        return result
+
+    except frappe.PermissionError:
+        raise
+    except Exception:
+        raise

@@ -106,8 +106,9 @@ def sync_leader_location_to_remote(checkin_doc):
         )
 
 def distance_validation(doc):
-    if not doc.employee or not doc.location:
+    if not doc.employee or not doc.location or doc.auto_created_entry == 1:
         return
+    
 
     is_team_leader = frappe.db.get_value(
         "Employee",
@@ -148,8 +149,10 @@ def distance_validation(doc):
         current_lat, current_lon,
         last_lat, last_lon
     )
-    if distance > 100:
+    allow_distance = frappe.db.get_single_value("Employee Self Service Settings","distance")
+    if distance > allow_distance:
         doc.team_leader_location_changed = 1
+        doc.distance_different = distance
 
 def calculate_distance_km(lat1, lon1, lat2, lon2):
     R = 6371  # Earth radius in KM
@@ -161,6 +164,7 @@ def calculate_distance_km(lat1, lon1, lat2, lon2):
 
     a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
+    
 
     return R * c
 

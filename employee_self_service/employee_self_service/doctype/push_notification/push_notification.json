@@ -73,11 +73,10 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Employee Group",
-   "options": "OTPL Employee Group",
-   "reqd": 1
+   "options": "OTPL Employee Group"
   }
  ],
- "modified": "2026-01-31 00:48:07.710815",
+ "modified": "2026-02-05 16:25:54.224203",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Push Notification",

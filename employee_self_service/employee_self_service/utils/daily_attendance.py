@@ -388,7 +388,8 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 			"employee": employee,
 			"attendance_date": date,
 			"status": status,
-			"remarks": remarks
+			"remarks": remarks,
+			"company": frappe.db.get_value("Global Defaults","Global Defaults","default_company") or "",
 		})
 		
 		# Set late_entry and early_exit if fields exist
