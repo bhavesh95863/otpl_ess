@@ -54,7 +54,7 @@ def auto_checkout_site_employees():
 						"employee": checkin.employee,
 						"log_type": "OUT",
 						"time": now_datetime(),
-						"reason": "Auto checkout at 9:00 PM for Site location employee"
+						"auto_created_entry":1
 					})
 					checkout_doc.insert(ignore_permissions=True)
 					checkout_count += 1

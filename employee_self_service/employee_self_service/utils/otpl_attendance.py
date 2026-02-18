@@ -7,7 +7,10 @@ import requests
 def after_employee_checkin_insert(doc, method):
     # Validate Worker check-in/check-out with time adjustments
     from employee_self_service.employee_self_service.utils.worker_attendance import validate_worker_checkin
-
+    if doc.auto_created_entry == 1:
+        fetch_employee_details(doc)
+        doc.save(ignore_permissions=True)
+        return
     is_valid, message, adjusted_time = validate_worker_checkin(doc.employee, doc.log_type, doc.time)
 
     if not is_valid:

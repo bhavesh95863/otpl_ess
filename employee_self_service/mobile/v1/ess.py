@@ -1050,7 +1050,6 @@ def get_attendance_details(emp_data, year=None, month=None):
             },
         ],
     }
-    frappe.log_error(title="Attendance Details", message=attendance_details)
     return attendance_details
 
 
@@ -2275,7 +2274,7 @@ def on_holiday_event():
 def get_manager_login_status():
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["location", "reports_to"]
+            frappe.session.user, fields=["location", "reports_to","external_reporting_manager","external_report_to"]
         )
         if not emp_data.get("location") == "Site":
             return gen_response(
