@@ -4,6 +4,7 @@
 
 from __future__ import unicode_literals
 import frappe
+from employee_self_service.employee_self_service.utils.erp_sync import sync_employee_to_remote
 
 
 def sync_employee_fields_from_user_roles(doc, method):
@@ -28,13 +29,12 @@ def sync_employee_fields_from_user_roles(doc, method):
 	no_check_in = 1 if "No Check In" in user_roles else 0
 	show_sales_order = 1 if "Show Sales Order" in user_roles else 0
 	
-	# Load employee document and update fields to trigger on_update hook
-	emp_doc = frappe.get_doc("Employee", employee)
-	emp_doc.is_team_leader = is_team_leader
-	emp_doc.no_check_in = no_check_in
-	emp_doc.show_sales_order = show_sales_order
-	emp_doc.flags.ignore_permissions = True
-	emp_doc.save()
+	# Update employee fields directly via DB
+	frappe.db.set_value("Employee", employee, {
+		"is_team_leader": is_team_leader,
+		"no_check_in": no_check_in,
+		"show_sales_order": show_sales_order
+	}, update_modified=True)
 	
 	frappe.db.commit()
 	
@@ -44,3 +44,8 @@ def sync_employee_fields_from_user_roles(doc, method):
 			employee, is_team_leader, no_check_in, show_sales_order
 		)
 	)
+	
+	# Explicitly call sync_employee_to_remote since on_update hook
+	# doesn't trigger from nested doc events during User save
+	emp_doc = frappe.get_doc("Employee", employee)
+	sync_employee_to_remote(emp_doc)
