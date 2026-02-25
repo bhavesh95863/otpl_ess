@@ -49,7 +49,7 @@ class OTPLLeave(Document):
 		# Push to remote ERP if external manager is set
 		push_leave_to_remote_erp(self)
 		self.create_leave_applications()
-		
+
 		# Handle status change to Cancelled
 		if not self.get("__islocal"):
 			doc_before_save = self.get_doc_before_save()
@@ -103,6 +103,7 @@ class OTPLLeave(Document):
 					)
 
 	def make_leave_application(self, leave_type, from_date, to_date, total_days):
+		company = frappe.db.get_value("Employee", self.employee, "company")
 		leave_app = frappe.new_doc("Leave Application")
 		leave_app.employee = self.employee
 		leave_app.leave_type = leave_type
@@ -111,10 +112,11 @@ class OTPLLeave(Document):
 		leave_app.total_leave_days = total_days
 		leave_app.description = f"Auto-created from OTPL Leave: {self.name}"
 		leave_app.status = "Approved"
+		leave_app.company = company
 
 		leave_app.insert(ignore_permissions=True)
 		leave_app.submit()
-		
+
 		# Store reference to created leave application
 		self.add_leave_application_reference(leave_app.name)
 
@@ -122,7 +124,7 @@ class OTPLLeave(Document):
 		"""Add leave application reference to the list"""
 		existing_refs = self.leave_applications or ""
 		refs_list = [ref.strip() for ref in existing_refs.split(",") if ref.strip()]
-		
+
 		if leave_app_name not in refs_list:
 			refs_list.append(leave_app_name)
 			self.leave_applications = ", ".join(refs_list)
@@ -148,9 +150,9 @@ class OTPLLeave(Document):
 		"""Cancel all Leave Applications linked to this OTPL Leave"""
 		if not self.leave_applications:
 			return
-		
+
 		refs_list = [ref.strip() for ref in self.leave_applications.split(",") if ref.strip()]
-		
+
 		for leave_app_name in refs_list:
 			try:
 				if frappe.db.exists("Leave Application", leave_app_name):
@@ -167,9 +169,9 @@ class OTPLLeave(Document):
 		"""Delete all Leave Applications linked to this OTPL Leave"""
 		if not self.leave_applications:
 			return
-		
+
 		refs_list = [ref.strip() for ref in self.leave_applications.split(",") if ref.strip()]
-		
+
 		for leave_app_name in refs_list:
 			try:
 				if frappe.db.exists("Leave Application", leave_app_name):
@@ -196,11 +198,11 @@ def validate_leave_application_cancel(doc, method):
 	if doc.description and "Auto-created from OTPL Leave:" in doc.description:
 		# Extract OTPL Leave name from description
 		otpl_leave_name = doc.description.split("Auto-created from OTPL Leave:")[-1].strip()
-		
+
 		# Check if OTPL Leave exists and its status
 		if frappe.db.exists("OTPL Leave", otpl_leave_name):
 			otpl_leave_status = frappe.db.get_value("OTPL Leave", otpl_leave_name, "status")
-			
+
 			# Prevent direct cancellation unless OTPL Leave is being cancelled or deleted
 			if otpl_leave_status not in ["Cancelled"]:
 				frappe.throw(

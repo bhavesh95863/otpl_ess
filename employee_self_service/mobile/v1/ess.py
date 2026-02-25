@@ -59,7 +59,9 @@ def login(usr, pwd, unique_id=None):
         login_manager = LoginManager()
         login_manager.authenticate(usr, pwd)
         validate_employee(login_manager.user)
-        emp_data = get_employee_by_user(login_manager.user)
+        emp_data = get_employee_by_user(login_manager.user, fields=["name","company","leave_approver","status"])
+        if emp_data.get("status") != "Active":
+            return gen_response(500, "Your employee status is not active. Please contact HR.")
 
         # Register device and get unique_id before post_login
         registered_unique_id = register_device(emp_data.get("name"), unique_id)
@@ -138,7 +140,7 @@ def register_device(employee, unique_id):
         else:
             if existing_registration:
                 # Employee already has a device registered
-                gen_response(500, "Device already registered for this employee.")
+                gen_response(500, "You have cheanged your phone, please log in from your original phone")
                 return False
             else:
                 # Generate new unique_id and register
@@ -800,7 +802,9 @@ def get_dashboard():
                 "sales_order",
                 "external_sales_order",
                 "external_so",
-                "external_business_vertical"
+                "external_business_vertical",
+                "staff_type",
+                "status"
             ],
         )
         notice_board = get_notice_board(emp_data.get("name"))
@@ -864,7 +868,9 @@ def get_dashboard():
             ),
             "wms_task": wms_task,
             "allow_push_notification":allow_push_notification,
-            "allow_wpe":allow_wpe
+            "allow_wpe":allow_wpe,
+            "staff_type": emp_data.get("staff_type"),
+            "status":emp_data.get("status")
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -1210,14 +1216,19 @@ def create_employee_log(
     reason=None,
     today_work=None,
     order=None,
+    manager = None
 ):
     try:
         if not log_time:
             log_time = now_datetime().__str__()[:-7]
         emp_data = get_employee_by_user(
             frappe.session.user,
-            fields=["name", "default_shift", "sales_order", "reports_to"],
+            fields=["name", "default_shift", "sales_order", "reports_to","staff_type"],
         )
+        approval_required = 0
+        if emp_data.get("staff_type") == "Driver":
+            approval_required = 1
+        
 
         order = emp_data.get("sales_order") or None
 
@@ -1233,6 +1244,8 @@ def create_employee_log(
                 today_work=today_work,
                 order=order,
                 requested_from=emp_data.get("reports_to"),
+                manager=manager,
+                approval_required = approval_required
             )
         ).insert(ignore_permissions=True)
         # update_shift_last_sync(emp_data)
@@ -3025,6 +3038,16 @@ def get_user_list():
     except Exception as e:
         return exception_handler(e)
 
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_all_users():
+    try:
+        user_list = frappe.get_all("User", ["name", "full_name", "user_image"])
+        return gen_response(200, "User List getting Successfully", user_list)
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted read user")
+    except Exception as e:
+        return exception_handler(e)
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])

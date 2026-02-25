@@ -412,12 +412,17 @@ def get_employee_checkin_approval_list(start=0, page_length=10, log_type=None):
                 "reason",
                 "today_work",
                 "location",
+                "staff_type",
+                "address"
             ],
             start=start,
             page_length=page_length,
             order_by="modified desc",
             filters=filters,
         )
+        for item in checkin_list:
+            item["status"] = "Pending"
+
         return gen_response(
             200, "Checkin approval list retrieved successfully", checkin_list
         )
@@ -437,6 +442,7 @@ def approve_employee_checkin():
     try:
         data = json.loads(frappe.request.get_data())
         checkin_name = data.get("name")
+        updated_time = data.get("time")
 
         if not checkin_name:
             return gen_response(500, "Checkin name is required")
@@ -456,8 +462,9 @@ def approve_employee_checkin():
         if checkin_doc.approved == 1:
             return gen_response(500, "Check-in is already approved")
 
-        # Set approved field
+        # Set approved field and updated time if provided
         checkin_doc.approved = 1
+        checkin_doc.time = updated_time if updated_time else checkin_doc.time
         checkin_doc.save(ignore_permissions=True)
 
         # Process attendance for the employee on that day only if it's not the current day
@@ -582,6 +589,7 @@ def get_pending_approval_counts():
         expense: count,
         checkin: count,
         checkout: count,
+        site_expense_pending: count,
         total: total_count
     }
     """
@@ -838,6 +846,124 @@ def get_employee_checkin_approved_list(start=0, page_length=10, log_type=None):
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
+def get_fund_transfer_approval_list(start=0, page_length=10):
+    """
+    Get Skilled Additional Labor Fund Transfer records pending fund receipt
+    Filters: fund_transferred=1, fund_received=0, docstatus=1
+    Returns list with id and key-value detail pairs for mobile rendering
+    """
+    try:
+        emp_data = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, ["name", "employee_name"], as_dict=True)
+        fund_transfer_list = frappe.get_all(
+            "Skilled Additional Labor Fund Transfer",
+            fields=[
+                "name",
+                "sales_order",
+                "actual_amount_to_transfer as 'amount'",
+                "billing_agent_name as 'site_manager'",
+                "fund_trasnfer_approved_by_name as 'fund_transfer_approver'",
+            ],
+            filters={
+                "fund_transferred": 1,
+                "fund_received": 0,
+                "docstatus": 1,
+                "employee": emp_data.get("name")
+            },
+            start=start,
+            page_length=page_length,
+            order_by="modified desc",
+        )
+
+        return gen_response(
+            200,
+            "Fund transfer approval list retrieved successfully",
+            fund_transfer_list,
+        )
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to read Fund Transfer records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def approve_fund_transfer():
+    """
+    Mark fund as received for Skilled Additional Labor Fund Transfer
+    Accepts: name
+    Sets fund_received=1
+    """
+    try:
+        data = json.loads(frappe.request.get_data())
+        transfer_name = data.get("name")
+
+        if not transfer_name:
+            return gen_response(500, "Fund transfer name is required")
+
+        if not frappe.db.exists("Skilled Additional Labor Fund Transfer", transfer_name):
+            return gen_response(500, "Fund transfer record does not exist")
+
+        doc = frappe.get_doc("Skilled Additional Labor Fund Transfer", transfer_name)
+
+        if doc.fund_received == 1:
+            return gen_response(500, "Fund is already marked as received")
+
+        if doc.fund_transferred != 1:
+            return gen_response(500, "Fund has not been transferred yet")
+
+        doc.fund_received = 1
+        doc.save(ignore_permissions=True)
+
+        return gen_response(200, "Action completed successfully")
+
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to update Fund Transfer records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def add_fund_transfer_comment():
+    """
+    Add a comment to a Skilled Additional Labor Fund Transfer record
+    Accepts: name, content
+    """
+    try:
+        data = json.loads(frappe.request.get_data())
+        transfer_name = data.get("name")
+        content = data.get("content")
+
+        if not transfer_name:
+            return gen_response(500, "Fund transfer name is required")
+
+        if not content:
+            return gen_response(500, "Comment content is required")
+
+        if not frappe.db.exists("Skilled Additional Labor Fund Transfer", transfer_name):
+            return gen_response(500, "Fund transfer record does not exist")
+
+        from frappe.desk.form.utils import add_comment
+
+        add_comment(
+            reference_doctype="Skilled Additional Labor Fund Transfer",
+            reference_name=transfer_name,
+            content=content,
+            comment_email=frappe.session.user,
+        )
+
+        return gen_response(200, "Comment added successfully")
+
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to comment on Fund Transfer records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
 def has_pending_notification_or_approval():
     try:
         current_user = frappe.session.user
@@ -885,6 +1011,7 @@ def pending_approval_counts():
         expense: count,
         checkin: count,
         checkout: count,
+        site_expense_pending: count,
         total: total_count
     }
     """
@@ -957,8 +1084,20 @@ def pending_approval_counts():
             }
         )
 
+        # Count Skilled Additional Labor Fund Transfer (site expense) pending receipt
+        emp_name = frappe.db.get_value("Employee", {"user_id": current_user}, "name")
+        site_expense_pending_count = frappe.db.count(
+            "Skilled Additional Labor Fund Transfer",
+            filters={
+                "fund_transferred": 1,
+                "fund_received": 0,
+                "docstatus": 1,
+                "employee": emp_name
+            }
+        ) if emp_name else 0
+
         # Calculate total
-        total_count = leave_count + expense_count + checkin_count + checkout_count
+        total_count = leave_count + expense_count + checkin_count + checkout_count + site_expense_pending_count
 
         # Prepare response data
         result = {
@@ -966,6 +1105,7 @@ def pending_approval_counts():
             "expense": expense_count,
             "checkin": checkin_count,
             "checkout": checkout_count,
+            "site_expense_pending": site_expense_pending_count,
             "total": total_count
         }
 

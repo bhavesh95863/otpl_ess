@@ -2,6 +2,7 @@ import frappe
 import json
 import math
 import requests
+from frappe import _
 
 
 def after_employee_checkin_insert(doc, method):
@@ -111,16 +112,6 @@ def sync_leader_location_to_remote(checkin_doc):
 def distance_validation(doc):
     if not doc.employee or not doc.location or doc.auto_created_entry == 1:
         return
-    
-
-    is_team_leader = frappe.db.get_value(
-        "Employee",
-        doc.employee,
-        "is_team_leader"
-    )
-
-    if not is_team_leader:
-        return
 
     last_checkin = frappe.db.get_all(
         "Employee Checkin",
@@ -148,6 +139,15 @@ def distance_validation(doc):
     if address:
         doc.address = address
 
+    is_team_leader = frappe.db.get_value(
+        "Employee",
+        doc.employee,
+        "is_team_leader"
+    )
+
+    if not is_team_leader:
+        return
+
     distance = calculate_distance_km(
         current_lat, current_lon,
         last_lat, last_lon
@@ -167,7 +167,7 @@ def calculate_distance_km(lat1, lon1, lat2, lon2):
 
     a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
-    
+
 
     return R * c
 
@@ -321,3 +321,46 @@ def get_address_from_lat_long(lat, lon):
         )
 
     return None
+
+def validate(doc,method):
+    emp = frappe.db.get_value(
+        "Employee",
+        doc.employee,
+        ["location","staff_type","is_team_leader","employee_availability"],as_dict=True
+    )
+    if (
+        emp.location == "Site" and emp.staff_type == "Worker" and emp.is_team_leader != 1 and
+        emp.employee_availability == "On Leave"
+    ):
+        frappe.throw(_("You are on leave today"))
+
+    # Validate: each employee cannot have more than one IN or OUT log on the same date
+    if doc.time and doc.log_type in ("IN", "OUT"):
+        from frappe.utils import getdate, add_days, get_datetime_str
+        checkin_date = getdate(doc.time)
+        day_start = get_datetime_str(checkin_date)
+        day_end = get_datetime_str(add_days(checkin_date, 1))
+
+        conditions = """employee = %(employee)s AND log_type = %(log_type)s
+            AND time >= %(day_start)s AND time < %(day_end)s"""
+        query_params = {
+            "employee": doc.employee,
+            "log_type": doc.log_type,
+            "day_start": day_start,
+            "day_end": day_end,
+        }
+        if not doc.is_new():
+            conditions += " AND name != %(name)s"
+            query_params["name"] = doc.name
+
+        existing = frappe.db.sql(
+            "SELECT COUNT(*) FROM `tabEmployee Checkin` WHERE " + conditions,
+            query_params
+        )[0][0]
+
+        if existing:
+            frappe.throw(
+                _("Employee {0} already has a {1} record for {2}. Only one {1} entry is allowed per day.").format(
+                    doc.employee, doc.log_type, checkin_date
+                )
+            )

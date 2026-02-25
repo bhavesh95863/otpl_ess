@@ -118,13 +118,15 @@ doc_events = {
         "after_insert": "employee_self_service.mobile.v1.ess.send_notification_for_task_assign"
     },
     "Employee Checkin": {
-        "after_insert": "employee_self_service.employee_self_service.utils.otpl_attendance.after_employee_checkin_insert"
+        "after_insert": "employee_self_service.employee_self_service.utils.otpl_attendance.after_employee_checkin_insert",
+        "validate": "employee_self_service.employee_self_service.utils.otpl_attendance.validate"
     },
     "Employee": {
         "on_update": [
             "employee_self_service.employee_self_service.utils.employee_worker_sync.update_worker_fields_from_manager",
             "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
         ],
+        "validate": "employee_self_service.employee_self_service.utils.employee_worker_sync.sync_worker_fields_before_save",
         "before_validate": "employee_self_service.employee_self_service.utils.employee.validate_employee"
     },
     "Employee Pull": {

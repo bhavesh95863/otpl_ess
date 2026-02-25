@@ -21,6 +21,7 @@
   "section_break_yu4ls",
   "location_validate",
   "check_in_with_location",
+  "default_reporting_manager",
   "distance",
   "column_break_jfldd",
   "check_in_with_image",
@@ -177,10 +178,17 @@
    "fieldtype": "Float",
    "label": "Team Leader Location Change Threshold(KM)",
    "precision": "2"
+  },
+  {
+   "description": "This employee is set as the reporting manager when we mark the employee as On Leave.",
+   "fieldname": "default_reporting_manager",
+   "fieldtype": "Link",
+   "label": "Default Reporting Manager",
+   "options": "Employee"
   }
  ],
  "issingle": 1,
- "modified": "2026-02-15 17:19:22.724108",
+ "modified": "2026-02-25 20:40:53.474591",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",
