@@ -11,8 +11,9 @@ from employee_self_service.mobile.v1.api_utils import (
 from erpnext.hr.doctype.employee.employee import (
     get_holiday_list_for_employee,
 )
-from frappe.utils import getdate, cint
+from frappe.utils import getdate, cint,now
 from calendar import monthrange
+from frappe.handler import upload_file
 
 
 @frappe.whitelist()
@@ -67,7 +68,7 @@ def get_attendance_list_by_date(date=None):
             attendance["employee_checkin_detail"] = employee_checkin_detail
             # Remove unnecessary field
             attendance.pop("name", None)
-        
+
         # If no attendance but checkins exist, create a response
         if not attendance_list and employee_checkin_detail:
             attendance_list = [{
@@ -77,7 +78,7 @@ def get_attendance_list_by_date(date=None):
                 "late_entry": 0,
                 "employee_checkin_detail": employee_checkin_detail
             }]
-            
+
         return gen_response(
             200, "Attendance data retrieved successfully", attendance_list if attendance_list else []
         )
@@ -179,3 +180,67 @@ def build_attendance_data(year, month, days_in_month, attendance_records, holida
             attendance_data[date_str] = "Holiday" if date in holidays else "No Record"
 
     return attendance_data
+
+# Other Employee Attendance APIs
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_other_employee_list():
+    try:
+        emp_data = get_employee_by_user(
+            frappe.session.user, fields=["name"]
+        )
+        if not emp_data:
+            return gen_response(404, "Employee not found")
+
+        other_employees = frappe.get_all("Employee",filters={"reports_to": emp_data["name"],"phone_not_working":1,"status":"Active"}, fields=["name", "employee_name"])
+
+        return gen_response(
+            200, "Other employee list fetched successfully", other_employees
+        )
+    except Exception as e:
+        return exception_handler(e)
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def create_other_employee_attendance(
+    log_type,
+    employee,
+    location=None,
+    log_time=None,
+    reason=None,
+):
+    try:
+        if not log_time:
+            log_time = now()
+        emp_data = get_employee_by_user(
+            frappe.session.user, fields=["name"]
+        )
+        if not emp_data:
+            return gen_response(404, "Employee not found")
+
+        log_doc = frappe.get_doc(
+            dict(
+                doctype="Other Employee Attendance",
+                reporting_manager=emp_data.get("name"),
+                employee = employee,
+                attendance_type=log_type,
+                attendance_datetime=log_time,
+                location=location,
+                remark=reason
+            )
+        ).insert(ignore_permissions=True)
+
+        if "file" in frappe.request.files:
+            file = upload_file()
+            file.attached_to_doctype = "Other Employee Attendance"
+            file.attached_to_name = log_doc.name
+            file.attached_to_field = "attachment"
+            file.save(ignore_permissions=True)
+            log_doc.attachment = file.get("file_url")
+            log_doc.save(ignore_permissions=True)
+
+        return gen_response(
+            200, "Other employee attendance recorded successfully", log_doc.as_dict()
+        )
+    except Exception as e:
+        return exception_handler(e)

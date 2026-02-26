@@ -1,5 +1,10 @@
 frappe.ui.form.on('Employee', {
     refresh(frm) {
+        if (frappe.session.user === "admin@oberoithermit.com") {
+            frm.set_df_property("phone_not_working", "hidden", 0);
+        } else {
+            frm.set_df_property("phone_not_working", "hidden", 1);
+        }
         if(frm.doc.is_team_leader == 0 && frm.doc.show_sales_order == 0) {
             frm.set_df_property("external_sales_order", 'hidden', 1);
             frm.set_df_property("external_sales_order", 'read_only', 1);

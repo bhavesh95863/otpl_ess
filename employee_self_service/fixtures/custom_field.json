@@ -207,7 +207,7 @@
   "in_list_view": 0,
   "in_standard_filter": 0,
   "insert_after": "log_type",
-  "label": "Team Leader Location Changed",
+  "label": "Location Changed",
   "length": 0,
   "modified": "2026-01-31 21:04:49.379012",
   "name": "Employee Checkin-team_leader_location_changed",

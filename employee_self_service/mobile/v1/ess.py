@@ -804,7 +804,8 @@ def get_dashboard():
                 "external_so",
                 "external_business_vertical",
                 "staff_type",
-                "status"
+                "status",
+                "is_team_leader"
             ],
         )
         notice_board = get_notice_board(emp_data.get("name"))
@@ -870,6 +871,7 @@ def get_dashboard():
             "allow_push_notification":allow_push_notification,
             "allow_wpe":allow_wpe,
             "staff_type": emp_data.get("staff_type"),
+            "is_team_leader": emp_data.get("is_team_leader"),
             "status":emp_data.get("status")
         }
 
@@ -1228,7 +1230,7 @@ def create_employee_log(
         approval_required = 0
         if emp_data.get("staff_type") == "Driver":
             approval_required = 1
-        
+
 
         order = emp_data.get("sales_order") or None
 
@@ -3042,7 +3044,8 @@ def get_user_list():
 @ess_validate(methods=["GET"])
 def get_all_users():
     try:
-        user_list = frappe.get_all("User", ["name", "full_name", "user_image"])
+        filters = ["User","name","in",["amitoberoi@oberoithermit.com","shifali.oberoi@oberoithermit.com"]]
+        user_list = frappe.get_all("User", filters=filters, fields=["name", "full_name", "user_image"])
         return gen_response(200, "User List getting Successfully", user_list)
     except frappe.PermissionError:
         return gen_response(500, "Not permitted read user")

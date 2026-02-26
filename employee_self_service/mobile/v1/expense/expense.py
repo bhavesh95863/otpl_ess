@@ -22,9 +22,6 @@ def create_expense(**data):
         )
         if not len(emp_data) >= 1:
             return gen_response(500, "Employee does not exists")
-        if not emp_data.get("external_so"):
-            if not emp_data.get("sales_order"):
-                return gen_response(500, "Please assign sales order in employee master to create expense")
         msg = ""
         if data.get("name"):
             expense_doc = frappe.get_doc("OTPL Expense",data.get("name"))

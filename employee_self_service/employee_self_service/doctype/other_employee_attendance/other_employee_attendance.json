@@ -1,0 +1,90 @@
+{
+ "creation": "2026-02-26 20:59:10.001969",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "reporting_manager",
+  "employee",
+  "attendance_datetime",
+  "column_break_4",
+  "attendance_type",
+  "attachment",
+  "location",
+  "section_break_8",
+  "remark"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employee",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "reporting_manager",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Reporting Manager",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "attendance_datetime",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Attendance Datetime"
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "attendance_type",
+   "fieldtype": "Select",
+   "label": "Attendance Type",
+   "options": "IN\nOUT"
+  },
+  {
+   "fieldname": "attachment",
+   "fieldtype": "Attach",
+   "label": "Attachment"
+  },
+  {
+   "fieldname": "location",
+   "fieldtype": "Data",
+   "label": "Location"
+  },
+  {
+   "fieldname": "section_break_8",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "remark",
+   "fieldtype": "Small Text",
+   "label": "Remark"
+  }
+ ],
+ "modified": "2026-02-26 21:08:08.471631",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "Other Employee Attendance",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

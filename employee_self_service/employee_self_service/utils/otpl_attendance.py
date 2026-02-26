@@ -113,6 +113,27 @@ def distance_validation(doc):
     if not doc.employee or not doc.location or doc.auto_created_entry == 1:
         return
 
+    employee = frappe.db.get_value(
+        "Employee",
+        doc.employee,
+        ["staff_type", "location","is_team_leader"],
+        as_dict=True
+    )
+
+    if not employee:
+        return
+
+    staff_type = employee.get("staff_type")
+    employee_location_type = employee.get("location")
+    is_team_leader = employee.get("is_team_leader")
+
+    if not (
+        (is_team_leader == 1) or
+        (staff_type == "Worker" and employee_location_type == "Site") or
+        (staff_type == "Field")
+    ):
+        return
+
     last_checkin = frappe.db.get_all(
         "Employee Checkin",
         filters={
@@ -138,15 +159,6 @@ def distance_validation(doc):
     address = get_address_from_lat_long(current_lat, current_lon)
     if address:
         doc.address = address
-
-    is_team_leader = frappe.db.get_value(
-        "Employee",
-        doc.employee,
-        "is_team_leader"
-    )
-
-    if not is_team_leader:
-        return
 
     distance = calculate_distance_km(
         current_lat, current_lon,
