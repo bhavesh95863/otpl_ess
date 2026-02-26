@@ -17,7 +17,6 @@ class OtherEmployeeAttendance(Document):
 			"employee": self.employee,
 			"time": self.attendance_datetime,
 			"log_type": self.attendance_type,
-			"location": self.location,
-			"approval_required": 1
+			"location": self.location
 		})
 		employee_checkin.insert(ignore_permissions=True)

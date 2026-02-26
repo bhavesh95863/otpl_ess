@@ -1218,6 +1218,7 @@ def create_employee_log(
     reason=None,
     today_work=None,
     order=None,
+    employee=None,
     manager = None
 ):
     try:
@@ -1237,7 +1238,7 @@ def create_employee_log(
         log_doc = frappe.get_doc(
             dict(
                 doctype="Employee Checkin",
-                employee=emp_data.get("name"),
+                employee=emp_data.get("name") if not employee else employee,
                 log_type=log_type,
                 time=log_time,
                 location=location,
@@ -1247,7 +1248,8 @@ def create_employee_log(
                 order=order,
                 requested_from=emp_data.get("reports_to"),
                 manager=manager,
-                approval_required = approval_required
+                approval_required = approval_required,
+                created_by_manager = 1 if employee else 0
             )
         ).insert(ignore_permissions=True)
         # update_shift_last_sync(emp_data)
@@ -1285,7 +1287,7 @@ def attach_checkin_image(checkin_id):
 
         # Verify the checkin belongs to the current user's employee
         emp_data = get_employee_by_user(frappe.session.user)
-        if checkin_doc.employee != emp_data.get("name"):
+        if checkin_doc.employee != emp_data.get("name") and not checkin_doc.created_by_manager:
             return gen_response(403, "You don't have permission to attach image to this checkin")
 
         # Check if file is in request

@@ -464,6 +464,16 @@ def approve_employee_checkin():
 
         # Set approved field and updated time if provided
         checkin_doc.approved = 1
+        if checkin_doc.non_site_checkin_approver == 1:
+            employee_details = frappe.db.get_value(
+                "Employee",
+                checkin_doc.employee,
+                ["name","business_vertical","sales_order","external_sales_order",
+                "external_order","external_so","external_business_vertical","staff_type","location","external_reporting_manager","external_report_to","reports_to"],as_dict=True)
+            if employee_details.external_sales_order:
+                checkin_doc.sales_order = employee_details.external_order
+            else:
+                checkin_doc.sales_order = employee_details.sales_order
         checkin_doc.time = updated_time if updated_time else checkin_doc.time
         checkin_doc.save(ignore_permissions=True)
 
@@ -819,7 +829,8 @@ def get_employee_checkin_approved_list(start=0, page_length=10, log_type=None):
                 "today_work",
                 "location",
                 "approved",
-                "rejected"
+                "rejected",
+                "address"
             ],
             start=start,
             page_length=page_length,

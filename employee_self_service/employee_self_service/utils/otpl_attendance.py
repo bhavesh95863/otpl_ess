@@ -30,11 +30,15 @@ def after_employee_checkin_insert(doc, method):
         doc.approval_required = 1
         doc.manager = frappe.db.get_value("Employee", doc.requested_from, "user_id")
         doc.save(ignore_permissions=True)
+    
 
     # Sync to remote ERPs as Leader Location if employee is team leader
     sync_leader_location_to_remote(doc)
     distance_validation(doc)
     fetch_employee_details(doc)
+    if not doc.location == "Site" and doc.sales_order:
+        doc.approval_required = 1
+        doc.non_site_checkin_approver = 1
     doc.save(ignore_permissions=True)
 
 
