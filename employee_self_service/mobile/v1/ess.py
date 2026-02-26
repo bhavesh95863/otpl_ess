@@ -817,7 +817,7 @@ def get_dashboard():
         user_roles = set(frappe.get_roles(user))
         wms_task =  1 if user_roles.intersection(wms_roles) else 0
         allow_push_notification = 1 if "System Manager" in user_roles else 0
-        allow_wpe = 1 if user_roles.intersection({"WPE User", "WPE Manager", "W Admin"}) else 0
+        allow_wpe = 1 if user_roles.intersection({"WPE User", "WPE Manager", "WPE Admin"}) else 0
 
         # Process today's logs to determine last log type and time
         last_log_type = "OUT"
