@@ -124,7 +124,8 @@ doc_events = {
     "Employee": {
         "on_update": [
             "employee_self_service.employee_self_service.utils.employee_worker_sync.update_worker_fields_from_manager",
-            "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote"
+            "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_to_remote",
+            "employee_self_service.employee_self_service.doctype.employee_device_registration.employee_device_registration.update_device_registration_status"
         ],
         "validate": "employee_self_service.employee_self_service.utils.employee_worker_sync.sync_worker_fields_before_save",
         "before_validate": "employee_self_service.employee_self_service.utils.employee.validate_employee"

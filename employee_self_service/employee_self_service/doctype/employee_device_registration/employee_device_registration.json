@@ -6,7 +6,10 @@
  "field_order": [
   "employee",
   "unique_id",
-  "employee_name"
+  "employee_name",
+  "column_break_4",
+  "status",
+  "app_version"
  ],
  "fields": [
   {
@@ -28,9 +31,25 @@
    "fieldname": "employee_name",
    "fieldtype": "Data",
    "label": "Employee Name"
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "\nActive\nLeft",
+   "read_only": 1
+  },
+  {
+   "fieldname": "app_version",
+   "fieldtype": "Read Only",
+   "label": "App Version"
   }
  ],
- "modified": "2025-04-03 13:10:11.428963",
+ "modified": "2026-02-28 02:45:56.083928",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Device Registration",

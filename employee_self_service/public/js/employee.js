@@ -1,6 +1,6 @@
 frappe.ui.form.on('Employee', {
     refresh(frm) {
-        if (frappe.session.user === "admin@oberoithermit.com") {
+        if (frappe.session.user === "admin@oberoithermit.com" || frappe.user.has_role("System Manager")) {
             frm.set_df_property("phone_not_working", "hidden", 0);
         } else {
             frm.set_df_property("phone_not_working", "hidden", 1);
@@ -17,6 +17,11 @@ frappe.ui.form.on('Employee', {
             frm.add_custom_button(__('ESS Information'), function () {
                 show_ess_information(frm);
             }, __('ESS'));
+        }
+        if(frm.doc.sales_order) {
+            frm.set_df_property("business_vertical", 'read_only', 1);
+        } else {
+            frm.set_df_property("business_vertical", 'read_only', 0);
         }
     },
     location(frm) {
@@ -60,14 +65,7 @@ frappe.ui.form.on('Employee', {
 
 function toggle_employee_availability(frm) {
 
-    let show_field =
-        frm.doc.location === "Site" &&
-        frm.doc.staff_type === "Worker" &&
-        !frm.doc.is_team_leader;
-
-    if (show_field && frm.doc.company === "Oberoi Thermit Pvt. Ltd.") {
-        show_field = frm.doc.business_vertical === "USFD TESTING";
-    }
+    let show_field = frm.doc.location === "Site"
     if (frm.doc.employee_availability == "On Leave") {
         show_field = true;
     }

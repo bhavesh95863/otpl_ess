@@ -30,7 +30,7 @@ def after_employee_checkin_insert(doc, method):
         doc.approval_required = 1
         doc.manager = frappe.db.get_value("Employee", doc.requested_from, "user_id")
         doc.save(ignore_permissions=True)
-    
+
 
     # Sync to remote ERPs as Leader Location if employee is team leader
     sync_leader_location_to_remote(doc)
@@ -39,6 +39,7 @@ def after_employee_checkin_insert(doc, method):
     if not doc.location == "Site" and doc.sales_order:
         doc.approval_required = 1
         doc.non_site_checkin_approver = 1
+        doc.manager = frappe.db.get_value("Employee",doc.reports_to,"user_id")
     doc.save(ignore_permissions=True)
 
 
@@ -117,27 +118,6 @@ def distance_validation(doc):
     if not doc.employee or not doc.location or doc.auto_created_entry == 1:
         return
 
-    employee = frappe.db.get_value(
-        "Employee",
-        doc.employee,
-        ["staff_type", "location","is_team_leader"],
-        as_dict=True
-    )
-
-    if not employee:
-        return
-
-    staff_type = employee.get("staff_type")
-    employee_location_type = employee.get("location")
-    is_team_leader = employee.get("is_team_leader")
-
-    if not (
-        (is_team_leader == 1) or
-        (staff_type == "Worker" and employee_location_type == "Site") or
-        (staff_type == "Field")
-    ):
-        return
-
     last_checkin = frappe.db.get_all(
         "Employee Checkin",
         filters={
@@ -163,6 +143,27 @@ def distance_validation(doc):
     address = get_address_from_lat_long(current_lat, current_lon)
     if address:
         doc.address = address
+
+    employee = frappe.db.get_value(
+        "Employee",
+        doc.employee,
+        ["staff_type", "location","is_team_leader"],
+        as_dict=True
+    )
+
+    if not employee:
+        return
+
+    staff_type = employee.get("staff_type")
+    employee_location_type = employee.get("location")
+    is_team_leader = employee.get("is_team_leader")
+
+    if not (
+        (is_team_leader == 1) or
+        (staff_type == "Worker" and employee_location_type == "Site") or
+        (staff_type == "Field")
+    ):
+        return
 
     distance = calculate_distance_km(
         current_lat, current_lon,
@@ -266,9 +267,10 @@ def fetch_employee_details(doc):
         "Employee",
         doc.employee,
         ["name","business_vertical","sales_order","external_sales_order",
-        "external_order","external_so","external_business_vertical","staff_type","location","external_reporting_manager","external_report_to","reports_to"],as_dict=True)
+        "external_order","external_so","external_business_vertical","staff_type","location","external_reporting_manager","external_report_to","reports_to","status","is_team_leader"],as_dict=True)
 
-
+    if employee_details.status != "Active":
+        frappe.throw("Employee is not active")
     # field mapping
     if employee_details.external_sales_order:
         doc.sales_order = employee_details.external_order
@@ -284,6 +286,8 @@ def fetch_employee_details(doc):
         doc.reports_to = employee_details.external_report_to
     else:
         doc.reports_to = employee_details.reports_to
+        doc.reports_to_name = frappe.db.get_value("Employee", employee_details.reports_to, "employee_name")
+    doc.team_leader = employee_details.is_team_leader
 
     doc.employee_location = employee_details.location
     doc.staff_type = employee_details.staff_type
