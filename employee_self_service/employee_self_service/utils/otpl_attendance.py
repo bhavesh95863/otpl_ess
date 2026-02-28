@@ -131,18 +131,19 @@ def distance_validation(doc):
         limit=1
     )
 
-    if not last_checkin:
-        return
-
     try:
         current_lat, current_lon = map(float, doc.location.split(","))
         last_lat, last_lon = map(float, last_checkin[0].location.split(","))
     except Exception:
         return
-
     address = get_address_from_lat_long(current_lat, current_lon)
     if address:
         doc.address = address
+
+    if not last_checkin:
+        return
+
+
 
     employee = frappe.db.get_value(
         "Employee",
@@ -351,7 +352,7 @@ def validate(doc,method):
     if emp.employee_availability == "On Leave":
         frappe.throw(_("आप छुट्टी पर हैं, ड्यूटी पर वापस आने के लिए सुश्री लतिका भाटिया (01204010000) से संपर्क करें।."))
 
-    if not frappe.db.exists("Employee Device Registration",{"name":doc.employee}):
+    if not frappe.db.exists("Employee Device Registration",{"employee":doc.employee}):
         frappe.throw(_("Your device is not registered. Please log out of the app and log in again."))
 
     # Validate: each employee cannot have more than one IN or OUT log on the same date

@@ -31,7 +31,10 @@
   "version",
   "update_version_forcefully",
   "section_break_8pigx",
-  "ess_language"
+  "ess_language",
+  "section_break_28",
+  "apple_version",
+  "android_version"
  ],
  "fields": [
   {
@@ -185,10 +188,24 @@
    "fieldtype": "Link",
    "label": "Default Reporting Manager",
    "options": "Employee"
+  },
+  {
+   "fieldname": "section_break_28",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "apple_version",
+   "fieldtype": "Data",
+   "label": "Apple Version"
+  },
+  {
+   "fieldname": "android_version",
+   "fieldtype": "Data",
+   "label": "Android Version"
   }
  ],
  "issingle": 1,
- "modified": "2026-02-25 20:40:53.474591",
+ "modified": "2026-02-28 18:48:58.332058",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",

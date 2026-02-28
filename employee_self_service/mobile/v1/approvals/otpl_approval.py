@@ -413,7 +413,8 @@ def get_employee_checkin_approval_list(start=0, page_length=10, log_type=None):
                 "today_work",
                 "location",
                 "staff_type",
-                "address"
+                "address",
+                "non_site_checkin_approver"
             ],
             start=start,
             page_length=page_length,
@@ -422,6 +423,8 @@ def get_employee_checkin_approval_list(start=0, page_length=10, log_type=None):
         )
         for item in checkin_list:
             item["status"] = "Pending"
+            if item.get("non_site_checkin_approver") == 1:
+                item["site_checkin_message"] = "EMPLOYEE IS SHOWN WORKING IN SALES ORDER .., PLEASE CHECK IF THIS IS CORRECT. IF NOT, THEN GET IT CHANGED"
 
         return gen_response(
             200, "Checkin approval list retrieved successfully", checkin_list

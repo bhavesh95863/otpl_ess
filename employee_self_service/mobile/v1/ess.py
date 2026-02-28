@@ -877,7 +877,9 @@ def get_dashboard():
             "allow_wpe":allow_wpe,
             "staff_type": emp_data.get("staff_type"),
             "is_team_leader": is_team_leader,
-            "status":emp_data.get("status")
+            "status":emp_data.get("status"),
+            "android_version":settings.get("android_version"),
+            "apple_version":settings.get("apple_version")
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -3056,7 +3058,7 @@ def get_user_list():
 @ess_validate(methods=["GET"])
 def get_all_users():
     try:
-        filters = ["User","name","in",["amitoberoi@oberoithermit.com","shifali.oberoi@oberoithermit.com"]]
+        filters = [["User","name","in",["amitoberoi@oberoithermit.com","shifali.oberoi@oberoithermit.com"]]]
         user_list = frappe.get_all("User", filters=filters, fields=["name", "full_name", "user_image"])
         return gen_response(200, "User List getting Successfully", user_list)
     except frappe.PermissionError:

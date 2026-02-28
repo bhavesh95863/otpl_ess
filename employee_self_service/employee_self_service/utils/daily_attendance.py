@@ -7,25 +7,20 @@ import frappe
 from frappe.utils import getdate, get_datetime, add_days, get_first_day, time_diff_in_hours
 from datetime import datetime
 
+
 @frappe.whitelist()
 def process_daily_attendance():
 	"""
-	Scheduled job to process attendance for all employees
-	Runs at midnight for previous day
+	Scheduled job to process attendance for all employees.
+	Runs at midnight for previous day.
+
+	Simplified Rules:
+	1. Any employee with no Employee Checkin for the day → Absent
+	2. Worker + Site: checkin exists → Present (no checkout/hours needed)
+	3. Worker + NOT Site: uses Allowed Overtime rules (see run_worker_attendance)
+	4. Non-Worker: existing ESS Location-based rules for late/half-day
 	"""
 	yesterday = add_days(getdate(), -1)
-
-	# Check if yesterday is a holiday based on Global Defaults company
-	if is_holiday_for_company(yesterday):
-		return {
-			"date": str(yesterday),
-			"message": "Holiday - Attendance processing skipped",
-			"processed": 0,
-			"absent": 0,
-			"skipped": 0,
-			"errors": 0,
-			"total": 0
-		}
 
 	employees = frappe.get_all("Employee",
 		filters={"status": "Active"},
@@ -39,7 +34,10 @@ def process_daily_attendance():
 
 	for emp in employees:
 		try:
-			result = process_employee_attendance(emp.name, emp.location, yesterday, emp.get("no_check_in", 0), emp.get("staff_type"))
+			result = process_employee_attendance(
+				emp.name, emp.location, yesterday,
+				emp.get("no_check_in", 0), emp.get("staff_type")
+			)
 
 			if result == "Processed":
 				processed_count += 1
@@ -75,10 +73,17 @@ def process_daily_attendance():
 
 def process_employee_attendance(employee, location, date, no_check_in=0, staff_type=None):
 	"""
-	Process attendance for a single employee
+	Process attendance for a single employee.
 	Returns: Processed, Skipped, Absent, or Error
+
+	Routing:
+	- Attendance or leave application already exists → Skipped
+	- Worker employees → delegated to run_worker_attendance
+	- no_check_in employees → auto Present
+	- Non-Worker on holiday → Skipped
+	- Non-Worker, non-Site → check-in + check-out required, ESS Location late/early rules, working hours
 	"""
-	# Check if attendance already exists from leave application
+	# Check if attendance already exists (submitted) or leave application exists
 	existing_attendance = frappe.db.get_value(
 		"Attendance",
 		{
@@ -86,34 +91,34 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			"attendance_date": date,
 			"docstatus": 1
 		},
-		["name", "leave_application"],
-		as_dict=True
+		"name"
 	)
 
 	if existing_attendance:
-		if existing_attendance.leave_application:
-			# Leave-based attendance exists, skip
-			return "Skipped"
-		else:
-			# Cancel non-leave attendance to reprocess
-			try:
-				att_doc = frappe.get_doc("Attendance", existing_attendance.name)
-				att_doc.cancel()
-				frappe.db.commit()
-			except Exception as e:
-				frappe.log_error(
-					title="Cancel Existing Attendance: {0}".format(employee),
-					message=frappe.get_traceback()
-				)
+		# Attendance already created for this day, skip
+		return "Skipped"
 
-	# Check for Worker-specific attendance processing
-	from employee_self_service.employee_self_service.utils.worker_attendance import process_worker_attendance_with_hours
+	# Check if leave application exists for this day
+	existing_leave = frappe.db.exists(
+		"Leave Application",
+		{
+			"employee": employee,
+			"from_date": ["<=", date],
+			"to_date": [">=", date],
+			"docstatus": 1
+		}
+	)
 
-	worker_result = process_worker_attendance_with_hours(employee, location, date)
-	if worker_result:
-		return worker_result
+	if existing_leave:
+		# Leave application exists for this day, skip
+		return "Skipped"
 
-	# If employee has no_check_in enabled, directly mark as present
+	# --- Worker employees: delegate to run_worker_attendance ---
+	if staff_type == "Worker":
+		from employee_self_service.employee_self_service.utils.worker_attendance import run_worker_attendance
+		return run_worker_attendance(employee, location, date)
+
+	# --- Non-Worker: no_check_in employees are auto-marked Present ---
 	if no_check_in:
 		create_attendance_record(
 			employee=employee,
@@ -126,6 +131,11 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		)
 		return "Processed"
 
+	# --- Non-Worker: skip if company holiday ---
+	if is_holiday_for_company(date):
+		return "Skipped"
+
+	# --- Non-Worker: standard attendance processing ---
 	# Get checkin records for the employee
 	checkins = frappe.get_all(
 		"Employee Checkin",
@@ -140,7 +150,6 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 	# Check if any checkin requires approval and is not approved yet
 	for checkin in checkins:
 		if checkin.get("approval_required") and not checkin.get("approved"):
-			# Skip attendance processing for this employee
 			return "Skipped"
 
 	checkin_time = None
@@ -159,7 +168,7 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 				checkout_time = log.time
 				break
 
-	# If no checkin and no checkout, mark as absent
+	# Rule 1: No checkin at all → Absent
 	if not checkin_time and not checkout_time:
 		create_attendance_record(
 			employee=employee,
@@ -172,9 +181,10 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		)
 		return "Absent"
 
-	# For non-Worker employees with location != "Site": Mark as Absent if check-in or check-out is missing
-	if staff_type != "Worker" and location and location != "Site":
+	# Non-Worker, non-Site: Absent if check-in or check-out is missing
+	if location != "Site":
 		if not checkin_time or not checkout_time:
+			missing = "check-out" if checkin_time else "check-in"
 			create_attendance_record(
 				employee=employee,
 				date=date,
@@ -182,7 +192,7 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 				late_entry=False,
 				early_exit=False,
 				working_hours=0,
-				remarks="Missing check-in or check-out (Non-Worker)"
+				remarks="Missing {0} (Non-Worker, Non-Site)".format(missing)
 			)
 			return "Absent"
 
@@ -226,7 +236,8 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 
 def determine_status(checkin_time, checkout_time, location_rules, employee, date):
 	"""
-	Determine attendance status based on checkin/checkout times and location rules
+	Determine attendance status based on checkin/checkout times and ESS Location rules.
+	Used for non-Worker employees only.
 	Returns: (status, late_entry, early_exit, remarks)
 	"""
 	status = "Present"
@@ -300,7 +311,6 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 		if checkin_time and late_threshold and status != "Half Day":
 			checkin_only_time = get_datetime(checkin_time).time()
 			if checkin_only_time > late_threshold:
-				# Check if should treat as half day
 				current_month_late_count = get_month_late_count(employee, date)
 				if current_month_late_count >= treat_late_as_half_day_after:
 					status = "Half Day"
@@ -317,7 +327,6 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 		if checkout_time and early_exit_threshold and status != "Half Day":
 			checkout_only_time = get_datetime(checkout_time).time()
 			if checkout_only_time < early_exit_threshold:
-				# Check if should treat as half day
 				current_month_late_count = get_month_late_count(employee, date)
 				if current_month_late_count >= treat_late_as_half_day_after:
 					status = "Half Day"
@@ -389,7 +398,7 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 			"attendance_date": date,
 			"status": status,
 			"remarks": remarks,
-			"company": frappe.db.get_value("Global Defaults","Global Defaults","default_company") or "",
+			"company": frappe.db.get_value("Global Defaults", "Global Defaults", "default_company") or "",
 		})
 
 		# Set late_entry and early_exit if fields exist
@@ -420,13 +429,11 @@ def is_holiday_for_company(date):
 		# Get default company from Global Defaults
 		default_company = frappe.db.get_single_value("Global Defaults", "default_company")
 		if not default_company:
-			# No default company set, skip holiday check
 			return False
 
 		# Get company's default holiday list
 		holiday_list = frappe.get_cached_value("Company", default_company, "default_holiday_list")
 		if not holiday_list:
-			# No holiday list defined, skip holiday check
 			return False
 
 		return check_holiday(holiday_list, date)
