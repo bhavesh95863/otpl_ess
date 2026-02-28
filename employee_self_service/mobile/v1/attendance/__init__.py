@@ -187,12 +187,14 @@ def build_attendance_data(year, month, days_in_month, attendance_records, holida
 def get_other_employee_list():
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name"]
+            frappe.session.user, fields=["name","is_team_leader"]
         )
         if not emp_data:
             return gen_response(404, "Employee not found")
-
-        other_employees = frappe.get_all("Employee",filters={"reports_to": emp_data["name"],"phone_not_working":1,"status":"Active"}, fields=["name", "employee_name"])
+        if emp_data.get("is_team_leader") == 1:
+            other_employees = frappe.get_all("Employee",filters={"reports_to": emp_data["name"],"phone_not_working":1,"status":"Active"}, fields=["name", "employee_name"])
+        else:
+            other_employees = frappe.get_all("Employee",filters={"phone_not_working":1,"status":"Active"}, fields=["name", "employee_name"])
 
         return gen_response(
             200, "Other employee list fetched successfully", other_employees

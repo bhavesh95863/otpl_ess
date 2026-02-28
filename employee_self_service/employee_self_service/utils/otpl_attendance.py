@@ -348,11 +348,11 @@ def validate(doc,method):
         doc.employee,
         ["location","staff_type","is_team_leader","employee_availability"],as_dict=True
     )
-    if (
-        emp.location == "Site" and emp.staff_type == "Worker" and emp.is_team_leader != 1 and
-        emp.employee_availability == "On Leave"
-    ):
-        frappe.throw(_("You are on leave today"))
+    if (emp.employee_availability == "On Leave"):
+        frappe.throw(_("आप छुट्टी पर हैं, ड्यूटी पर वापस आने के लिए सुश्री लतिका भाटिया (01204010000) से संपर्क करें।."))
+
+    if not frappe.db.exists("Employee Device Registration",{"name":doc.employee}):
+        frappe.throw(_("Your device is not registered. Please log out of the app and log in again."))
 
     # Validate: each employee cannot have more than one IN or OUT log on the same date
     if doc.time and doc.log_type in ("IN", "OUT"):

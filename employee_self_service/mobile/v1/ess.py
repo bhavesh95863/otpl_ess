@@ -836,6 +836,12 @@ def get_dashboard():
                     has_checkin = True
                 elif log.get("log_type") == "OUT":
                     has_checkout = True
+        is_team_leader = 0
+        if emp_data.get("is_team_leader") == 1:
+            is_team_leader = 1
+        if emp_data.get("staff_type") in ["Manager","Director","Partner"]:
+            is_team_leader = 1
+        
 
         dashboard_data = {
             "notice_board": notice_board,
@@ -871,7 +877,7 @@ def get_dashboard():
             "allow_push_notification":allow_push_notification,
             "allow_wpe":allow_wpe,
             "staff_type": emp_data.get("staff_type"),
-            "is_team_leader": emp_data.get("is_team_leader"),
+            "is_team_leader": is_team_leader,
             "status":emp_data.get("status")
         }
 

@@ -14,14 +14,14 @@ def sync_worker_fields_before_save(doc, method=None):
 	- Copy fields from their reporting manager directly onto doc so they
 	  are persisted as part of the current save (no reload needed).
 	"""
-	if doc.get("employee_availability") == "On Leave":
-		doc.reports_to = frappe.db.get_value(
-			"Employee Self Service Settings",
-			"Employee Self Service Settings",
-			"default_reporting_manager"
-		)
-		doc.external_reporting_manager = 0
-		doc.location = frappe.db.get_value("Employee", doc.reports_to, "location") or "Noida"
+	# if doc.get("employee_availability") == "On Leave":
+	# 	doc.reports_to = frappe.db.get_value(
+	# 		"Employee Self Service Settings",
+	# 		"Employee Self Service Settings",
+	# 		"default_reporting_manager"
+	# 	)
+	# 	doc.external_reporting_manager = 0
+	# 	doc.location = frappe.db.get_value("Employee", doc.reports_to, "location") or "Noida"
 
 	# Case 1: Update this worker's fields from their manager
 	if doc.get("staff_type") == "Worker" and doc.get("is_team_leader") != 1:
