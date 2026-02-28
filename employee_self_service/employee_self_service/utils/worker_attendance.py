@@ -50,6 +50,17 @@ def run_worker_attendance(employee, location, date):
 # Worker + Site
 # ──────────────────────────────────────────────
 
+@frappe.whitelist()
+def process_worker_site_attendance():
+	"""
+	API endpoint to process Worker + Site attendance for a given employee and date.
+	Can be called manually or via scheduler for specific employees/dates if needed.
+	"""
+	employee = "EMP/00828"
+	date = "2026-02-28"
+	result = _process_worker_site(employee, date)
+	return result
+
 def _process_worker_site(employee, date):
 	"""
 	Worker + Site: If any checkin exists for the day → Present.
@@ -58,15 +69,24 @@ def _process_worker_site(employee, date):
 	"""
 	from employee_self_service.employee_self_service.utils.daily_attendance import create_attendance_record
 
-	has_checkin = frappe.db.exists(
-		"Employee Checkin",
-		{
-			"employee": employee,
-			"time": ["between", [date, add_days(date, 1)]]
-		}
+	has_checkin = frappe.db.sql(
+		"""SELECT name FROM `tabEmployee Checkin`
+		WHERE employee = %s AND time >= %s AND time < %s
+		LIMIT 1""",
+		(employee, date, add_days(date, 1))
 	)
-
+	print("Worker Site Attendance - Employee: {0}, Date: {1}, Has Checkin: {2}".format(employee, date, has_checkin))
 	if has_checkin:
+		# Get first checkin time for Site workers
+		site_checkin = frappe.db.sql(
+			"""SELECT time FROM `tabEmployee Checkin`
+			WHERE employee = %s AND time >= %s AND time < %s
+			ORDER BY time ASC LIMIT 1""",
+			(employee, date, add_days(date, 1)),
+			as_dict=True
+		)
+		site_checkin_time = site_checkin[0].time if site_checkin else None
+
 		create_attendance_record(
 			employee=employee,
 			date=date,
@@ -74,7 +94,9 @@ def _process_worker_site(employee, date):
 			late_entry=False,
 			early_exit=False,
 			working_hours=0,
-			remarks="Worker (Site) - Check-in recorded"
+			remarks="Worker (Site) - Check-in recorded",
+			checkin_time=site_checkin_time,
+			checkout_time=None
 		)
 		return "Processed"
 	else:
@@ -85,7 +107,9 @@ def _process_worker_site(employee, date):
 			late_entry=False,
 			early_exit=False,
 			working_hours=0,
-			remarks="Worker (Site) - No check-in recorded"
+			remarks="Worker (Site) - No check-in recorded",
+			checkin_time=None,
+			checkout_time=None
 		)
 		return "Absent"
 
@@ -150,7 +174,9 @@ def _process_worker_non_site(employee, location, date):
 			late_entry=False,
 			early_exit=False,
 			working_hours=0,
-			remarks="Worker - No check-in recorded"
+			remarks="Worker - No check-in recorded",
+			checkin_time=None,
+			checkout_time=None
 		)
 		return "Absent"
 
@@ -163,7 +189,9 @@ def _process_worker_non_site(employee, location, date):
 			late_entry=False,
 			early_exit=False,
 			working_hours=0,
-			remarks="Worker - Check-in only, no check-out recorded"
+			remarks="Worker - Check-in only, no check-out recorded",
+			checkin_time=checkin_time,
+			checkout_time=None
 		)
 		return "Absent"
 
@@ -179,6 +207,10 @@ def _process_worker_non_site(employee, location, date):
 	except:
 		working_hours = 0
 
+	# Deduct 30 minutes (0.5 hours) break time for Worker non-Site
+	if working_hours > 0.5:
+		working_hours -= 0.5
+
 	create_attendance_record(
 		employee=employee,
 		date=date,
@@ -186,7 +218,9 @@ def _process_worker_non_site(employee, location, date):
 		late_entry=False,
 		early_exit=False,
 		working_hours=working_hours,
-		remarks="Worker attendance - {0} hours".format(round(working_hours, 2))
+		remarks="Worker attendance - {0} hours (30 min break deducted)".format(round(working_hours, 2)),
+		checkin_time=checkin_time,
+		checkout_time=checkout_time
 	)
 	return "Processed"
 

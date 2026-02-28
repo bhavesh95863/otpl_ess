@@ -118,6 +118,11 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		from employee_self_service.employee_self_service.utils.worker_attendance import run_worker_attendance
 		return run_worker_attendance(employee, location, date)
 
+	# --- Driver + Noida: delegate to run_driver_attendance ---
+	if staff_type == "Driver" and location == "Noida":
+		from employee_self_service.employee_self_service.utils.driver_attendance import run_driver_attendance
+		return run_driver_attendance(employee, date)
+
 	# --- Non-Worker: no_check_in employees are auto-marked Present ---
 	if no_check_in:
 		create_attendance_record(
@@ -127,7 +132,9 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			late_entry=False,
 			early_exit=False,
 			working_hours=0,
-			remarks="Auto marked present (No check-in required)"
+			remarks="Auto marked present (No check-in required)",
+			checkin_time=None,
+			checkout_time=None
 		)
 		return "Processed"
 
@@ -177,7 +184,9 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			late_entry=False,
 			early_exit=False,
 			working_hours=0,
-			remarks="No check-in and check-out records"
+			remarks="No check-in and check-out records",
+			checkin_time=None,
+			checkout_time=None
 		)
 		return "Absent"
 
@@ -192,7 +201,9 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 				late_entry=False,
 				early_exit=False,
 				working_hours=0,
-				remarks="Missing {0} (Non-Worker, Non-Site)".format(missing)
+				remarks="Missing {0} (Non-Worker, Non-Site)".format(missing),
+				checkin_time=checkin_time,
+				checkout_time=checkout_time
 			)
 			return "Absent"
 
@@ -207,18 +218,8 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		checkin_time, checkout_time, location_rules, employee, date
 	)
 
-	# Calculate working hours
+	# Non-Worker employees do not need working hours
 	working_hours = 0
-	if checkin_time and checkout_time:
-		try:
-			working_hours = time_diff_in_hours(
-				get_datetime(checkout_time),
-				get_datetime(checkin_time)
-			)
-			if working_hours < 0:
-				working_hours = 0
-		except:
-			working_hours = 0
 
 	# Create attendance record
 	create_attendance_record(
@@ -228,7 +229,9 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		late_entry=late_entry,
 		early_exit=early_exit,
 		working_hours=working_hours,
-		remarks=remarks
+		remarks=remarks,
+		checkin_time=checkin_time,
+		checkout_time=checkout_time
 	)
 
 	return "Processed"
@@ -389,7 +392,7 @@ def get_month_late_count(employee, date):
 		return 0
 
 
-def create_attendance_record(employee, date, status, late_entry, early_exit, working_hours, remarks):
+def create_attendance_record(employee, date, status, late_entry, early_exit, working_hours, remarks, checkin_time=None, checkout_time=None):
 	"""Create and submit attendance record"""
 	try:
 		attendance = frappe.get_doc({
@@ -408,6 +411,12 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 			attendance.early_exit = 1 if early_exit else 0
 		if hasattr(attendance, 'working_hours'):
 			attendance.working_hours = working_hours
+
+		# Set checkin_time and checkout_time if fields exist
+		if hasattr(attendance, 'checkin_time') and checkin_time:
+			attendance.checkin_time = checkin_time
+		if hasattr(attendance, 'checkout_time') and checkout_time:
+			attendance.checkout_time = checkout_time
 
 		attendance.insert(ignore_permissions=True)
 		attendance.submit()

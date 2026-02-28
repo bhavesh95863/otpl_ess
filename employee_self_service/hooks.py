@@ -239,7 +239,8 @@ fixtures = [
         "dt": "Custom Field",
         "filters": [["dt", "in", [
             "Employee Checkin",
-            "Branch"
+            "Branch",
+            "Attendance"
         ]]],
     }
 ]
