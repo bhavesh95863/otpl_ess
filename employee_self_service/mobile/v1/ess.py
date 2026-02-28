@@ -841,7 +841,6 @@ def get_dashboard():
             is_team_leader = 1
         if emp_data.get("staff_type") in ["Manager","Director","Partner"]:
             is_team_leader = 1
-        
 
         dashboard_data = {
             "notice_board": notice_board,
@@ -2297,8 +2296,13 @@ def on_holiday_event():
 def get_manager_login_status():
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["location", "reports_to","external_reporting_manager","external_report_to"]
+            frappe.session.user, fields=["location", "reports_to","external_reporting_manager","external_report_to","employee_availability"]
         )
+        if emp_data.get("employee_availability") == "On Leave":
+            return gen_response(
+                        500,
+                        "आप छुट्टी पर हैं, ड्यूटी पर वापस आने के लिए सुश्री लतिका भाटिया (01204010000) से संपर्क करें।.",
+                    )
         if not emp_data.get("location") == "Site":
             return gen_response(
                 200,

@@ -27,6 +27,8 @@ def validate_employee(doc, method):
             doc.external_busoiness_vertical = external_so.business_line
             doc.business_vertical = ""
             doc.sales_order = ""
+    if not doc.location == "Site" and not doc.sales_order:
+        frappe.msgprint("Please ensure that you have selected the correct Business Vertical for this user and save again")
 
 @frappe.whitelist()
 def get_ess_information(employee):

@@ -348,7 +348,7 @@ def validate(doc,method):
         doc.employee,
         ["location","staff_type","is_team_leader","employee_availability"],as_dict=True
     )
-    if (emp.employee_availability == "On Leave"):
+    if emp.employee_availability == "On Leave":
         frappe.throw(_("आप छुट्टी पर हैं, ड्यूटी पर वापस आने के लिए सुश्री लतिका भाटिया (01204010000) से संपर्क करें।."))
 
     if not frappe.db.exists("Employee Device Registration",{"name":doc.employee}):
