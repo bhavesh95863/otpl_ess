@@ -190,7 +190,12 @@ def get_sales_order_items(order_no):
     items = []
     order_doc = frappe.get_doc("Sales Order",order_no)
     for row in order_doc.items:
-        items.append(row.item_code)
+        if order_doc.get("business_line") == "ATW":
+            if "Execution" in row.get("item_code"):
+                items.append(row.item_code)
+        else:
+            if not "Dummy" in row.get("item_code"):
+                items.append(row.item_code)
     return items
 
 
