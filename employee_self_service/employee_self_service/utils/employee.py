@@ -1,5 +1,5 @@
 import frappe
-from frappe.utils import add_months, get_last_day, nowdate, getdate, get_datetime, format_datetime
+from frappe.utils import add_months, get_last_day, nowdate, getdate, get_datetime, format_datetime,flt
 
 def validate_employee(doc, method):
     """
@@ -14,7 +14,7 @@ def validate_employee(doc, method):
             if not doc.relieving_date:
                 doc.relieving_date = getdate(add_months(nowdate(), 1)).replace(day=10)
 
-    if doc.advance_to_be_deducted > 0:
+    if flt(doc.advance_to_be_deducted) > 0:
         doc.basic_salary = doc.advance_to_be_deducted / 2
     else:
         doc.basic_salary = 0
