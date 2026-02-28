@@ -1249,7 +1249,7 @@ def create_employee_log(
                 time=log_time,
                 location=location,
                 odometer_reading=odometer_reading,
-                reason=reason,
+                reason=reason if not reason else "Other Employee Attendance",
                 today_work=today_work,
                 order=order,
                 requested_from=emp_data.get("reports_to"),
