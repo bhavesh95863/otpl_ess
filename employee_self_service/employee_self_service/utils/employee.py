@@ -29,6 +29,11 @@ def validate_employee(doc, method):
             doc.sales_order = ""
     if not doc.location == "Site" and not doc.sales_order:
         frappe.msgprint("Please ensure that you have selected the correct Business Vertical for this user and save again")
+    if doc.is_team_leader and doc.business_vertical:
+        reporting_manager = frappe.db.get_value("Business Line", doc.business_vertical, "reporting_manager")
+        if reporting_manager:
+            doc.reports_to = reporting_manager
+    
 
 @frappe.whitelist()
 def get_ess_information(employee):

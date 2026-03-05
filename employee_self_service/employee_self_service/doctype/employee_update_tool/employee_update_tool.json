@@ -1,0 +1,126 @@
+{
+ "autoname": "EMPUP-.####",
+ "creation": "2026-03-05 18:30:51.870485",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "update_for",
+  "filter_section",
+  "staff_type",
+  "column_break_4",
+  "location",
+  "column_break_6",
+  "business_vertical",
+  "get_employees",
+  "section_break_2",
+  "employee_update_team_leader",
+  "section_break_4",
+  "employee_update_non_team_leader",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "update_for",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Update For",
+   "options": "\nTeam Leader\nNon Team Leader"
+  },
+  {
+   "depends_on": "update_for",
+   "fieldname": "filter_section",
+   "fieldtype": "Section Break",
+   "label": "Filters"
+  },
+  {
+   "depends_on": "eval:doc.update_for == 'Non Team Leader'",
+   "fieldname": "staff_type",
+   "fieldtype": "Select",
+   "label": "Staff Type",
+   "options": "\nManager\nWorker\nStaff\nField\nDirector\nNot Applicable\nConsultant\nDriver"
+  },
+  {
+   "depends_on": "eval:doc.update_for == 'Non Team Leader'",
+   "fieldname": "location",
+   "fieldtype": "Select",
+   "label": "Location",
+   "options": "\nNoida\nHaridwar\nSite\nLucknow"
+  },
+  {
+   "depends_on": "eval:doc.update_for == 'Non Team Leader'",
+   "fieldname": "business_vertical",
+   "fieldtype": "Select",
+   "label": "Business Vertical",
+   "options": "\nRTI\nWHEELBURN\nTRADA\nPAUT USFD Testing\nUSFD TESTING\nINSTRUMENTATION\nVEHICULAR USFD\nFRACTURE DETECTION\nPOTAS\nRBM\nGIRJ\nTRANSLAMATIC\nATW\nALL\nPAUT"
+  },
+  {
+   "depends_on": "update_for",
+   "fieldname": "get_employees",
+   "fieldtype": "Button",
+   "label": "Get Employees"
+  },
+  {
+   "collapsible_depends_on": "eval:doc.update_for == \"Team Leader\"",
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "employee_update_team_leader",
+   "fieldtype": "Table",
+   "label": "Employee Update Team Leader",
+   "options": "Employee Update Team Leader"
+  },
+  {
+   "collapsible_depends_on": "eval:doc.update_for == \"Non Team Leader\"",
+   "fieldname": "section_break_4",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "employee_update_non_team_leader",
+   "fieldtype": "Table",
+   "label": "Employee Update Non Team Leader",
+   "options": "Employee Update Non Team Leader"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Employee Update Tool",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_6",
+   "fieldtype": "Column Break"
+  }
+ ],
+ "is_submittable": 1,
+ "modified": "2026-03-05 18:47:40.086092",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "Employee Update Tool",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
