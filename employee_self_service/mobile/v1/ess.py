@@ -21,6 +21,7 @@ from frappe.utils import (
     fmt_money,
     add_days,
     format_time,
+    cint
 )
 from employee_self_service.mobile.v1.api_utils import (
     gen_response,
@@ -799,6 +800,7 @@ def get_dashboard():
                 "employee_name",
                 "location",
                 "reports_to",
+                "external_report_to",
                 "business_vertical",
                 "sales_order",
                 "external_sales_order",
@@ -883,15 +885,18 @@ def get_dashboard():
             "apple_version":settings.get("apple_version"),
             "apple_mobile_link":settings.get("apple_mobile_link"),
             "android_mobile_link":settings.get("android_mobile_link"),
-            "message": settings.get("message")
+            "message": settings.get("message"),
+            "people_on_leave": 0 if emp_data.get("location") == "Site" else 1,
         }
-
-        approval_manager = emp_data.get("reports_to")
-        if approval_manager:
-            approval_manager = frappe.db.get_value(
-                "Employee", approval_manager, "user_id"
+        reports_to_name = None
+        if emp_data.get("reports_to"):
+            reports_to_name = frappe.db.get_value(
+                "Employee", emp_data.get("reports_to"), "employee_name"
             )
-        dashboard_data["approval_manager"] = approval_manager or None
+        if emp_data.get("external_report_to"):
+            reports_to_name = frappe.db.get_value("Employee Pull", emp_data.get("external_report_to"), "employee_name")
+        
+        dashboard_data["reports_to_name"] = reports_to_name
         dashboard_data["employee_image"] = emp_data.get("image")
         dashboard_data["employee_name"] = emp_data.get("employee_name")
 
@@ -1231,7 +1236,9 @@ def create_employee_log(
     today_work=None,
     order=None,
     employee=None,
-    manager = None
+    manager = None,
+    report_to = None,
+    external=None
 ):
     try:
         if not log_time:
@@ -1243,7 +1250,6 @@ def create_employee_log(
         approval_required = 0
         if emp_data.get("staff_type") == "Driver":
             approval_required = 1
-
 
         order = emp_data.get("sales_order") or None
 
@@ -1274,10 +1280,19 @@ def create_employee_log(
             file.save(ignore_permissions=True)
             log_doc.attendance_image = file.get("file_url")
             log_doc.save(ignore_permissions=True)
-
         # update_shift_last_sync(emp_data)
+        if report_to:
+            employee_doc = frappe.get_doc("Employee", emp_data.get("name"))
+            if cint(external) == 1:
+                employee_doc.external_report_to = report_to
+                employee_doc.reports_to = None
+            else:
+                employee_doc.reports_to = report_to
+                employee_doc.external_report_to = None
+            employee_doc.save(ignore_permissions=True)
         return gen_response(200, "Employee log added",log_doc)
     except Exception as e:
+        frappe.db.rollback()
         return exception_handler(e)
 
 
@@ -3242,8 +3257,11 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
         except (ValueError, TypeError):
             return gen_response(400, "Invalid latitude or longitude values")
 
-        # Get today's checkins for team leader employees
-        team_leader_checkins = frappe.db.sql("""
+        seen = set()
+        nearby_leaders = []
+
+        # Fetch internal team leaders (external=0) from Employee Checkin
+        internal_checkins = frappe.db.sql("""
             SELECT ec.employee, ec.location, e.employee_name
             FROM `tabEmployee Checkin` ec
             INNER JOIN `tabEmployee` e ON e.name = ec.employee
@@ -3255,11 +3273,7 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             ORDER BY ec.time DESC
         """, (today(),), as_dict=1)
 
-        # Track latest checkin per employee
-        seen = set()
-        nearby_leaders = []
-
-        for checkin in team_leader_checkins:
+        for checkin in internal_checkins:
             if checkin.employee in seen:
                 continue
             seen.add(checkin.employee)
@@ -3277,6 +3291,38 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                     "employee": checkin.employee,
                     "employee_name": checkin.employee_name,
                     "distance": round(distance, 2),
+                    "external": 0,
+                })
+
+        # Fetch external team leaders (external=1) from Leader Location
+        external_checkins = frappe.db.sql("""
+            SELECT ll.employee, ll.location, ll.employee_name
+            FROM `tabLeader Location` ll
+            WHERE ll.datetime >= %s
+            AND ll.location IS NOT NULL
+            AND ll.location != ''
+            ORDER BY ll.datetime DESC
+        """, (today(),), as_dict=1)
+
+        for checkin in external_checkins:
+            if checkin.employee in seen:
+                continue
+            seen.add(checkin.employee)
+
+            try:
+                parts = checkin.location.split(",")
+                checkin_lat = float(parts[0].strip())
+                checkin_lon = float(parts[1].strip())
+            except (ValueError, IndexError, AttributeError):
+                continue
+
+            distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
+            if distance <= 100:
+                nearby_leaders.append({
+                    "employee": checkin.employee,
+                    "employee_name": checkin.employee_name,
+                    "distance": round(distance, 2),
+                    "external": 1,
                 })
 
         return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)

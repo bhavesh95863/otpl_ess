@@ -28,13 +28,14 @@
    "label": "Location"
   },
   {
+   "fetch_from": "employee.employee_name",
    "fieldname": "employee_name",
    "fieldtype": "Read Only",
    "in_list_view": 1,
    "label": "Employee Name"
   }
  ],
- "modified": "2025-12-29 11:19:32.695710",
+ "modified": "2026-03-08 02:16:21.569752",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Leader Location",

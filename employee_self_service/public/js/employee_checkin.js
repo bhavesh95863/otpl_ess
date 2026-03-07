@@ -23,10 +23,10 @@ frappe.ui.form.on('Employee Checkin', {
 	
 	refresh(frm) {
 		// Make form completely read-only for all fields
-		frm.fields.forEach(function(field) {
-			frm.set_df_property(field.df.fieldname, 'read_only', 1);
-		});
-		frm.disable_save();
+		// frm.fields.forEach(function(field) {
+		// 	frm.set_df_property(field.df.fieldname, 'read_only', 1);
+		// });
+		// frm.disable_save();
 		
 		// Add View Location button
 		frm.add_custom_button("View Location", function(){
