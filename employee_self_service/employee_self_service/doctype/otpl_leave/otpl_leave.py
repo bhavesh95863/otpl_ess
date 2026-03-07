@@ -41,7 +41,7 @@ class OTPLLeave(Document):
 					self.approver = user
 					self.is_external_manager = 0
 					self.external_manager = ""
-		if self.staff_type == "Worker" and self.location == "Site":
+		if employee_doc.staff_type == "Worker" and employee_doc.location == "Site":
 			frappe.throw("आपकी छुट्टी सीधे साइट पर आपकी उपस्थिति या अनुपस्थिति से ली जाती है, छुट्टी के लिए आवेदन करने की कोई आवश्यकता नहीं है।")
 
 	def on_update(self):

@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import calendar
 import frappe
@@ -879,7 +880,10 @@ def get_dashboard():
             "is_team_leader": is_team_leader,
             "status":emp_data.get("status"),
             "android_version":settings.get("android_version"),
-            "apple_version":settings.get("apple_version")
+            "apple_version":settings.get("apple_version"),
+            "apple_mobile_link":settings.get("apple_mobile_link"),
+            "android_mobile_link":settings.get("android_mobile_link"),
+            "message": settings.get("message")
         }
 
         approval_manager = emp_data.get("reports_to")
@@ -926,6 +930,7 @@ def get_dashboard():
 
     except Exception as e:
         return exception_handler(e)
+
 
 def get_wms_task_flag(user):
     wms_roles = {"WMS User", "WMS Manager", "WMS Admin"}
@@ -3222,3 +3227,69 @@ def get_employee_documents():
         )
     except Exception as e:
         return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_nearby_team_leaders(latitude=None, longitude=None):
+    try:
+        if not latitude or not longitude:
+            return gen_response(400, "latitude and longitude are required")
+
+        try:
+            user_lat = float(latitude)
+            user_lon = float(longitude)
+        except (ValueError, TypeError):
+            return gen_response(400, "Invalid latitude or longitude values")
+
+        # Get today's checkins for team leader employees
+        team_leader_checkins = frappe.db.sql("""
+            SELECT ec.employee, ec.location, e.employee_name
+            FROM `tabEmployee Checkin` ec
+            INNER JOIN `tabEmployee` e ON e.name = ec.employee
+            WHERE e.is_team_leader = 1
+            AND e.status = 'Active'
+            AND ec.time >= %s
+            AND ec.location IS NOT NULL
+            AND ec.location != ''
+            ORDER BY ec.time DESC
+        """, (today(),), as_dict=1)
+
+        # Track latest checkin per employee
+        seen = set()
+        nearby_leaders = []
+
+        for checkin in team_leader_checkins:
+            if checkin.employee in seen:
+                continue
+            seen.add(checkin.employee)
+
+            try:
+                parts = checkin.location.split(",")
+                checkin_lat = float(parts[0].strip())
+                checkin_lon = float(parts[1].strip())
+            except (ValueError, IndexError, AttributeError):
+                continue
+
+            distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
+            if distance <= 100:
+                nearby_leaders.append({
+                    "employee": checkin.employee,
+                    "employee_name": checkin.employee_name,
+                    "distance": round(distance, 2),
+                })
+
+        return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)
+    except Exception as e:
+        return exception_handler(e)
+
+
+def _haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance between two coordinates in meters using the Haversine formula."""
+    R = 6371000  # Earth radius in meters
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    c = 2 * math.asin(math.sqrt(a))
+    return R * c

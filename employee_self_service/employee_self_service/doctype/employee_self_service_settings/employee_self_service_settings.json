@@ -34,7 +34,11 @@
   "ess_language",
   "section_break_28",
   "apple_version",
-  "android_version"
+  "android_version",
+  "column_break_31",
+  "apple_mobile_link",
+  "android_mobile_link",
+  "message"
  ],
  "fields": [
   {
@@ -202,10 +206,29 @@
    "fieldname": "android_version",
    "fieldtype": "Data",
    "label": "Android Version"
+  },
+  {
+   "fieldname": "column_break_31",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "apple_mobile_link",
+   "fieldtype": "Data",
+   "label": "Apple Mobile Link"
+  },
+  {
+   "fieldname": "android_mobile_link",
+   "fieldtype": "Data",
+   "label": "Android Mobile Link"
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Small Text",
+   "label": "Message"
   }
  ],
  "issingle": 1,
- "modified": "2026-02-28 18:48:58.332058",
+ "modified": "2026-03-07 08:35:11.860706",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",
