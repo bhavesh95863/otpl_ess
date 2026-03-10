@@ -74,3 +74,22 @@ def auto_checkout_site_employees():
 			
 	except Exception as e:
 		frappe.log_error(title="Auto Checkout Error",message=frappe.get_traceback())
+
+@frappe.whitelist()
+def auto_checkout_driver():
+	employees = frappe.get_all("Employee",filters={"staff_type":"Driver","location":"Site"},fields=["name"])
+	for row in employees:
+		checkin = frappe.db.get_value("Employee Checkin",{"employee":row.name,"log_type":"IN","DATE(time)":today()},["name","manager"])
+		if checkin:
+			checkout = frappe.db.get_value("Employee Checkin",{"employee":row.name,"log_type":"OUT","DATE(time)":today()})
+			if not checkout:
+				doc = frappe.get_doc({
+					"doctype":"Employee Checkin",
+					"employee":row.name,
+					"log_type":"OUT",
+					"time":get_datetime(now_datetime()),
+					"manager":checkin.manager,
+					"approval_required":1,
+					"auto_created_entry":1
+				})
+				doc.insert(ignore_permissions=True)

@@ -1267,7 +1267,8 @@ def create_employee_log(
                 requested_from=emp_data.get("reports_to"),
                 manager=manager,
                 approval_required = approval_required,
-                created_by_manager = 1 if employee else 0
+                created_by_manager = 1 if employee else 0,
+                reports_to_change = 1 if report_to else 0
             )
         ).insert(ignore_permissions=True)
         # update_shift_last_sync(emp_data)
@@ -3272,7 +3273,7 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             AND ec.location != ''
             ORDER BY ec.time DESC
         """, (today(),), as_dict=1)
-
+        frappe.log_error(title="internal_checkins", message=internal_checkins)
         for checkin in internal_checkins:
             if checkin.employee in seen:
                 continue
@@ -3283,9 +3284,10 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                 checkin_lat = float(parts[0].strip())
                 checkin_lon = float(parts[1].strip())
             except (ValueError, IndexError, AttributeError):
-                continue
+                frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
 
             distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
+            frappe.log_error(title="distance_in", message={"employee": checkin.employee, "distance": distance})
             if distance <= 100:
                 nearby_leaders.append({
                     "employee": checkin.employee,
@@ -3303,7 +3305,7 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             AND ll.location != ''
             ORDER BY ll.datetime DESC
         """, (today(),), as_dict=1)
-
+        frappe.log_error(title="external_checkins", message=external_checkins)
         for checkin in external_checkins:
             if checkin.employee in seen:
                 continue
@@ -3314,9 +3316,10 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                 checkin_lat = float(parts[0].strip())
                 checkin_lon = float(parts[1].strip())
             except (ValueError, IndexError, AttributeError):
-                continue
+                frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
 
             distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
+            frappe.log_error(title="distance", message={"employee": checkin.employee, "distance": distance})
             if distance <= 100:
                 nearby_leaders.append({
                     "employee": checkin.employee,
@@ -3324,7 +3327,8 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                     "distance": round(distance, 2),
                     "external": 1,
                 })
-
+        if len(nearby_leaders) == 0:
+            return gen_response(500, "No nearby team leaders found", [])
         return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)
     except Exception as e:
         return exception_handler(e)

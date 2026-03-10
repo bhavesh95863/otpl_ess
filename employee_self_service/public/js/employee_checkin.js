@@ -32,6 +32,53 @@ frappe.ui.form.on('Employee Checkin', {
 		frm.add_custom_button("View Location", function(){
 			window.open("https://www.google.com/maps/search/?api=1&query=" + frm.doc.location, '_blank');
 		});
+
+		// Add Location History button when team_leader_location_changed is checked
+		if (frm.doc.team_leader_location_changed) {
+			frm.add_custom_button(__('Location History'), function() {
+				frappe.call({
+					method: 'employee_self_service.employee_self_service.utils.otpl_attendance.get_location_history',
+					args: { employee: frm.doc.employee },
+					callback: function(r) {
+						if (r.message && r.message.length) {
+							let rows = r.message.map(function(d) {
+								let loc_link = d.location
+									? '<a href="https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(d.location) + '" target="_blank">View Map</a>'
+									: '';
+								let changed = d.team_leader_location_changed ? 'Yes' : 'No';
+								let dist = d.distance_different ? d.distance_different + ' km' : '-';
+								return '<tr>'
+									+ '<td>' + frappe.datetime.str_to_user(d.time) + '</td>'
+									+ '<td>' + (d.address || d.location || '-') + '</td>'
+									+ '<td>' + loc_link + '</td>'
+									+ '<td>' + changed + '</td>'
+									+ '<td>' + dist + '</td>'
+									+ '</tr>';
+							}).join('');
+
+							let html = '<table class="table table-bordered table-striped">'
+								+ '<thead><tr>'
+								+ '<th>' + __('Time') + '</th>'
+								+ '<th>' + __('Address / Location') + '</th>'
+								+ '<th>' + __('Map') + '</th>'
+								+ '<th>' + __('Location Changed') + '</th>'
+								+ '<th>' + __('Distance') + '</th>'
+								+ '</tr></thead>'
+								+ '<tbody>' + rows + '</tbody></table>';
+
+							let d = new frappe.ui.Dialog({
+								title: __('Location History (Last 5 Days - IN)'),
+								size: 'extra-large'
+							});
+							d.$body.html(html);
+							d.show();
+						} else {
+							frappe.msgprint(__('No location history found for the last 5 days.'));
+						}
+					}
+				});
+			});
+		}
 		
 		// Add Approve button if conditions are met
 		if (frm.doc.approval_required && !frm.doc.approved) {

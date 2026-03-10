@@ -172,6 +172,9 @@ scheduler_events = {
         ],
         "*/5 * * * *": [
             "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"
+        ],
+        "0 18 * * *": [
+            "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_driver"
         ]
     },
 }

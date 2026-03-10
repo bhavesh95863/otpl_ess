@@ -2,8 +2,12 @@ frappe.ui.form.on('Employee', {
     refresh(frm) {
         if (frappe.session.user === "admin@oberoithermit.com" || frappe.user.has_role("System Manager")) {
             frm.set_df_property("phone_not_working", "hidden", 0);
+            frm.set_df_property("from_hours", "hidden", 0);
+            frm.set_df_property("to_hours", "hidden", 0);
         } else {
             frm.set_df_property("phone_not_working", "hidden", 1);
+            frm.set_df_property("from_hours", "hidden", 1);
+            frm.set_df_property("to_hours", "hidden", 1);
         }
         if(frm.doc.is_team_leader == 0 && frm.doc.show_sales_order == 0) {
             frm.set_df_property("external_sales_order", 'hidden', 1);

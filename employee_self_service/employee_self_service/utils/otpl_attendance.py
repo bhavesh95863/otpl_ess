@@ -191,6 +191,28 @@ def calculate_distance_km(lat1, lon1, lat2, lon2):
 
 
 @frappe.whitelist()
+def get_location_history(employee):
+    """Get location history for the last 5 days with log_type IN"""
+    from frappe.utils import add_days, nowdate, getdate
+
+    start_date = add_days(getdate(nowdate()), -5)
+
+    checkins = frappe.db.get_all(
+        "Employee Checkin",
+        filters={
+            "employee": employee,
+            "log_type": "IN",
+            "location": ["!=", ""],
+            "time": [">=", start_date],
+        },
+        fields=["name", "time", "location", "address", "team_leader_location_changed", "distance_different"],
+        order_by="time desc",
+    )
+
+    return checkins
+
+
+@frappe.whitelist()
 def approve_checkin(checkin_name, log_time=None):
     """Approve an employee checkin"""
     doc = frappe.get_doc("Employee Checkin", checkin_name)
@@ -285,6 +307,7 @@ def fetch_employee_details(doc):
 
     if employee_details.external_reporting_manager:
         doc.reports_to = employee_details.external_report_to
+        doc.reports_to_name = frappe.db.get_value("Employee Pull", employee_details.external_report_to, "employee_name")
     else:
         doc.reports_to = employee_details.reports_to
         doc.reports_to_name = frappe.db.get_value("Employee", employee_details.reports_to, "employee_name")

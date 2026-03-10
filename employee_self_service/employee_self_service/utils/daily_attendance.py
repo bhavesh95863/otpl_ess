@@ -24,7 +24,7 @@ def process_daily_attendance():
 
 	employees = frappe.get_all("Employee",
 		filters={"status": "Active"},
-		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type"]
+		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type","from_hours","to_hours"]
 	)
 
 	processed_count = 0
@@ -36,7 +36,7 @@ def process_daily_attendance():
 		try:
 			result = process_employee_attendance(
 				emp.name, emp.location, yesterday,
-				emp.get("no_check_in", 0), emp.get("staff_type")
+				emp.get("no_check_in", 0), emp.get("staff_type"), emp.get("from_hours"), emp.get("to_hours")
 			)
 
 			if result == "Processed":
@@ -71,7 +71,7 @@ def process_daily_attendance():
 	}
 
 
-def process_employee_attendance(employee, location, date, no_check_in=0, staff_type=None):
+def process_employee_attendance(employee, location, date, no_check_in=0, staff_type=None, from_hours=None, to_hours=None):
 	"""
 	Process attendance for a single employee.
 	Returns: Processed, Skipped, Absent, or Error
@@ -150,14 +150,17 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			"employee": employee,
 			"time": ["between", [date, add_days(date, 1)]]
 		},
-		fields=["time", "log_type", "approval_required", "approved"],
+		fields=["time", "log_type", "approval_required", "approved", "rejected"],
 		order_by="time asc"
 	)
 
-	# Check if any checkin requires approval and is not approved yet
+	# Check if any checkin is pending approval (not yet approved or rejected)
 	for checkin in checkins:
-		if checkin.get("approval_required") and not checkin.get("approved"):
+		if checkin.get("approval_required") and not checkin.get("approved") and not checkin.get("rejected"):
 			return "Skipped"
+
+	# Filter out rejected checkins — treat them as if they don't exist
+	checkins = [c for c in checkins if not c.get("rejected")]
 
 	checkin_time = None
 	checkout_time = None
@@ -212,6 +215,13 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 	if location:
 		if frappe.db.exists("ESS Location", location):
 			location_rules = frappe.get_doc("ESS Location", location)
+			if from_hours and to_hours:
+				location_rules.shift_start_time = from_hours
+				location_rules.shift_end_time = to_hours
+				location_rules.late_arrival_threshold = from_hours
+				location_rules.early_exit_threshold = to_hours
+
+
 
 	# Determine attendance status based on rules
 	status, late_entry, early_exit, remarks = determine_status(

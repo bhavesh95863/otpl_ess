@@ -141,14 +141,17 @@ def _process_worker_non_site(employee, location, date):
 			"employee": employee,
 			"time": ["between", [date, add_days(date, 1)]]
 		},
-		fields=["time", "log_type", "approval_required", "approved"],
+		fields=["time", "log_type", "approval_required", "approved", "rejected"],
 		order_by="time asc"
 	)
 
-	# If any checkin requires approval and is not approved yet, skip
+	# If any checkin is pending approval (not yet approved or rejected), skip
 	for checkin in checkins:
-		if checkin.get("approval_required") and not checkin.get("approved"):
+		if checkin.get("approval_required") and not checkin.get("approved") and not checkin.get("rejected"):
 			return "Skipped"
+
+	# Filter out rejected checkins — treat them as if they don't exist
+	checkins = [c for c in checkins if not c.get("rejected")]
 
 	# Extract first IN and last OUT
 	checkin_time = None

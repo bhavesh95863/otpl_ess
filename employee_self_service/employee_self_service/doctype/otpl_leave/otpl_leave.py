@@ -17,6 +17,8 @@ class OTPLLeave(Document):
 		# Calculate total number of days
 		if self.from_date and self.to_date:
 			self.total_no_of_days = date_diff(self.to_date, self.from_date) + 1
+		if self.approved_from_date and self.approved_to_date:
+			self.total_no_of_approved_days = date_diff(self.approved_to_date, self.approved_from_date) + 1
 
 		# Validate status change to Cancelled
 		if not self.get("__islocal"):
@@ -41,7 +43,7 @@ class OTPLLeave(Document):
 					self.approver = user
 					self.is_external_manager = 0
 					self.external_manager = ""
-		if employee_doc.staff_type == "Worker" and employee_doc.location == "Site":
+		if employee_doc.staff_type == "Worker" and employee_doc.location == "Site" and not self.status == "Cancelled":
 			frappe.throw("आपकी छुट्टी सीधे साइट पर आपकी उपस्थिति या अनुपस्थिति से ली जाती है, छुट्टी के लिए आवेदन करने की कोई आवश्यकता नहीं है।")
 
 	def on_update(self):
@@ -115,6 +117,7 @@ class OTPLLeave(Document):
 		leave_app.description = f"Auto-created from OTPL Leave: {self.name}"
 		leave_app.status = "Approved"
 		leave_app.company = company
+		leave_app.half_day = self.half_day
 
 		leave_app.insert(ignore_permissions=True)
 		leave_app.submit()
@@ -189,6 +192,23 @@ class OTPLLeave(Document):
 			except Exception as e:
 				frappe.log_error(f"Error deleting Leave Application {leave_app_name}: {str(e)}")
 				frappe.msgprint(f"Warning: Could not delete Leave Application {leave_app_name}", alert=True)
+
+
+@frappe.whitelist()
+def bulk_cancel_otpl_leaves(names):
+	"""Bulk cancel OTPL Leaves from list view"""
+	if isinstance(names, str):
+		import json
+		names = json.loads(names)
+
+	for name in names:
+		doc = frappe.get_doc("OTPL Leave", name)
+		if doc.status != "Approved":
+			frappe.throw(f"OTPL Leave {name} is not Approved. Only Approved leaves can be cancelled.")
+		doc.status = "Cancelled"
+		doc.save(ignore_permissions=True)
+
+	frappe.db.commit()
 
 
 def validate_leave_application_cancel(doc, method):
