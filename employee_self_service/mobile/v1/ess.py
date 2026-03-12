@@ -23,6 +23,7 @@ from frappe.utils import (
     format_time,
     cint
 )
+from employee_self_service.mobile.v1.reports_to_validation import update_reports_to
 from employee_self_service.mobile.v1.api_utils import (
     gen_response,
     generate_key,
@@ -1267,8 +1268,7 @@ def create_employee_log(
                 requested_from=emp_data.get("reports_to"),
                 manager=manager,
                 approval_required = approval_required,
-                created_by_manager = 1 if employee else 0,
-                reports_to_change = 1 if report_to else 0
+                created_by_manager = 1 if employee else 0
             )
         ).insert(ignore_permissions=True)
         # update_shift_last_sync(emp_data)
@@ -1282,15 +1282,7 @@ def create_employee_log(
             log_doc.attendance_image = file.get("file_url")
             log_doc.save(ignore_permissions=True)
         # update_shift_last_sync(emp_data)
-        if report_to:
-            employee_doc = frappe.get_doc("Employee", emp_data.get("name"))
-            if cint(external) == 1:
-                employee_doc.external_report_to = report_to
-                employee_doc.reports_to = None
-            else:
-                employee_doc.reports_to = report_to
-                employee_doc.external_report_to = None
-            employee_doc.save(ignore_permissions=True)
+        update_reports_to(emp_data.get("name"), report_to, external,log_doc)
         return gen_response(200, "Employee log added",log_doc)
     except Exception as e:
         frappe.db.rollback()
