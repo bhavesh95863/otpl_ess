@@ -21,7 +21,6 @@
   "section_break_yu4ls",
   "location_validate",
   "check_in_with_location",
-  "default_reporting_manager",
   "distance",
   "column_break_jfldd",
   "check_in_with_image",
@@ -38,7 +37,9 @@
   "column_break_31",
   "apple_mobile_link",
   "android_mobile_link",
-  "message"
+  "message",
+  "ess_dynamic_message_section",
+  "on_leave_message"
  ],
  "fields": [
   {
@@ -187,13 +188,6 @@
    "precision": "2"
   },
   {
-   "description": "This employee is set as the reporting manager when we mark the employee as On Leave.",
-   "fieldname": "default_reporting_manager",
-   "fieldtype": "Link",
-   "label": "Default Reporting Manager",
-   "options": "Employee"
-  },
-  {
    "fieldname": "section_break_28",
    "fieldtype": "Section Break"
   },
@@ -225,10 +219,20 @@
    "fieldname": "message",
    "fieldtype": "Small Text",
    "label": "Message"
+  },
+  {
+   "fieldname": "ess_dynamic_message_section",
+   "fieldtype": "Section Break",
+   "label": "ESS Dynamic Message"
+  },
+  {
+   "fieldname": "on_leave_message",
+   "fieldtype": "Small Text",
+   "label": "On Leave Message"
   }
  ],
  "issingle": 1,
- "modified": "2026-03-07 08:35:11.860706",
+ "modified": "2026-03-11 17:53:29.957616",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",
