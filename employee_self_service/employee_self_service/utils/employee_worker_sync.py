@@ -24,12 +24,12 @@ def sync_worker_fields_before_save(doc, method=None):
 	# 	doc.location = frappe.db.get_value("Employee", doc.reports_to, "location") or "Noida"
 
 	# Case 1: Update this worker's fields from their manager
-	if doc.get("staff_type") == "Worker" and doc.get("is_team_leader") != 1:
-		_update_single_worker_from_manager(doc)
 	if doc.get("external_report_to"):
 		doc.external_reporting_manager = 1
 	else:
 		doc.external_reporting_manager = 0
+	if doc.get("staff_type") == "Worker" and doc.get("is_team_leader") != 1:
+		_update_single_worker_from_manager(doc)
 	if doc.get("reports_to") and doc.get("external_report_to"):
 		frappe.throw(_("Employee cannot have both internal and external reporting manager. Please select only one."))
 	if not doc.get("reports_to") and not doc.get("external_report_to"):
@@ -62,6 +62,8 @@ def _update_single_worker_from_manager(doc):
 
 		external_manager_details = frappe.get_doc("Employee Pull", reporting_manager)
 		doc.external_sales_order = 1
+		if not external_manager_details.get("sales_order"):
+			frappe.throw(_("External reporting manager {0} does not have Sales Order defined. Please contact administrator.").format(reporting_manager))
 		doc.external_order = external_manager_details.get("sales_order") + "-" + external_manager_details.get("company")
 		doc.external_business_vertical = external_manager_details.get("business_line")
 		doc.external_so = external_manager_details.get("sales_order")
@@ -213,9 +215,9 @@ def update_workers_from_employee_pull(doc, method=None):
 		worker_doc = frappe.get_doc("Employee", worker.name)
 
 		worker_doc.external_sales_order = 1
-		worker_doc.external_order = employee_pull_data.get("sales_order") + "-" + employee_pull_data.get("company")
+		worker_doc.external_order = employee_pull_data.get("sales_order") + "-" + employee_pull_data.get("company") if employee_pull_data.get("sales_order") else None
 		worker_doc.external_business_vertical = employee_pull_data.get("business_line")
-		worker_doc.external_so = employee_pull_data.get("sales_order")
+		worker_doc.external_so = employee_pull_data.get("sales_order") if employee_pull_data.get("sales_order") else None
 		worker_doc.business_vertical = None
 		worker_doc.sales_order = None
 

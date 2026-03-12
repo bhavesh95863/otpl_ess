@@ -2322,10 +2322,16 @@ def get_manager_login_status():
             frappe.session.user, fields=["location", "reports_to","external_reporting_manager","external_report_to","employee_availability"]
         )
         if emp_data.get("employee_availability") == "On Leave":
+            on_leave_message = frappe.db.get_value("Employee Self Service Settings","Employee Self Service Settings","on_leave_message")
             return gen_response(
                         500,
-                        "आप छुट्टी पर हैं, ड्यूटी पर वापस आने के लिए सुश्री लतिका भाटिया (01204010000) से संपर्क करें।.",
+                        on_leave_message or "You are currently on leave. Please contact your administrator for more details.",
                     )
+        return gen_response(
+            200,
+            "Reporting manager is logged in today.",
+            {"is_manager_logged_in": True},
+        )
         if not emp_data.get("location") == "Site":
             return gen_response(
                 200,
@@ -3249,6 +3255,15 @@ def get_employee_documents():
 @ess_validate(methods=["GET"])
 def get_nearby_team_leaders(latitude=None, longitude=None):
     try:
+        emp_data = get_employee_by_user(
+            frappe.session.user, fields=["location", "reports_to","external_reporting_manager","external_report_to","employee_availability"]
+        )
+        if emp_data.get("employee_availability") == "On Leave":
+            on_leave_message = frappe.db.get_value("Employee Self Service Settings","Employee Self Service Settings","on_leave_message")
+            return gen_response(
+                        500,
+                        on_leave_message or "You are currently on leave. Please contact your administrator for more details.",
+                    )
         if not latitude or not longitude:
             return gen_response(400, "latitude and longitude are required")
 
