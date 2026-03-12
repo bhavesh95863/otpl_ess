@@ -24,12 +24,12 @@ def sync_worker_fields_before_save(doc, method=None):
 	# 	doc.location = frappe.db.get_value("Employee", doc.reports_to, "location") or "Noida"
 
 	# Case 1: Update this worker's fields from their manager
-	if doc.get("staff_type") == "Worker" and doc.get("is_team_leader") != 1:
-		_update_single_worker_from_manager(doc)
 	if doc.get("external_report_to"):
 		doc.external_reporting_manager = 1
 	else:
 		doc.external_reporting_manager = 0
+	if doc.get("staff_type") == "Worker" and doc.get("is_team_leader") != 1:
+		_update_single_worker_from_manager(doc)
 	if doc.get("reports_to") and doc.get("external_report_to"):
 		frappe.throw(_("Employee cannot have both internal and external reporting manager. Please select only one."))
 	if not doc.get("reports_to") and not doc.get("external_report_to"):
