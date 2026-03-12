@@ -77,7 +77,7 @@ def auto_checkout_site_employees():
 
 @frappe.whitelist()
 def auto_checkout_driver():
-	employees = frappe.get_all("Employee",filters={"staff_type":"Driver","location":"Site"},fields=["name"])
+	employees = frappe.get_all("Employee",filters={"staff_type":"Driver","location":"Noida"},fields=["name"])
 	for row in employees:
 		checkin = frappe.db.get_value("Employee Checkin",{"employee":row.name,"log_type":"IN","DATE(time)":today()},["name","manager"])
 		if checkin:
