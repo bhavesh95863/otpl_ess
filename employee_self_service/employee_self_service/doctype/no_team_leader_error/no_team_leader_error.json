@@ -6,18 +6,21 @@
  "engine": "InnoDB",
  "field_order": [
   "employee",
+  "employee_name",
   "latitude",
   "column_break_3",
   "longitude",
   "datetime",
   "section_break_6",
   "reporting_manager",
+  "reporting_manager_name",
   "reporting_manager_checkin",
   "column_break_9",
   "reporting_manager_latitude",
   "reporting_manager_longitude",
   "reporting_manager_distance",
   "section_break_13",
+  "nearest_team_leader",
   "nearest_team_leader",
   "nearest_team_leader_checkin",
   "column_break_16",
@@ -119,10 +122,25 @@
    "fieldname": "nearest_team_leader_distance",
    "fieldtype": "Read Only",
    "label": "Nearest Team Leader Distance"
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Read Only",
+   "label": "Employee Name"
+  },
+  {
+   "fieldname": "reporting_manager_name",
+   "fieldtype": "Read Only",
+   "label": "Reporting Manager Name"
+  },
+  {
+   "fieldname": "nearest_team_leader",
+   "fieldtype": "Read Only",
+   "label": "Nearest Team Leader"
   }
  ],
  "in_create": 1,
- "modified": "2026-03-13 13:07:24.880095",
+ "modified": "2026-03-14 00:30:26.232852",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "No Team Leader Error",

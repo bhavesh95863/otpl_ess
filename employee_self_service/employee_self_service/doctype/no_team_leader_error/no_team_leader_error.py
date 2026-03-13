@@ -10,8 +10,15 @@ from frappe.model.document import Document
 
 
 class NoTeamLeaderError(Document):
+	def before_save(self):
+		if self.employee and not self.employee_name:
+			self.employee_name = frappe.db.get_value("Employee", self.employee, "employee_name") or ""
+
 	def after_insert(self):
 		try:
+			if self.employee and not self.employee_name:
+				self.employee_name = frappe.db.get_value("Employee", self.employee, "employee_name") or ""
+				frappe.db.set_value("No Team Leader Error", self.name, "employee_name", self.employee_name, update_modified=False)
 			self._populate_reporting_manager_info()
 			self._populate_nearest_team_leader_info()
 		except Exception:
@@ -64,6 +71,7 @@ class NoTeamLeaderError(Document):
 			if not manager_id:
 				return
 			# Fetch manager name from Employee doc if it exists, else fallback
+			manager_name = frappe.db.get_value("Employee Pull", manager_id, "employee_name") or manager_id
 			row = frappe.db.sql("""
 				SELECT ll.location, ll.datetime AS checkin_time
 				FROM `tabLeader Location` ll
@@ -91,8 +99,10 @@ class NoTeamLeaderError(Document):
 				LIMIT 1
 			""", {"manager": manager_id, "today": today(), "error_time": self.datetime}, as_dict=1)
 
+			manager_name = frappe.db.get_value("Employee", manager_id, "employee_name") or manager_id
 		update = {
 			"reporting_manager": manager_id,
+			"reporting_manager_name": manager_name,
 		}
 
 		if row:
@@ -185,6 +195,7 @@ class NoTeamLeaderError(Document):
 		m_lat, m_lon = self._parse_location(best["location"])
 		frappe.db.set_value("No Team Leader Error", self.name, {
 			"nearest_team_leader": best["employee"],
+			"nearest_team_leader_name": best.get("employee_name") or best["employee"],
 			"nearest_team_leader_checkin": best["checkin_time"],
 			"nearest_team_leader_latitude": str(m_lat),
 			"nearest_team_leader_longitude": str(m_lon),
