@@ -1,0 +1,148 @@
+{
+ "autoname": "NTLE-.######",
+ "creation": "2026-03-13 12:28:42.187331",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "latitude",
+  "column_break_3",
+  "longitude",
+  "datetime",
+  "section_break_6",
+  "reporting_manager",
+  "reporting_manager_checkin",
+  "column_break_9",
+  "reporting_manager_latitude",
+  "reporting_manager_longitude",
+  "reporting_manager_distance",
+  "section_break_13",
+  "nearest_team_leader",
+  "nearest_team_leader_checkin",
+  "column_break_16",
+  "nearest_team_leader_latitude",
+  "nearest_team_leader_longitude",
+  "nearest_team_leader_distance"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Read Only",
+   "in_list_view": 1,
+   "label": "Employee"
+  },
+  {
+   "fieldname": "latitude",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Latitude"
+  },
+  {
+   "fieldname": "longitude",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Longitude"
+  },
+  {
+   "fieldname": "datetime",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Datetime"
+  },
+  {
+   "fieldname": "column_break_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_6",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "reporting_manager",
+   "fieldtype": "Read Only",
+   "label": "Reporting Manager"
+  },
+  {
+   "fieldname": "reporting_manager_checkin",
+   "fieldtype": "Datetime",
+   "label": "Reporting Manager Checkin"
+  },
+  {
+   "fieldname": "column_break_9",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reporting_manager_latitude",
+   "fieldtype": "Read Only",
+   "label": "Reporting Manager Latitude"
+  },
+  {
+   "fieldname": "reporting_manager_longitude",
+   "fieldtype": "Read Only",
+   "label": "Reporting Manager Longitude"
+  },
+  {
+   "fieldname": "reporting_manager_distance",
+   "fieldtype": "Read Only",
+   "label": "Reporting Manager Distance"
+  },
+  {
+   "fieldname": "section_break_13",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "nearest_team_leader",
+   "fieldtype": "Read Only",
+   "label": "Nearest Team Leader"
+  },
+  {
+   "fieldname": "nearest_team_leader_checkin",
+   "fieldtype": "Datetime",
+   "label": "Nearest Team Leader Checkin"
+  },
+  {
+   "fieldname": "column_break_16",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "nearest_team_leader_latitude",
+   "fieldtype": "Read Only",
+   "label": "Nearest Team Leader Latitude"
+  },
+  {
+   "fieldname": "nearest_team_leader_longitude",
+   "fieldtype": "Read Only",
+   "label": "Nearest Team Leader Longitude"
+  },
+  {
+   "fieldname": "nearest_team_leader_distance",
+   "fieldtype": "Read Only",
+   "label": "Nearest Team Leader Distance"
+  }
+ ],
+ "in_create": 1,
+ "modified": "2026-03-13 13:07:24.880095",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "No Team Leader Error",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "quick_entry": 1,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
