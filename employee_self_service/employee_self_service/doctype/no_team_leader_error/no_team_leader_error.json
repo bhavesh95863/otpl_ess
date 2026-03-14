@@ -21,7 +21,7 @@
   "reporting_manager_distance",
   "section_break_13",
   "nearest_team_leader",
-  "nearest_team_leader",
+  "nearest_team_leader_name",
   "nearest_team_leader_checkin",
   "column_break_16",
   "nearest_team_leader_latitude",
@@ -137,10 +137,15 @@
    "fieldname": "nearest_team_leader",
    "fieldtype": "Read Only",
    "label": "Nearest Team Leader"
+  },
+  {
+   "fieldname": "nearest_team_leader_name",
+   "fieldtype": "Read Only",
+   "label": "Nearest Team Leader"
   }
  ],
  "in_create": 1,
- "modified": "2026-03-14 00:30:26.232852",
+ "modified": "2026-03-14 11:00:19.396912",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "No Team Leader Error",

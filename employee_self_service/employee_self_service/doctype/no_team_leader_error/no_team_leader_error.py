@@ -333,3 +333,12 @@ def get_all_leaders_with_distance(docname):
 	# Sort: within-range first, then by distance ascending
 	results.sort(key=lambda x: (not x["within_range"], x["distance"] if x["distance"] is not None else float("inf")))
 	return results
+
+
+@frappe.whitelist()
+def get_nearest_team_leader_info():
+	team_leaders = frappe.get_all("No Team Leader Error",filters={""},fields=["name"])
+	for row in team_leaders:
+		doc = frappe.get_doc("No Team Leader Error", row.name)
+		doc._populate_nearest_team_leader_info()
+		doc.save(ignore_permissions=True)
