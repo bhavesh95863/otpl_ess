@@ -50,9 +50,17 @@ def process_daily_attendance():
 
 		except Exception as e:
 			error_count += 1
+			traceback_msg = frappe.get_traceback()
 			frappe.log_error(
 				title="Daily Attendance Processing Error: {0}".format(emp.name),
-				message=frappe.get_traceback()
+				message=traceback_msg
+			)
+			from employee_self_service.employee_self_service.doctype.attendance_creation_failed_log.attendance_creation_failed_log import log_attendance_creation_failure
+			log_attendance_creation_failure(
+				employee=emp.name,
+				date=yesterday,
+				reason="Daily attendance processing error: {0}".format(str(e)),
+				error_log=traceback_msg
 			)
 
 	# Log summary
@@ -366,9 +374,17 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 				)
 
 	except Exception as e:
+		traceback_msg = frappe.get_traceback()
 		frappe.log_error(
 			title="Determine Status Error: {0}".format(employee),
-			message=frappe.get_traceback()
+			message=traceback_msg
+		)
+		from employee_self_service.employee_self_service.doctype.attendance_creation_failed_log.attendance_creation_failed_log import log_attendance_creation_failure
+		log_attendance_creation_failure(
+			employee=employee,
+			date=date,
+			reason="Error determining attendance status: {0}".format(str(e)),
+			error_log=traceback_msg
 		)
 
 	remarks = ", ".join(remarks_list) if remarks_list else "Regular attendance"
@@ -433,9 +449,17 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 		frappe.db.commit()
 
 	except Exception as e:
+		traceback_msg = frappe.get_traceback()
 		frappe.log_error(
 			title="Create Attendance Error: {0} - {1}".format(employee, date),
-			message=frappe.get_traceback()
+			message=traceback_msg
+		)
+		from employee_self_service.employee_self_service.doctype.attendance_creation_failed_log.attendance_creation_failed_log import log_attendance_creation_failure
+		log_attendance_creation_failure(
+			employee=employee,
+			date=date,
+			reason="Failed to create/submit attendance record: {0}".format(str(e)),
+			error_log=traceback_msg
 		)
 		raise
 

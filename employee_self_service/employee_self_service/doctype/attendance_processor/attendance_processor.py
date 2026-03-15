@@ -101,7 +101,15 @@ def process_attendance_for_employee(employee, date):
 		return "Processed - Status: {0}, Late Entry: {1}, Early Exit: {2}".format(status, late_entry, early_exit)
 		
 	except Exception as e:
-		frappe.log_error(title="Process Attendance for Employee: {0}".format(employee), message=frappe.get_traceback())
+		traceback_msg = frappe.get_traceback()
+		frappe.log_error(title="Process Attendance for Employee: {0}".format(employee), message=traceback_msg)
+		from employee_self_service.employee_self_service.doctype.attendance_creation_failed_log.attendance_creation_failed_log import log_attendance_creation_failure
+		log_attendance_creation_failure(
+			employee=employee,
+			date=date,
+			reason="Manual attendance processing error: {0}".format(str(e)),
+			error_log=traceback_msg
+		)
 		return "Error: {0}".format(str(e))
 
 def get_employee_location(emp_doc):
@@ -366,9 +374,24 @@ def create_attendance(employee, date, status, remarks, late_entry=False, early_e
 		if hasattr(attendance, 'working_hours'):
 			attendance.working_hours = 0
 	
-	attendance.insert(ignore_permissions=True)
-	attendance.submit()
-	frappe.db.commit()
+	try:
+		attendance.insert(ignore_permissions=True)
+		attendance.submit()
+		frappe.db.commit()
+	except Exception as e:
+		traceback_msg = frappe.get_traceback()
+		frappe.log_error(
+			title="Create Attendance Error (Processor): {0} - {1}".format(employee, date),
+			message=traceback_msg
+		)
+		from employee_self_service.employee_self_service.doctype.attendance_creation_failed_log.attendance_creation_failed_log import log_attendance_creation_failure
+		log_attendance_creation_failure(
+			employee=employee,
+			date=date,
+			reason="Failed to create/submit attendance via processor: {0}".format(str(e)),
+			error_log=traceback_msg
+		)
+		raise
 	
 	return attendance
 

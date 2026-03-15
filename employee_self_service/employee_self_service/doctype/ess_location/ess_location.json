@@ -26,7 +26,9 @@
   "late_count_for_full_day",
   "column_break_3",
   "leave_type_for_deduction",
-  "treat_late_as_half_day_after"
+  "treat_late_as_half_day_after",
+  "section_break_23",
+  "reporting_manager"
  ],
  "fields": [
   {
@@ -160,9 +162,19 @@
   {
    "fieldname": "column_break_3",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_23",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "reporting_manager",
+   "fieldtype": "Link",
+   "label": "Reporting Manager",
+   "options": "Employee"
   }
  ],
- "modified": "2026-02-02 20:16:36.503967",
+ "modified": "2026-03-16 02:33:49.748708",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "ESS Location",

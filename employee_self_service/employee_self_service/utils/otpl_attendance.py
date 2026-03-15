@@ -410,3 +410,4 @@ def validate(doc,method):
                     doc.employee, doc.log_type, checkin_date
                 )
             )
+    fetch_employee_details(doc)

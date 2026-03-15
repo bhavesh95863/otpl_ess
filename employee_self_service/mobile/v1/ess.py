@@ -2426,63 +2426,63 @@ def get_branch():
             frappe.session.user
         ):
             # Check if reporting manager is assigned
-            if not emp_data.get("external_reporting_manager") == 1:
-                if not emp_data.get("reports_to"):
-                    return gen_response(
-                        500,
-                        "Reporting manager not assigned. Please contact administrator.",
-                    )
+            # if not emp_data.get("external_reporting_manager") == 1:
+            #     if not emp_data.get("reports_to"):
+            #         return gen_response(
+            #             500,
+            #             "Reporting manager not assigned. Please contact administrator.",
+            #         )
 
-                # Get reporting manager's latest check-in for today
-                latest_checkin = frappe.db.get_value(
-                    "Employee Checkin",
-                    {"employee": emp_data.get("reports_to"), "time": [">=", today()]},
-                    ["location"],
-                    order_by="time desc",
-                    as_dict=1,
-                )
+            #     # Get reporting manager's latest check-in for today
+            #     latest_checkin = frappe.db.get_value(
+            #         "Employee Checkin",
+            #         {"employee": emp_data.get("reports_to"), "time": [">=", today()]},
+            #         ["location"],
+            #         order_by="time desc",
+            #         as_dict=1,
+            #     )
 
-                if not latest_checkin or not latest_checkin.get("location"):
-                    return gen_response(200, "Branch", {})
-            else:
-                if not emp_data.get("external_report_to"):
-                    return gen_response(
-                        500,
-                        "External reporting manager not assigned. Please contact administrator.",
-                    )
+            #     if not latest_checkin or not latest_checkin.get("location"):
+            #         return gen_response(200, "Branch", {})
+            # else:
+            #     if not emp_data.get("external_report_to"):
+            #         return gen_response(
+            #             500,
+            #             "External reporting manager not assigned. Please contact administrator.",
+            #         )
 
-                # Get external reporting manager's latest check-in for today
-                latest_checkin = frappe.db.get_value(
-                    "Leader Location",
-                    {
-                        "employee": emp_data.get("external_report_to"),
-                        "datetime": [">=", today()],
-                    },
-                    ["location"],
-                    order_by="datetime desc",
-                    as_dict=1,
-                )
+            #     # Get external reporting manager's latest check-in for today
+            #     latest_checkin = frappe.db.get_value(
+            #         "Leader Location",
+            #         {
+            #             "employee": emp_data.get("external_report_to"),
+            #             "datetime": [">=", today()],
+            #         },
+            #         ["location"],
+            #         order_by="datetime desc",
+            #         as_dict=1,
+            #     )
 
-                if not latest_checkin or not latest_checkin.get("location"):
-                    return gen_response(200, "Branch", {})
+            #     if not latest_checkin or not latest_checkin.get("location"):
+            #         return gen_response(200, "Branch", {})
 
-            # Parse latitude and longitude from location field (comma-separated)
-            location_parts = latest_checkin.get("location").split(",")
+            # # Parse latitude and longitude from location field (comma-separated)
+            # location_parts = latest_checkin.get("location").split(",")
 
-            try:
-                latitude = float(location_parts[0].strip())
-                longitude = float(location_parts[1].strip())
-            except (ValueError, AttributeError):
-                return gen_response(
-                    500,
-                    "Invalid latitude/longitude values for reporting manager's check-in.",
-                )
+            # try:
+            #     latitude = float(location_parts[0].strip())
+            #     longitude = float(location_parts[1].strip())
+            # except (ValueError, AttributeError):
+            #     return gen_response(
+            #         500,
+            #         "Invalid latitude/longitude values for reporting manager's check-in.",
+            #     )
 
             # Return reporting manager's check-in location with radius 50
             branch = {
                 "location": "Site",
-                "latitude": latitude,
-                "longitude": longitude,
+                "latitude": 0.0,
+                "longitude": 0.0,
                 "radius": 50,
             }
             return gen_response(200, "Branch", branch)
@@ -3276,7 +3276,7 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
 
         seen = set()
         nearby_leaders = []
-
+        distance_setting = flt(frappe.db.get_value("Employee Self Service Settings", "Employee Self Service Settings", "nearby_leader_distance_threshold")) or 100  
         # Fetch internal team leaders (external=0) from Employee Checkin
         internal_checkins = frappe.db.sql("""
             SELECT ec.employee, ec.location, e.employee_name
@@ -3289,7 +3289,6 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             AND ec.location != ''
             ORDER BY ec.time DESC
         """, (today(),), as_dict=1)
-        frappe.log_error(title="internal_checkins", message=internal_checkins)
         for checkin in internal_checkins:
             if checkin.employee in seen:
                 continue
@@ -3303,8 +3302,7 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                 frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
 
             distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
-            frappe.log_error(title="distance_in", message={"employee": checkin.employee, "distance": distance})
-            if distance <= 100:
+            if distance <= distance_setting:
                 nearby_leaders.append({
                     "employee": checkin.employee,
                     "employee_name": checkin.employee_name,
@@ -3334,13 +3332,44 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                 frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
 
             distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
-            if distance <= 100:
+            if distance <= distance_setting:
                 nearby_leaders.append({
                     "employee": checkin.employee,
                     "employee_name": checkin.employee_name,
                     "distance": round(distance, 2),
                     "external": 1,
                 })
+
+        if len(nearby_leaders) == 0:
+            # Fallback: Check ESS Location records if user coordinates are within radius
+            ess_locations = frappe.get_all(
+                "ESS Location",
+                filters={
+                    "latitude": ["is", "set"],
+                    "longitude": ["is", "set"],
+                    "reporting_manager": ["is", "set"],
+                },
+                fields=["location", "latitude", "longitude", "radius", "reporting_manager"],
+            )
+            for loc in ess_locations:
+                try:
+                    loc_lat = float(loc.latitude)
+                    loc_lon = float(loc.longitude)
+                    loc_radius = flt(loc.radius) or distance_setting
+                except (ValueError, TypeError):
+                    continue
+
+                distance = _haversine_distance(user_lat, user_lon, loc_lat, loc_lon)
+                if distance <= distance_setting:
+                    seen.add(loc.reporting_manager)
+                    employee_name = frappe.db.get_value("Employee", loc.reporting_manager, "employee_name")
+                    nearby_leaders.append({
+                        "employee": loc.reporting_manager,
+                        "employee_name": employee_name,
+                        "distance": round(distance, 2),
+                        "external": 0,
+                    })
+
         if len(nearby_leaders) == 0:
             no_team_log_doc = frappe.get_doc(dict(
                 doctype = "No Team Leader Error",

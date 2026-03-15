@@ -33,7 +33,8 @@ def sync_worker_fields_before_save(doc, method=None):
 	if doc.get("reports_to") and doc.get("external_report_to"):
 		frappe.throw(_("Employee cannot have both internal and external reporting manager. Please select only one."))
 	if not doc.get("reports_to") and not doc.get("external_report_to"):
-		frappe.throw(_("Reports to or External Reports to is mandatory."))
+		if doc.get("location") != "Site" or doc.get("is_team_leader") == 1:
+			frappe.throw(_("Reports to or External Reports to is mandatory."))
 
 
 def update_worker_fields_from_manager(doc, method=None):
