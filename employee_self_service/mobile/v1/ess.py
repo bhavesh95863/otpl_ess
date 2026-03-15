@@ -887,7 +887,7 @@ def get_dashboard():
             "apple_mobile_link":settings.get("apple_mobile_link"),
             "android_mobile_link":settings.get("android_mobile_link"),
             "message": settings.get("message"),
-            "people_on_leave": 0 if emp_data.get("location") == "Site" else 1,
+            "people_on_leave": 0 if emp_data.get("location") == "Site" else 1
         }
         reports_to_name = None
         if emp_data.get("reports_to"):
@@ -934,6 +934,14 @@ def get_dashboard():
         #get_last_log_type(dashboard_data, emp_data.get("name"))
         return gen_response(200, "Dashboard data get successfully", dashboard_data)
 
+    except Exception as e:
+        return exception_handler(e)
+
+@frappe.whitelist()
+def get_employee_self_service_settings():
+    try:
+        settings = get_ess_settings()
+        return gen_response(200, "Settings fetched successfully", settings)
     except Exception as e:
         return exception_handler(e)
 

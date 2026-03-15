@@ -39,7 +39,10 @@
   "android_mobile_link",
   "message",
   "ess_dynamic_message_section",
-  "on_leave_message"
+  "on_leave_message",
+  "section_break_36",
+  "approval_popup",
+  "skip_approval"
  ],
  "fields": [
   {
@@ -229,10 +232,27 @@
    "fieldname": "on_leave_message",
    "fieldtype": "Small Text",
    "label": "On Leave Message"
+  },
+  {
+   "fieldname": "section_break_36",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "approval_popup",
+   "fieldtype": "Check",
+   "label": "Approval Popup"
+  },
+  {
+   "default": "0",
+   "depends_on": "approval_popup",
+   "fieldname": "skip_approval",
+   "fieldtype": "Check",
+   "label": "Skip Approval"
   }
  ],
  "issingle": 1,
- "modified": "2026-03-11 17:53:29.957616",
+ "modified": "2026-03-13 02:53:10.433868",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",
