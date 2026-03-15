@@ -124,7 +124,6 @@ def _update_single_worker_from_manager(doc):
 
 def _clear_worker_fields(doc):
 	"""Clear all worker fields related to manager"""
-	doc.business_vertical = None
 	doc.sales_order = None
 	doc.external_sales_order = 0
 	doc.external_order = None
