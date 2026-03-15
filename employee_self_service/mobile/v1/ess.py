@@ -21,7 +21,8 @@ from frappe.utils import (
     fmt_money,
     add_days,
     format_time,
-    cint
+    cint,
+    now
 )
 from employee_self_service.mobile.v1.reports_to_validation import update_reports_to
 from employee_self_service.mobile.v1.api_utils import (
@@ -3256,7 +3257,7 @@ def get_employee_documents():
 def get_nearby_team_leaders(latitude=None, longitude=None):
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["location", "reports_to","external_reporting_manager","external_report_to","employee_availability"]
+            frappe.session.user, fields=["name","location", "reports_to","external_reporting_manager","external_report_to","employee_availability"]
         )
         if emp_data.get("employee_availability") == "On Leave":
             on_leave_message = frappe.db.get_value("Employee Self Service Settings","Employee Self Service Settings","on_leave_message")
@@ -3320,7 +3321,6 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             AND ll.location != ''
             ORDER BY ll.datetime DESC
         """, (today(),), as_dict=1)
-        frappe.log_error(title="external_checkins", message=external_checkins)
         for checkin in external_checkins:
             if checkin.employee in seen:
                 continue
@@ -3334,7 +3334,6 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                 frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
 
             distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
-            frappe.log_error(title="distance", message={"employee": checkin.employee, "distance": distance})
             if distance <= 100:
                 nearby_leaders.append({
                     "employee": checkin.employee,
@@ -3343,12 +3342,20 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                     "external": 1,
                 })
         if len(nearby_leaders) == 0:
+            no_team_log_doc = frappe.get_doc(dict(
+                doctype = "No Team Leader Error",
+                employee = emp_data.name,
+                datetime = now(),
+                latitude = user_lat,
+                longitude = user_lon,
+            )).insert(ignore_permissions=True)
+            frappe.db.commit()
             return gen_response(500, "No nearby team leaders found", [])
         return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)
     except Exception as e:
         return exception_handler(e)
 
-
+@frappe.whitelist()
 def _haversine_distance(lat1, lon1, lat2, lon2):
     """Calculate distance between two coordinates in meters using the Haversine formula."""
     R = 6371000  # Earth radius in meters

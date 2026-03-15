@@ -56,8 +56,8 @@ def process_worker_site_attendance():
 	API endpoint to process Worker + Site attendance for a given employee and date.
 	Can be called manually or via scheduler for specific employees/dates if needed.
 	"""
-	employee = "EMP/00828"
-	date = "2026-02-28"
+	employee = "EMP/00774"
+	date = "2026-03-11"
 	result = _process_worker_site(employee, date)
 	return result
 
