@@ -24,8 +24,8 @@ frappe.query_reports['Checkin Status Report'] = {
 		{
 			fieldname: 'location',
 			label: __('Location'),
-			fieldtype: 'Link',
-			options: 'ESS Location',
+			fieldtype: 'Select',
+			options: '\nNoida\nHaridwar\nSite\nLucknow',
 			default: ''
 		}
 	]
