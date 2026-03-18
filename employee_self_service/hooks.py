@@ -142,6 +142,9 @@ doc_events = {
     "Leave Application": {
         "before_cancel": "employee_self_service.employee_self_service.doctype.otpl_leave.otpl_leave.validate_leave_application_cancel"
     },
+    "Team Leader Location Log": {
+        "after_insert": "employee_self_service.employee_self_service.utils.team_leader_location.after_team_leader_location_update_insert"
+    },
     "*": {
         "after_insert": "employee_self_service.send_notification.notification",
         "on_update": "employee_self_service.send_notification.notification",
@@ -168,13 +171,11 @@ scheduler_events = {
             "employee_self_service.mobile.v1.ess.on_holiday_event"
         ],
         "0 0 * * *": [
+            "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_driver",
             "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance"
         ],
         "*/5 * * * *": [
             "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"
-        ],
-        "0 18 * * *": [
-            "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_driver"
         ]
     },
 }

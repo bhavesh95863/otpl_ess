@@ -1,44 +1,47 @@
 {
- "creation": "2025-12-27 12:38:46.649785",
+ "autoname": "TLUP-.#####",
+ "creation": "2026-03-18 07:30:47.435337",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
   "employee",
   "employee_name",
-  "datetime",
-  "location"
+  "location",
+  "time"
  ],
  "fields": [
   {
    "fieldname": "employee",
    "fieldtype": "Link",
-   "in_list_view": 1,
    "label": "Employee",
-   "options": "Employee Pull"
-  },
-  {
-   "fieldname": "datetime",
-   "fieldtype": "Datetime",
-   "label": "Datetime"
-  },
-  {
-   "fieldname": "location",
-   "fieldtype": "Small Text",
-   "label": "Location"
+   "options": "Employee",
+   "read_only": 1
   },
   {
    "fetch_from": "employee.employee_name",
    "fieldname": "employee_name",
-   "fieldtype": "Read Only",
-   "in_list_view": 1,
-   "label": "Employee Name"
+   "fieldtype": "Data",
+   "label": "Employee Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "location",
+   "fieldtype": "Small Text",
+   "label": "Location",
+   "read_only": 1
+  },
+  {
+   "fieldname": "time",
+   "fieldtype": "Datetime",
+   "label": "Datetime",
+   "read_only": 1
   }
  ],
- "modified": "2026-03-18 08:07:45.029374",
+ "modified": "2026-03-18 08:44:18.898581",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
- "name": "Leader Location",
+ "name": "Team Leader Location Log",
  "owner": "Administrator",
  "permissions": [
   {
@@ -54,7 +57,6 @@
    "write": 1
   }
  ],
- "quick_entry": 1,
  "sort_field": "modified",
  "sort_order": "DESC",
  "track_changes": 1

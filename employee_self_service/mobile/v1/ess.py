@@ -842,8 +842,11 @@ def get_dashboard():
                 elif log.get("log_type") == "OUT":
                     has_checkout = True
         is_team_leader = 0
+        allow_location_update = 0
         if emp_data.get("is_team_leader") == 1:
             is_team_leader = 1
+            if last_log_type == "IN":
+                allow_location_update = 1
         if emp_data.get("staff_type") in ["Manager","Director","Partner"]:
             is_team_leader = 1
 
@@ -888,7 +891,8 @@ def get_dashboard():
             "apple_mobile_link":settings.get("apple_mobile_link"),
             "android_mobile_link":settings.get("android_mobile_link"),
             "message": settings.get("message"),
-            "people_on_leave": 0 if emp_data.get("location") == "Site" else 1
+            "people_on_leave": 0 if emp_data.get("location") == "Site" else 1,
+            "allow_location_update": allow_location_update
         }
         reports_to_name = None
         if emp_data.get("reports_to"):
@@ -3279,14 +3283,13 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
         distance_setting = flt(frappe.db.get_value("Employee Self Service Settings", "Employee Self Service Settings", "nearby_leader_distance_threshold")) or 100  
         # Fetch internal team leaders (external=0) from Employee Checkin
         internal_checkins = frappe.db.sql("""
-            SELECT ec.employee, ec.location, e.employee_name
+            SELECT ec.employee, COALESCE(NULLIF(ec.location_update, ''), ec.location) as location, e.employee_name
             FROM `tabEmployee Checkin` ec
             INNER JOIN `tabEmployee` e ON e.name = ec.employee
             WHERE e.is_team_leader = 1
             AND e.status = 'Active'
             AND ec.time >= %s
-            AND ec.location IS NOT NULL
-            AND ec.location != ''
+            AND (ec.location IS NOT NULL AND ec.location != '' OR ec.location_update IS NOT NULL AND ec.location_update != '')
             ORDER BY ec.time DESC
         """, (today(),), as_dict=1)
         for checkin in internal_checkins:
@@ -3394,3 +3397,28 @@ def _haversine_distance(lat1, lon1, lat2, lon2):
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
     c = 2 * math.asin(math.sqrt(a))
     return R * c
+
+@frappe.whitelist()
+def team_leader_location_update(latitude=None, longitude=None):
+    try:
+        emp_data = get_employee_by_user(
+            frappe.session.user, fields=["name","reports_to","external_reporting_manager","external_report_to"]
+        )
+        if not latitude or not longitude:
+            return gen_response(400, "latitude and longitude are required")
+
+        try:
+            lat = float(latitude)
+            lon = float(longitude)
+        except (ValueError, TypeError):
+            return gen_response(400, "Invalid latitude or longitude values")
+        location_update_doc = frappe.get_doc(dict(
+            doctype = "Team Leader Location Log",
+            employee = emp_data.name,
+            location = f"{lat},{lon}",
+            time = now(),
+        )).insert(ignore_permissions=True)
+       
+        return gen_response(200, "Team leader location updated successfully")
+    except Exception as e:
+        return exception_handler(e)
