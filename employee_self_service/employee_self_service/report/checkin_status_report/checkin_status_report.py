@@ -157,7 +157,7 @@ def get_data(filters):
 		# Apply filters
 		if status_filter == "Checked In" and not checkin_time:
 			continue
-		if status_filter == "No Team Leader Error" and not ntle_name:
+		if status_filter == "No Team Leader Error" and (not ntle_name or checkin_time):
 			continue
 		if status_filter == "Not Attempted" and (checkin_time or ntle_name):
 			continue
