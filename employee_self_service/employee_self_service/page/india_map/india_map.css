@@ -1,0 +1,20 @@
+#india-map-container {
+	background: #f5f7fa;
+}
+
+.custom-marker div {
+	transition: transform 0.15s ease;
+}
+
+.custom-marker:hover div {
+	transform: scale(1.5);
+}
+
+.leaflet-popup-content-wrapper {
+	border-radius: 8px;
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.leaflet-popup-content {
+	margin: 10px 14px;
+}
