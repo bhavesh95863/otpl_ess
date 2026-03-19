@@ -8,51 +8,45 @@ frappe.pages["india-map"].on_page_load = function (wrapper) {
 	const page = wrapper.page;
 	page.set_primary_action(__("Refresh"), () => load_markers(), "refresh");
 
-	// Source filter
 	let current_source = "All";
-	page.add_field({
-		fieldname: "source_filter",
-		label: __("Source"),
-		fieldtype: "Select",
-		options: "All\nOberoi\nTranzrail",
-		default: "All",
-		change: function () {
-			current_source = this.get_value();
-			render_markers();
-		},
-	});
-
-	// Search filter
-	page.add_field({
-		fieldname: "search",
-		label: __("Search Employee"),
-		fieldtype: "Data",
-		change: function () {
-			render_markers();
-		},
-	});
+	let view_mode = "Cluster";
 
 	const $container = $(wrapper).find(".layout-main-section");
 	$container.html(`
-		<div class="map-stats" style="display:flex; gap:16px; margin-bottom:12px; flex-wrap:wrap;">
-			<div class="stat-card" style="padding:8px 16px; background:var(--bg-light-gray); border-radius:var(--border-radius); font-size:13px;">
+		<div class="map-toolbar" style="display:flex; gap:12px; margin-bottom:12px; flex-wrap:wrap; align-items:flex-end;">
+			<div class="map-filter-group">
+				<label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">View Mode</label>
+				<select id="map-view-mode" class="form-control input-xs" style="width:140px; height:30px; font-size:13px;">
+					<option value="Cluster">Cluster</option>
+					<option value="Pins">Pins</option>
+				</select>
+			</div>
+			<div class="map-filter-group">
+				<label style="font-size:11px; color:var(--text-muted); display:block; margin-bottom:4px;">Search Employee</label>
+				<input id="map-search" type="text" class="form-control input-xs" placeholder="Type name or ID..." style="width:200px; height:30px; font-size:13px;" />
+			</div>
+			<div style="margin-left:auto; padding:6px 14px; background:var(--bg-light-gray); border-radius:var(--border-radius); font-size:13px;">
 				<span style="color:var(--text-muted)">Total Pins:</span>
 				<strong id="stat-total">0</strong>
-			</div>
-			<div class="stat-card" style="padding:8px 16px; background:#fff3e0; border-radius:var(--border-radius); font-size:13px;">
-				<span style="color:var(--text-muted)">Oberoi:</span>
-				<strong id="stat-oberoi" style="color:#e65100;">0</strong>
-			</div>
-			<div class="stat-card" style="padding:8px 16px; background:#e3f2fd; border-radius:var(--border-radius); font-size:13px;">
-				<span style="color:var(--text-muted)">Tranzrail:</span>
-				<strong id="stat-tranzrail" style="color:#1565c0;">0</strong>
 			</div>
 		</div>
 		<div id="india-map-container" style="height: calc(100vh - 220px); width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color);"></div>
 	`);
 
+	// Bind filter events
+	$container.find("#map-view-mode").on("change", function () {
+		view_mode = $(this).val();
+		render_markers();
+	});
+	let search_timer;
+	$container.find("#map-search").on("input", function () {
+		clearTimeout(search_timer);
+		search_timer = setTimeout(() => render_markers(), 300);
+	});
+
 	let map = null;
-	let marker_layer = null;
+	let cluster_layer = null;
+	let plain_layer = null;
 	let all_markers = [];
 
 	// Custom icons
@@ -75,29 +69,57 @@ frappe.pages["india-map"].on_page_load = function (wrapper) {
 		});
 	}
 
-	function init_leaflet() {
-		if (!document.getElementById("leaflet-css")) {
+	function load_css(id, href) {
+		if (!document.getElementById(id)) {
 			const link = document.createElement("link");
-			link.id = "leaflet-css";
+			link.id = id;
 			link.rel = "stylesheet";
-			link.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-			link.integrity = "sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=";
+			link.href = href;
 			link.crossOrigin = "";
 			document.head.appendChild(link);
 		}
+	}
 
+	function load_script(src, integrity) {
 		return new Promise((resolve) => {
-			if (window.L) {
-				resolve();
-				return;
-			}
 			const script = document.createElement("script");
-			script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-			script.integrity = "sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=";
+			script.src = src;
+			if (integrity) script.integrity = integrity;
 			script.crossOrigin = "";
 			script.onload = () => resolve();
 			document.head.appendChild(script);
 		});
+	}
+
+	function init_leaflet() {
+		// Leaflet CSS
+		load_css("leaflet-css", "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css");
+		// MarkerCluster CSS
+		load_css("mc-css", "https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css");
+		load_css("mc-default-css", "https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css");
+
+		let chain = Promise.resolve();
+
+		// Load Leaflet JS
+		if (!window.L) {
+			chain = chain.then(() =>
+				load_script(
+					"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
+					"sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+				)
+			);
+		}
+
+		// Load MarkerCluster JS (depends on Leaflet)
+		chain = chain.then(() => {
+			if (window.L && !L.MarkerClusterGroup) {
+				return load_script(
+					"https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"
+				);
+			}
+		});
+
+		return chain;
 	}
 
 	function create_map() {
@@ -108,15 +130,52 @@ frappe.pages["india-map"].on_page_load = function (wrapper) {
 				'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
 			maxZoom: 18,
 		}).addTo(map);
-		marker_layer = L.layerGroup().addTo(map);
 		create_icons();
 	}
 
 	function render_markers() {
-		if (!marker_layer) return;
-		marker_layer.clearLayers();
+		if (!map) return;
 
-		const search_val = (page.fields_dict.search.get_value() || "").toLowerCase();
+		// Remove old layers
+		if (cluster_layer) {
+			map.removeLayer(cluster_layer);
+			cluster_layer = null;
+		}
+		if (plain_layer) {
+			map.removeLayer(plain_layer);
+			plain_layer = null;
+		}
+
+		const use_cluster = view_mode === "Cluster";
+
+		if (use_cluster) {
+			// Create cluster group
+			cluster_layer = L.markerClusterGroup({
+				showCoverageOnHover: false,
+				maxClusterRadius: 45,
+				spiderfyOnMaxZoom: true,
+				disableClusteringAtZoom: 16,
+				iconCreateFunction: function (cluster) {
+					const count = cluster.getChildCount();
+					let size = "small";
+					let dim = 36;
+					if (count > 50) { size = "large"; dim = 52; }
+					else if (count > 10) { size = "medium"; dim = 44; }
+					return L.divIcon({
+						html: '<div class="cluster-pin cluster-' + size + '">' + count + '</div>',
+						className: "marker-cluster-custom",
+						iconSize: L.point(dim, dim),
+					});
+				},
+			});
+		} else {
+			// Plain layer group — all pins shown individually
+			plain_layer = L.layerGroup();
+		}
+
+		const target_layer = use_cluster ? cluster_layer : plain_layer;
+
+		const search_val = ($("#map-search").val() || "").toLowerCase();
 		const bounds = [];
 		let oberoi_count = 0;
 		let tranzrail_count = 0;
@@ -154,9 +213,9 @@ frappe.pages["india-map"].on_page_load = function (wrapper) {
 				</div>
 			`;
 
-			L.marker([m.latitude, m.longitude], { icon: icon })
-				.bindPopup(popup)
-				.addTo(marker_layer);
+			const marker = L.marker([m.latitude, m.longitude], { icon: icon })
+				.bindPopup(popup);
+			target_layer.addLayer(marker);
 
 			bounds.push([m.latitude, m.longitude]);
 
@@ -164,10 +223,10 @@ frappe.pages["india-map"].on_page_load = function (wrapper) {
 			else tranzrail_count++;
 		});
 
+		map.addLayer(target_layer);
+
 		// Update stats
 		document.getElementById("stat-total").textContent = bounds.length;
-		document.getElementById("stat-oberoi").textContent = oberoi_count;
-		document.getElementById("stat-tranzrail").textContent = tranzrail_count;
 
 		if (bounds.length) {
 			map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
