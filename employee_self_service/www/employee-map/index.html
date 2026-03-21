@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>India Map – Employee Locations</title>
+
+	<!-- Leaflet -->
+	<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+		integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+	<!-- MarkerCluster CSS -->
+	<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin="" />
+	<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" crossorigin="" />
+	<!-- Font Awesome (for icons) -->
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css" />
+
+	<style>
+		/* ── Reset + Base ──────────────────────────────────────────── */
+		*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+		html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; font-size: 14px; color: #333; background: #f5f7fa; }
+
+		/* ── Full-page split layout ────────────────────────────────── */
+		.india-map-page {
+			display: flex;
+			height: 100vh;
+			width: 100vw;
+			overflow: hidden;
+		}
+
+		/* Left: map takes all available space */
+		.map-area {
+			flex: 1;
+			position: relative;
+			min-width: 0;
+		}
+		#india-map-container {
+			position: absolute;
+			top: 0; left: 0; right: 0; bottom: 0;
+		}
+
+		/* Right: control panel */
+		.control-panel {
+			width: 340px;
+			min-width: 300px;
+			background: #fff;
+			border-left: 1px solid #dfe2e5;
+			display: flex;
+			flex-direction: column;
+			overflow-y: auto;
+			box-shadow: -2px 0 12px rgba(0,0,0,0.05);
+			z-index: 500;
+		}
+
+		/* ── Panel header ──────────────────────────────────────────── */
+		.panel-header {
+			padding: 20px 20px 12px;
+			border-bottom: 1px solid #eee;
+		}
+		.panel-header h3 {
+			font-size: 18px;
+			font-weight: 700;
+			margin-bottom: 2px;
+		}
+		.panel-header .subtitle {
+			font-size: 12px;
+			color: #8d99ae;
+		}
+
+		/* ── Control groups ────────────────────────────────────────── */
+		.panel-body {
+			padding: 16px 20px;
+			display: flex;
+			flex-direction: column;
+			gap: 16px;
+			flex: 1;
+		}
+		.ctrl-group { display: flex; flex-direction: column; gap: 4px; }
+		.ctrl-group label {
+			font-size: 11px;
+			text-transform: uppercase;
+			letter-spacing: 0.6px;
+			color: #8d99ae;
+			font-weight: 600;
+		}
+		.ctrl-group input,
+		.ctrl-group select {
+			width: 100%;
+			height: 34px;
+			padding: 4px 10px;
+			border: 1px solid #dfe2e5;
+			border-radius: 6px;
+			font-size: 13px;
+			background: #fff;
+			color: #333;
+			outline: none;
+			transition: border-color 0.15s;
+		}
+		.ctrl-group input:focus,
+		.ctrl-group select:focus {
+			border-color: #4361ee;
+			box-shadow: 0 0 0 3px rgba(67,97,238,0.12);
+		}
+
+		/* ── Employee search dropdown ──────────────────────────────── */
+		.search-wrap { position: relative; }
+		.search-dropdown {
+			display: none;
+			position: absolute;
+			top: 100%; left: 0; right: 0;
+			max-height: 260px;
+			overflow-y: auto;
+			background: #fff;
+			border: 1px solid #dfe2e5;
+			border-top: none;
+			border-radius: 0 0 6px 6px;
+			box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+			z-index: 1000;
+		}
+		.search-item {
+			padding: 8px 12px;
+			cursor: pointer;
+			font-size: 12px;
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			border-bottom: 1px solid #f0f0f0;
+		}
+		.search-item:last-child { border-bottom: none; }
+		.search-item:hover { background: #f0f4ff; }
+		.search-empty {
+			padding: 14px;
+			text-align: center;
+			color: #8d99ae;
+			font-size: 12px;
+		}
+
+		/* ── Stats card ────────────────────────────────────────────── */
+		.stats-card {
+			background: #f8f9fb;
+			border-radius: 8px;
+			padding: 14px;
+		}
+		.stat-row {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 6px 0;
+		}
+		.stat-row + .stat-row { border-top: 1px solid #eee; }
+		.stat-row.sub { padding-left: 10px; }
+		.stat-label {
+			font-size: 12px;
+			color: #8d99ae;
+			display: flex;
+			align-items: center;
+			gap: 6px;
+		}
+		.stat-val { font-size: 13px; font-weight: 600; }
+		.dot {
+			display: inline-block;
+			width: 10px; height: 10px;
+			border-radius: 50%;
+			border: 1.5px solid rgba(255,255,255,0.6);
+			box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+		}
+
+		/* ── Action buttons ────────────────────────────────────────── */
+		.panel-footer {
+			padding: 12px 20px 20px;
+			margin-top: auto;
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+		.btn-action {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			gap: 6px;
+			width: 100%;
+			height: 36px;
+			border: none;
+			border-radius: 6px;
+			font-size: 13px;
+			font-weight: 600;
+			cursor: pointer;
+			transition: background 0.15s;
+		}
+		.btn-primary-map { background: #4361ee; color: #fff; }
+		.btn-primary-map:hover { background: #3a56d4; }
+		.btn-secondary-map { background: #e9ecef; color: #333; }
+		.btn-secondary-map:hover { background: #dee2e6; }
+
+		/* ── Loading overlay ───────────────────────────────────────── */
+		.map-loading {
+			display: none;
+			position: absolute;
+			top: 0; left: 0; right: 0; bottom: 0;
+			background: rgba(255,255,255,0.7);
+			z-index: 600;
+			align-items: center;
+			justify-content: center;
+			font-size: 14px;
+			color: #4361ee;
+			font-weight: 600;
+		}
+		.map-loading.active { display: flex; }
+
+		/* ── Toast notification ─────────────────────────────────────── */
+		.map-toast {
+			position: fixed;
+			top: 16px;
+			left: 50%;
+			transform: translateX(-50%) translateY(-60px);
+			background: #333;
+			color: #fff;
+			padding: 10px 20px;
+			border-radius: 8px;
+			font-size: 13px;
+			z-index: 10000;
+			transition: transform 0.3s ease;
+			pointer-events: none;
+		}
+		.map-toast.show { transform: translateX(-50%) translateY(0); }
+		.map-toast.success { background: #2d6a4f; }
+		.map-toast.warning { background: #e76f51; }
+		.map-toast.info { background: #4361ee; }
+
+		/* ── Marker styles ─────────────────────────────────────────── */
+		.custom-marker div { transition: transform 0.15s ease; }
+		.custom-marker:hover div { transform: scale(1.5); }
+		.highlight-marker div { animation: pulse-hl 1.2s ease-in-out infinite; }
+		@keyframes pulse-hl { 0%,100%{transform:scale(1)} 50%{transform:scale(1.4)} }
+
+		.leaflet-popup-content-wrapper { border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); }
+		.leaflet-popup-content { margin: 10px 14px; }
+
+		/* ── Cluster pin ───────────────────────────────────────────── */
+		.marker-cluster-custom { background: transparent !important; }
+		.cluster-pin {
+			display: flex; align-items: center; justify-content: center;
+			border-radius: 50%; color: #fff; font-weight: 700;
+			box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+			border: 3px solid rgba(255,255,255,0.8);
+			width: 100%; height: 100%;
+		}
+		.cluster-small  { background: #2196f3; font-size: 12px; }
+		.cluster-medium { background: #ff9800; font-size: 13px; }
+		.cluster-large  { background: #e53935; font-size: 14px; }
+
+		/* ── Responsive ────────────────────────────────────────────── */
+		@media (max-width: 768px) {
+			.india-map-page { flex-direction: column; }
+			.map-area { height: 55vh; }
+			.control-panel {
+				width: 100%; min-width: 0;
+				border-left: none; border-top: 1px solid #dfe2e5;
+				height: 45vh;
+			}
+		}
+	</style>
+</head>
+<body>
+
+<div class="india-map-page">
+	<!-- ─── Left: Map ─────────────────────────────────────────── -->
+	<div class="map-area">
+		<div id="india-map-container"></div>
+		<div class="map-loading" id="map-loading">
+			<i class="fa fa-spinner fa-spin"></i>&nbsp; Loading locations…
+		</div>
+	</div>
+
+	<!-- ─── Right: Controls ───────────────────────────────────── -->
+	<div class="control-panel">
+		<div class="panel-header">
+			<h3>India Map</h3>
+			<span class="subtitle">Live employee check-in tracking &mdash; OTPL &amp; TRANZ</span>
+		</div>
+
+		<div class="panel-body">
+			<div class="ctrl-group">
+				<label>Date</label>
+				<input type="date" id="map-date" />
+			</div>
+
+			<div class="ctrl-group">
+				<label>View Mode</label>
+				<select id="map-view-mode">
+					<option value="Cluster">Cluster</option>
+					<option value="Pins">Pins</option>
+				</select>
+			</div>
+
+			<div class="ctrl-group">
+				<label>Search Employee</label>
+				<div class="search-wrap">
+					<input type="text" id="map-search" placeholder="Type name or ID…" autocomplete="off" />
+					<div class="search-dropdown" id="search-dropdown"></div>
+				</div>
+			</div>
+
+			<div class="stats-card">
+				<div class="stat-row">
+					<span class="stat-label">Employees Checked In</span>
+					<span class="stat-val">
+						<strong id="stat-checked-in">0</strong>
+						<span style="color:#8d99ae"> / </span>
+						<span id="stat-total">0</span>
+					</span>
+				</div>
+				<div class="stat-row sub">
+					<span class="stat-label"><span class="dot" style="background:#e65100"></span> Oberoi Thermit Pvt. Ltd.</span>
+					<span class="stat-val" id="stat-oberoi">0</span>
+				</div>
+				<div class="stat-row sub">
+					<span class="stat-label"><span class="dot" style="background:#1565c0"></span> Tranzrail</span>
+					<span class="stat-val" id="stat-tranzrail">0</span>
+				</div>
+			</div>
+		</div>
+
+		<div class="panel-footer">
+			<button class="btn-action btn-primary-map" id="btn-refresh">
+				<i class="fa fa-refresh"></i> Refresh Data
+			</button>
+			<button class="btn-action btn-secondary-map" id="btn-back">
+				<i class="fa fa-arrow-left"></i> Back to Desk
+			</button>
+		</div>
+	</div>
+</div>
+
+<!-- ─── Toast ──────────────────────────────────────────────── -->
+<div class="map-toast" id="map-toast"></div>
+
+<!-- ─── Scripts ────────────────────────────────────────────── -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+	integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin=""></script>
+
+<script>
+(function () {
+	"use strict";
+
+	// ── Login guard: redirect guests to login page ─────────────
+	var sid = (document.cookie.match(/(^|;)\s*sid\s*=\s*([^;]+)/) || []).pop() || "";
+	var isGuest = !sid || sid === "Guest";
+	if (isGuest) {
+		window.location.href = "/login?redirect-to=" + encodeURIComponent("/employee-map");
+		return;
+	}
+
+	// ── State ───────────────────────────────────────────────────
+	let map, clusterLayer, plainLayer, baseLayers = {};
+	let viewMode = "Cluster";
+	let allMarkers = [];
+	let allEmployees = [];
+	let totalActive = 0;
+	let selectedEmployee = null;
+
+	// ── Helpers ──────────────────────────────────────────────────
+	function escapeHtml(s) {
+		if (!s) return "";
+		const d = document.createElement("div");
+		d.textContent = s;
+		return d.innerHTML;
+	}
+
+	function today() {
+		const d = new Date();
+		return d.getFullYear() + "-" +
+			String(d.getMonth() + 1).padStart(2, "0") + "-" +
+			String(d.getDate()).padStart(2, "0");
+	}
+
+	function toast(msg, type, duration) {
+		const el = document.getElementById("map-toast");
+		el.textContent = msg;
+		el.className = "map-toast " + (type || "info") + " show";
+		setTimeout(() => { el.className = "map-toast"; }, duration || 3000);
+	}
+
+	function showLoading(v) {
+		document.getElementById("map-loading").classList.toggle("active", v);
+	}
+
+	// ── CSRF cookie (Frappe auth) ───────────────────────────────
+	function getCookie(name) {
+		const v = document.cookie.match("(^|;)\\s*" + name + "\\s*=\\s*([^;]+)");
+		return v ? v.pop() : "";
+	}
+
+	function apiCall(method, args) {
+		const params = new URLSearchParams();
+		if (args) {
+			Object.keys(args).forEach(k => {
+				if (args[k] !== undefined && args[k] !== null) params.append(k, args[k]);
+			});
+		}
+		const url = "/api/method/" + method + (params.toString() ? "?" + params.toString() : "");
+		return fetch(url, {
+			method: "GET",
+			headers: {
+				"Accept": "application/json",
+				"X-Frappe-CSRF-Token": getCookie("csrf_token"),
+			},
+			credentials: "include",
+		}).then(r => {
+			if (!r.ok) throw new Error("API error " + r.status);
+			return r.json();
+		}).then(d => d.message);
+	}
+
+	// ── Icons ───────────────────────────────────────────────────
+	const ICONS = {};
+	function createIcons() {
+		ICONS.oberoi = L.divIcon({
+			className: "custom-marker",
+			html: '<div style="background:#e65100;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>',
+			iconSize: [16,16], iconAnchor: [8,8], popupAnchor: [0,-10],
+		});
+		ICONS.tranzrail = L.divIcon({
+			className: "custom-marker",
+			html: '<div style="background:#1565c0;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)"></div>',
+			iconSize: [16,16], iconAnchor: [8,8], popupAnchor: [0,-10],
+		});
+		ICONS.highlight = L.divIcon({
+			className: "custom-marker highlight-marker",
+			html: '<div style="background:#ffd600;width:16px;height:16px;border-radius:50%;border:3px solid #f44336;box-shadow:0 1px 6px rgba(0,0,0,.5)"></div>',
+			iconSize: [22,22], iconAnchor: [11,11], popupAnchor: [0,-12],
+		});
+	}
+
+	// ── Create map ──────────────────────────────────────────────
+	function createMap() {
+		map = L.map("india-map-container", { zoomControl: true, maxZoom: 19 })
+			.setView([22.5, 82.0], 5);
+
+		baseLayers = {
+			"Street": L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+				attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+				maxZoom: 19,
+			}),
+			"Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+				attribution: '&copy; Esri',
+				maxZoom: 19,
+			}),
+			"Terrain": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+				attribution: '&copy; OpenTopoMap',
+				maxZoom: 17,
+			}),
+		};
+		baseLayers["Street"].addTo(map);
+		L.control.layers(baseLayers, null, { position: "topright" }).addTo(map);
+		createIcons();
+	}
+
+	// ── Render markers ──────────────────────────────────────────
+	function renderMarkers() {
+		if (!map) return;
+
+		if (clusterLayer) { map.removeLayer(clusterLayer); clusterLayer = null; }
+		if (plainLayer)   { map.removeLayer(plainLayer);   plainLayer = null;   }
+
+		const useCluster = viewMode === "Cluster";
+
+		if (useCluster) {
+			clusterLayer = L.markerClusterGroup({
+				showCoverageOnHover: false,
+				maxClusterRadius: 45,
+				spiderfyOnMaxZoom: true,
+				zoomToBoundsOnClick: true,
+				spiderfyDistanceMultiplier: 2.5,
+				iconCreateFunction: function (cluster) {
+					const n = cluster.getChildCount();
+					let size = "small", dim = 36;
+					if (n > 50) { size = "large"; dim = 52; }
+					else if (n > 10) { size = "medium"; dim = 44; }
+					return L.divIcon({
+						html: '<div class="cluster-pin cluster-' + size + '">' + n + '</div>',
+						className: "marker-cluster-custom",
+						iconSize: L.point(dim, dim),
+					});
+				},
+			});
+		} else {
+			plainLayer = L.layerGroup();
+		}
+
+		const target = useCluster ? clusterLayer : plainLayer;
+		const bounds = [];
+		let cntO = 0, cntT = 0;
+
+		allMarkers.forEach(function (m) {
+			const isSel = selectedEmployee && m.employee === selectedEmployee;
+			const icon = isSel ? ICONS.highlight
+				: (m.source === "Oberoi" ? ICONS.oberoi : ICONS.tranzrail);
+			const color = m.source === "Oberoi" ? "#e65100" : "#1565c0";
+
+			let html = '<div style="min-width:220px;font-size:13px">'
+				+ '<div style="font-weight:600;margin-bottom:4px;color:' + color + '">'
+				+ escapeHtml(m.company || m.source) + '</div>'
+				+ '<div><strong>' + escapeHtml(m.employee_name || "Unknown") + '</strong></div>'
+				+ '<div style="color:#8d99ae;font-size:12px">' + escapeHtml(m.employee || "") + '</div>'
+				+ '<div style="margin-top:4px;font-size:12px"><span style="color:#8d99ae">Time:</span> '
+				+ escapeHtml(m.time || "") + '</div>';
+
+			if (m.address) {
+				html += '<div style="margin-top:3px;font-size:12px"><span style="color:#8d99ae">Address:</span> '
+					+ escapeHtml(m.address) + '</div>';
+			}
+			if (m.business_vertical) {
+				html += '<div style="margin-top:3px;font-size:12px"><span style="color:#8d99ae">Business Vertical:</span> '
+					+ escapeHtml(m.business_vertical) + '</div>';
+			}
+			if (m.sales_order) {
+				html += '<div style="margin-top:3px;font-size:12px"><span style="color:#8d99ae">Sales Order:</span> '
+					+ escapeHtml(m.sales_order) + '</div>';
+			}
+
+			html += '<div style="font-size:11px;color:#adb5bd;margin-top:4px">'
+				+ m.latitude.toFixed(5) + ', ' + m.longitude.toFixed(5) + '</div></div>';
+
+			const marker = L.marker([m.latitude, m.longitude], { icon: icon }).bindPopup(html);
+			marker._emp_id = m.employee;
+			target.addLayer(marker);
+			bounds.push([m.latitude, m.longitude]);
+
+			if (m.source === "Oberoi") cntO++; else cntT++;
+		});
+
+		map.addLayer(target);
+
+		// Update stats
+		const total = cntO + cntT;
+		document.getElementById("stat-checked-in").textContent = total;
+		document.getElementById("stat-total").textContent = totalActive || total;
+		document.getElementById("stat-oberoi").textContent = cntO;
+		document.getElementById("stat-tranzrail").textContent = cntT;
+
+		if (bounds.length && !selectedEmployee) {
+			map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+		}
+	}
+
+	// ── Zoom to employee ────────────────────────────────────────
+	function zoomToEmployee(empId) {
+		const m = allMarkers.find(function (mk) { return mk.employee === empId; });
+		if (!m) return;
+		map.setView([m.latitude, m.longitude], 16);
+		setTimeout(function () {
+			var layer = clusterLayer || plainLayer;
+			if (!layer) return;
+			layer.eachLayer(function (lyr) {
+				if (lyr._emp_id === empId && lyr.openPopup) {
+					if (clusterLayer) {
+						clusterLayer.zoomToShowLayer(lyr, function () { lyr.openPopup(); });
+					} else {
+						lyr.openPopup();
+					}
+				}
+			});
+		}, 600);
+	}
+
+	// ── Load data ───────────────────────────────────────────────
+	function loadMarkers() {
+		showLoading(true);
+		toast("Loading employee locations…", "info", 2000);
+
+		var date = document.getElementById("map-date").value || today();
+
+		apiCall(
+			"employee_self_service.employee_self_service.page.india_map.india_map.get_map_markers",
+			{ date: date }
+		).then(function (data) {
+			showLoading(false);
+
+			if (Array.isArray(data)) {
+				allMarkers = data;
+				allEmployees = data.map(function (m) { return { employee: m.employee, employee_name: m.employee_name }; });
+				totalActive = 0;
+			} else {
+				allMarkers = data.markers || [];
+				allEmployees = data.employee_list || allMarkers.map(function (m) { return { employee: m.employee, employee_name: m.employee_name }; });
+				totalActive = data.total_active_employees || 0;
+			}
+
+			selectedEmployee = null;
+			document.getElementById("map-search").value = "";
+			renderMarkers();
+
+			if (!allMarkers.length) {
+				toast("No locations found for this date", "warning");
+			} else {
+				toast(allMarkers.length + " employee locations loaded", "success");
+			}
+		}).catch(function (err) {
+			showLoading(false);
+			toast("Failed to load data: " + err.message, "warning", 5000);
+		});
+	}
+
+	// ── Wire up controls ────────────────────────────────────────
+	function init() {
+		// Set today
+		document.getElementById("map-date").value = today();
+
+		// View mode
+		document.getElementById("map-view-mode").addEventListener("change", function () {
+			viewMode = this.value;
+			renderMarkers();
+		});
+
+		// Date change
+		document.getElementById("map-date").addEventListener("change", function () {
+			loadMarkers();
+		});
+
+		// Refresh
+		document.getElementById("btn-refresh").addEventListener("click", function () {
+			loadMarkers();
+		});
+
+		// Back to desk
+		document.getElementById("btn-back").addEventListener("click", function () {
+			window.location.href = "/desk";
+		});
+
+		// ── Search dropdown ─────────────────────────────────────
+		var searchInput = document.getElementById("map-search");
+		var dropdown = document.getElementById("search-dropdown");
+		var searchTimer;
+
+		searchInput.addEventListener("input", function () {
+			clearTimeout(searchTimer);
+			var val = this.value.trim().toLowerCase();
+
+			if (!val) {
+				dropdown.style.display = "none";
+				selectedEmployee = null;
+				renderMarkers();
+				return;
+			}
+
+			searchTimer = setTimeout(function () {
+				var filtered = allEmployees.filter(function (emp) {
+					return (emp.employee_name || "").toLowerCase().indexOf(val) !== -1
+						|| (emp.employee || "").toLowerCase().indexOf(val) !== -1;
+				}).slice(0, 25);
+
+				if (filtered.length) {
+					dropdown.innerHTML = filtered.map(function (emp) {
+						return '<div class="search-item" data-emp="' + escapeHtml(emp.employee) + '">'
+							+ '<strong>' + escapeHtml(emp.employee_name) + '</strong>'
+							+ '<span style="color:#8d99ae">' + escapeHtml(emp.employee) + '</span></div>';
+					}).join("");
+					dropdown.style.display = "block";
+				} else {
+					dropdown.innerHTML = '<div class="search-empty">No employees found</div>';
+					dropdown.style.display = "block";
+				}
+			}, 200);
+		});
+
+		dropdown.addEventListener("click", function (e) {
+			var item = e.target.closest(".search-item");
+			if (!item) return;
+			var empId = item.getAttribute("data-emp");
+			selectedEmployee = empId;
+			var emp = allEmployees.find(function (e) { return e.employee === empId; });
+			if (emp) searchInput.value = emp.employee_name + " (" + emp.employee + ")";
+			dropdown.style.display = "none";
+			renderMarkers();
+			zoomToEmployee(empId);
+		});
+
+		document.addEventListener("click", function (e) {
+			if (!e.target.closest(".search-wrap")) dropdown.style.display = "none";
+		});
+
+		searchInput.addEventListener("keydown", function (e) {
+			if (e.key === "Escape") {
+				this.value = "";
+				dropdown.style.display = "none";
+				selectedEmployee = null;
+				renderMarkers();
+			}
+		});
+
+		// ── Create map and load data ────────────────────────────
+		createMap();
+		loadMarkers();
+	}
+
+	// Boot
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", init);
+	} else {
+		init();
+	}
+})();
+</script>
+
+</body>
+</html>

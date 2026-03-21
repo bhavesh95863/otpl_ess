@@ -54,7 +54,8 @@ def sync_leader_location_to_remote(checkin_doc):
             return
 
         is_team_leader = frappe.get_cached_value("Employee", employee, "is_team_leader")
-        if not is_team_leader:
+        staff_type = frappe.get_cached_value("Employee", employee, "staff_type")
+        if not is_team_leader and staff_type != "Manager":
             return
 
         # Get employee company

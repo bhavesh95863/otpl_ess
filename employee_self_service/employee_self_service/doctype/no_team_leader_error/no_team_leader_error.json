@@ -11,10 +11,14 @@
   "column_break_3",
   "longitude",
   "datetime",
+  "employee_address",
+  "previous_checkin_distance",
+  "previous_checkin_address",
   "section_break_6",
   "reporting_manager",
   "reporting_manager_name",
   "reporting_manager_checkin",
+  "reporting_manager_address",
   "column_break_9",
   "reporting_manager_latitude",
   "reporting_manager_longitude",
@@ -23,6 +27,7 @@
   "nearest_team_leader",
   "nearest_team_leader_name",
   "nearest_team_leader_checkin",
+  "nearest_team_leader_address",
   "column_break_16",
   "nearest_team_leader_latitude",
   "nearest_team_leader_longitude",
@@ -58,6 +63,23 @@
    "fieldtype": "Column Break"
   },
   {
+   "fieldname": "employee_address",
+   "fieldtype": "Small Text",
+   "label": "Employee Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "previous_checkin_distance",
+   "fieldtype": "Read Only",
+   "label": "Distance From Previous Checkin"
+  },
+  {
+   "fieldname": "previous_checkin_address",
+   "fieldtype": "Small Text",
+   "label": "Previous Checkin Address",
+   "read_only": 1
+  },
+  {
    "fieldname": "section_break_6",
    "fieldtype": "Section Break"
   },
@@ -70,6 +92,12 @@
    "fieldname": "reporting_manager_checkin",
    "fieldtype": "Datetime",
    "label": "Reporting Manager Checkin"
+  },
+  {
+   "fieldname": "reporting_manager_address",
+   "fieldtype": "Small Text",
+   "label": "Reporting Manager Address",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_9",
@@ -103,6 +131,12 @@
    "fieldname": "nearest_team_leader_checkin",
    "fieldtype": "Datetime",
    "label": "Nearest Team Leader Checkin"
+  },
+  {
+   "fieldname": "nearest_team_leader_address",
+   "fieldtype": "Small Text",
+   "label": "Nearest Team Leader Address",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_16",
@@ -145,7 +179,7 @@
   }
  ],
  "in_create": 1,
- "modified": "2026-03-14 11:00:19.396912",
+ "modified": "2026-03-21 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "No Team Leader Error",

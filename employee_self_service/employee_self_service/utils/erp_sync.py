@@ -400,13 +400,13 @@ def get_employees_for_sync(filters=None):
 		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so"]
 		
 
-		# Get all team leader employees from Employee doctype
-		employees = frappe.get_all(
-			"Employee",
-			filters={"is_team_leader": 1, "status": "Active"},
-			fields=field_names,
-			limit_page_length=None
-		)
+		# Get all team leader or manager employees from Employee doctype
+		employees = frappe.db.sql("""
+			SELECT {fields}
+			FROM `tabEmployee`
+			WHERE status = 'Active'
+			AND (is_team_leader = 1 OR staff_type = 'Manager')
+		""".format(fields=", ".join(field_names)), as_dict=True)
 		
 		# Transform to Employee Pull format
 		employee_data = []
@@ -1001,9 +1001,8 @@ def sync_employee_to_remote(doc, method=None):
 	"""
 	try:
 		
-		# Only sync team leaders
-		if not doc.is_team_leader:
-			frappe.log_error("Not a team leader: {0}".format(doc.name), "ERP Sync Debug")
+		# Only sync team leaders or managers
+		if not doc.is_team_leader and doc.staff_type != "Manager":
 			return
 		
 		# Prepare employee data

@@ -7,6 +7,7 @@ import math
 import frappe
 from frappe.utils import today, cint
 from frappe.model.document import Document
+from employee_self_service.employee_self_service.utils.otpl_attendance import get_address_from_lat_long
 
 
 class NoTeamLeaderError(Document):
@@ -19,6 +20,8 @@ class NoTeamLeaderError(Document):
 			if self.employee and not self.employee_name:
 				self.employee_name = frappe.db.get_value("Employee", self.employee, "employee_name") or ""
 				frappe.db.set_value("No Team Leader Error", self.name, "employee_name", self.employee_name, update_modified=False)
+			self._populate_employee_address()
+			self._populate_previous_checkin_distance()
 			self._populate_reporting_manager_info()
 			self._populate_nearest_team_leader_info()
 		except Exception:
@@ -45,6 +48,53 @@ class NoTeamLeaderError(Document):
 			return float(parts[0].strip()), float(parts[1].strip())
 		except (ValueError, IndexError, AttributeError):
 			return None, None
+
+	def _populate_employee_address(self):
+		"""Reverse-geocode the employee's current lat/lon to a readable address."""
+		try:
+			emp_lat = float(self.latitude)
+			emp_lon = float(self.longitude)
+		except (ValueError, TypeError):
+			return
+		address = get_address_from_lat_long(emp_lat, emp_lon)
+		if address:
+			frappe.db.set_value("No Team Leader Error", self.name, "employee_address", address, update_modified=False)
+
+	def _populate_previous_checkin_distance(self):
+		"""Calculate distance between the employee's current location and their
+		most recent prior check-in location."""
+		try:
+			emp_lat = float(self.latitude)
+			emp_lon = float(self.longitude)
+		except (ValueError, TypeError):
+			return
+
+		last_checkin = frappe.get_all(
+			"Employee Checkin",
+			filters={
+				"employee": self.employee,
+				"log_type": "IN",
+				"location": ["!=", ""],
+			},
+			fields=["location"],
+			order_by="time desc",
+			limit=1,
+		)
+		if not last_checkin:
+			return
+
+		prev_lat, prev_lon = self._parse_location(last_checkin[0].location)
+		if prev_lat is None:
+			return
+
+		distance = self._haversine(emp_lat, emp_lon, prev_lat, prev_lon)
+		update = {
+			"previous_checkin_distance": str(round(distance, 2)) + " m",
+		}
+		prev_address = get_address_from_lat_long(prev_lat, prev_lon)
+		if prev_address:
+			update["previous_checkin_address"] = prev_address
+		frappe.db.set_value("No Team Leader Error", self.name, update, update_modified=False)
 
 	def _populate_reporting_manager_info(self):
 		"""Find the reporting manager's most-recent location for today up to
@@ -115,6 +165,9 @@ class NoTeamLeaderError(Document):
 					"reporting_manager_longitude": str(m_lon),
 					"reporting_manager_distance": str(round(distance, 2)) + " m",
 				})
+				mgr_address = get_address_from_lat_long(m_lat, m_lon)
+				if mgr_address:
+					update["reporting_manager_address"] = mgr_address
 
 		frappe.db.set_value("No Team Leader Error", self.name, update, update_modified=False)
 
@@ -193,14 +246,19 @@ class NoTeamLeaderError(Document):
 			return
 
 		m_lat, m_lon = self._parse_location(best["location"])
-		frappe.db.set_value("No Team Leader Error", self.name, {
+		ntl_update = {
 			"nearest_team_leader": best["employee"],
 			"nearest_team_leader_name": best.get("employee_name") or best["employee"],
 			"nearest_team_leader_checkin": best["checkin_time"],
 			"nearest_team_leader_latitude": str(m_lat),
 			"nearest_team_leader_longitude": str(m_lon),
 			"nearest_team_leader_distance": str(round(best["distance"], 2)) + " m",
-		}, update_modified=False)
+		}
+		if m_lat is not None:
+			ntl_address = get_address_from_lat_long(m_lat, m_lon)
+			if ntl_address:
+				ntl_update["nearest_team_leader_address"] = ntl_address
+		frappe.db.set_value("No Team Leader Error", self.name, ntl_update, update_modified=False)
 
 
 @frappe.whitelist()

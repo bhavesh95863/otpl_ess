@@ -1,29 +1,174 @@
+/* ── Two-column layout: map left, controls right (Req #1) ─── */
+.india-map-wrapper {
+	display: flex;
+	height: calc(100vh - 140px);
+	border: 1px solid var(--border-color);
+	border-radius: 8px;
+	overflow: hidden;
+}
+
+.india-map-left {
+	flex: 1;
+	min-width: 0;
+}
+
 #india-map-container {
+	height: 100%;
+	width: 100%;
 	background: #f5f7fa;
 }
 
+.india-map-right {
+	width: 320px;
+	min-width: 280px;
+	border-left: 1px solid var(--border-color);
+	padding: 20px;
+	overflow-y: auto;
+	background: var(--card-bg);
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+/* ── Right panel sections ──────────────────────────────────── */
+.map-panel-header h4 {
+	margin: 0 0 4px 0;
+	font-size: 16px;
+	font-weight: 700;
+}
+.map-panel-header p {
+	margin: 0;
+	font-size: 12px;
+}
+
+.map-control-group {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.map-control-group label {
+	font-size: 11px;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	font-weight: 600;
+}
+.map-control-group .form-control {
+	height: 32px;
+	font-size: 13px;
+}
+
+/* ── Employee search dropdown (Req #3) ─────────────────────── */
+.employee-search-wrapper {
+	position: relative;
+}
+.search-results-dropdown {
+	display: none;
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	max-height: 240px;
+	overflow-y: auto;
+	background: var(--card-bg);
+	border: 1px solid var(--border-color);
+	border-top: none;
+	border-radius: 0 0 6px 6px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+	z-index: 1000;
+}
+.search-result-item {
+	padding: 8px 12px;
+	cursor: pointer;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	font-size: 12px;
+	border-bottom: 1px solid var(--border-color);
+}
+.search-result-item:last-child {
+	border-bottom: none;
+}
+.search-result-item:hover {
+	background: var(--bg-light-gray);
+}
+.search-result-empty {
+	padding: 12px;
+	text-align: center;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+/* ── Stats panel (Req #2) ─────────────────────────────────── */
+.map-stats {
+	background: var(--bg-light-gray);
+	border-radius: 8px;
+	padding: 12px;
+}
+.stat-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 6px 0;
+}
+.stat-row:not(:last-child) {
+	border-bottom: 1px solid var(--border-color);
+}
+.stat-row.stat-sub {
+	padding: 4px 0 4px 8px;
+}
+.stat-label {
+	font-size: 12px;
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.stat-value {
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.legend-dot {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	border: 1.5px solid rgba(255, 255, 255, 0.7);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.map-actions {
+	margin-top: auto;
+}
+
+/* ── Marker styles ─────────────────────────────────────────── */
 .custom-marker div {
 	transition: transform 0.15s ease;
 }
-
 .custom-marker:hover div {
 	transform: scale(1.5);
+}
+.highlight-marker div {
+	animation: pulse-highlight 1.2s ease-in-out infinite;
+}
+@keyframes pulse-highlight {
+	0%, 100% { transform: scale(1); }
+	50% { transform: scale(1.4); }
 }
 
 .leaflet-popup-content-wrapper {
 	border-radius: 8px;
 	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
 }
-
 .leaflet-popup-content {
 	margin: 10px 14px;
 }
 
-/* Cluster pin styles */
+/* ── Cluster pin styles ────────────────────────────────────── */
 .marker-cluster-custom {
 	background: transparent !important;
 }
-
 .cluster-pin {
 	display: flex;
 	align-items: center;
@@ -37,18 +182,22 @@
 	width: 100%;
 	height: 100%;
 }
+.cluster-small { background: #2196f3; font-size: 12px; }
+.cluster-medium { background: #ff9800; font-size: 13px; }
+.cluster-large { background: #e53935; font-size: 14px; }
 
-.cluster-small {
-	background: #2196f3;
-	font-size: 12px;
-}
-
-.cluster-medium {
-	background: #ff9800;
-	font-size: 13px;
-}
-
-.cluster-large {
-	background: #e53935;
-	font-size: 14px;
+/* ── Responsive: stack on small screens ────────────────────── */
+@media (max-width: 768px) {
+	.india-map-wrapper {
+		flex-direction: column;
+		height: auto;
+	}
+	.india-map-left {
+		height: 50vh;
+	}
+	.india-map-right {
+		width: 100%;
+		border-left: none;
+		border-top: 1px solid var(--border-color);
+	}
 }
