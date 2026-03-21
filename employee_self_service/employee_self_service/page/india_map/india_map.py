@@ -15,8 +15,8 @@ def get_map_markers(date=None):
         date = frappe.utils.today()
 
     api_urls = [
-        "https://erp.oberoithermit.com/api/method/locations",
-        "https://erp.tranzrail.co.in/api/method/locations",
+        "https://erp.oberoithermit.com/api/method/employee_self_service.api.locations",
+        "https://erp.tranzrail.co.in/api/method/employee_self_service.api.locations",
     ]
 
     markers = []
