@@ -244,7 +244,7 @@ frappe.pages["india-map"].on_page_load = function (wrapper) {
 		if (map) return;
 		map = L.map("india-map-container", {
 			zoomControl: true,
-			maxZoom: 19,
+			maxZoom: 22,
 		}).setView([22.5, 82.0], 5);
 
 		// Multiple base layers for overlay switching (Req #6)
@@ -253,9 +253,13 @@ frappe.pages["india-map"].on_page_load = function (wrapper) {
 				attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
 				maxZoom: 19,
 			}),
-			"Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-				attribution: '&copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
-				maxZoom: 19,
+			"Satellite": L.tileLayer("https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", {
+				attribution: '&copy; Google',
+				maxZoom: 22,
+			}),
+			"Hybrid": L.tileLayer("https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", {
+				attribution: '&copy; Google',
+				maxZoom: 22,
 			}),
 			"Terrain": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
 				attribution: '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
