@@ -22,6 +22,8 @@ def get_map_markers(date=None):
     markers = []
     total_active = 0
     employee_list = []
+    ntle_oberoi = 0
+    ntle_tranzrail = 0
 
     for url in api_urls:
         try:
@@ -42,6 +44,12 @@ def get_map_markers(date=None):
                 emp_list = message.get("employee_list", [])
 
             total_active += active_count
+
+            ntle = message.get("ntle_count", 0) if isinstance(message, dict) else 0
+            if source_label == "Oberoi":
+                ntle_oberoi = ntle
+            else:
+                ntle_tranzrail = ntle
 
             for emp in emp_list:
                 employee_list.append({
@@ -73,6 +81,7 @@ def get_map_markers(date=None):
                     "address": record.get("address", ""),
                     "business_vertical": record.get("business_vertical", ""),
                     "sales_order": record.get("sales_order", ""),
+                    "log_type": record.get("log_type", ""),
                 })
         except Exception:
             frappe.log_error(
@@ -84,4 +93,6 @@ def get_map_markers(date=None):
         "markers": markers,
         "total_active_employees": total_active,
         "employee_list": employee_list,
+        "ntle_oberoi": ntle_oberoi,
+        "ntle_tranzrail": ntle_tranzrail,
     }

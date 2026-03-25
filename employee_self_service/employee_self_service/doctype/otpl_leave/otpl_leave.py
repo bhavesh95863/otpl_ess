@@ -17,8 +17,12 @@ class OTPLLeave(Document):
 		# Calculate total number of days
 		if self.from_date and self.to_date:
 			self.total_no_of_days = date_diff(self.to_date, self.from_date) + 1
+			if self.half_day:
+				self.total_no_of_days -= 0.5
 		if self.approved_from_date and self.approved_to_date:
 			self.total_no_of_approved_days = date_diff(self.approved_to_date, self.approved_from_date) + 1
+			if self.half_day:
+				self.total_no_of_approved_days -= 0.5
 
 		# Validate status change to Cancelled
 		if not self.get("__islocal"):
@@ -74,7 +78,7 @@ class OTPLLeave(Document):
 				if not (from_date and to_date):
 					frappe.throw("Approved From Date and Approved To Date are required")
 
-				total_days = date_diff(to_date, from_date) + 1
+				calendar_days = date_diff(to_date, from_date) + 1
 				casual_leave = "Casual Leave"
 				lwp = "Leave Without Pay"
 
@@ -85,28 +89,48 @@ class OTPLLeave(Document):
 					consider_all_leaves_in_the_allocation_period=True
 				) or 0
 
-				cl_days = min(cl_balance, total_days)
-				lwp_days = total_days - cl_days
+				# Use integer calendar days for the CL/LWP split to keep date arithmetic safe
+				cl_calendar_days = min(int(cl_balance), calendar_days)
+				lwp_calendar_days = calendar_days - cl_calendar_days
 
-				if cl_days > 0:
-					cl_to_date = add_days(from_date, cl_days - 1)
+				if cl_calendar_days > 0:
+					cl_to_date = add_days(from_date, cl_calendar_days - 1)
+					cl_leave_days = cl_calendar_days
+					cl_half_day = 0
+					if self.half_day and self._is_half_day_in_range(from_date, cl_to_date):
+						cl_leave_days -= 0.5
+						cl_half_day = 1
 					self.make_leave_application(
 						leave_type=casual_leave,
 						from_date=from_date,
 						to_date=cl_to_date,
-						total_days=cl_days
+						total_days=cl_leave_days,
+						half_day=cl_half_day
 					)
 
-				if lwp_days > 0:
-					lwp_from_date = add_days(from_date, cl_days)
+				if lwp_calendar_days > 0:
+					lwp_from_date = add_days(from_date, cl_calendar_days)
+					lwp_leave_days = lwp_calendar_days
+					lwp_half_day = 0
+					if self.half_day and self._is_half_day_in_range(lwp_from_date, to_date):
+						lwp_leave_days -= 0.5
+						lwp_half_day = 1
 					self.make_leave_application(
 						leave_type=lwp,
 						from_date=lwp_from_date,
 						to_date=to_date,
-						total_days=lwp_days
+						total_days=lwp_leave_days,
+						half_day=lwp_half_day
 					)
 
-	def make_leave_application(self, leave_type, from_date, to_date, total_days):
+	def _is_half_day_in_range(self, start_date, end_date):
+		from frappe.utils import getdate
+		if self.half_day_date:
+			return getdate(start_date) <= getdate(self.half_day_date) <= getdate(end_date)
+		# If no specific half_day_date, assume it applies (e.g. single day case)
+		return True
+
+	def make_leave_application(self, leave_type, from_date, to_date, total_days, half_day=0):
 		company = frappe.db.get_value("Employee", self.employee, "company")
 		leave_app = frappe.new_doc("Leave Application")
 		leave_app.employee = self.employee
@@ -117,7 +141,7 @@ class OTPLLeave(Document):
 		leave_app.description = f"Auto-created from OTPL Leave: {self.name}"
 		leave_app.status = "Approved"
 		leave_app.company = company
-		leave_app.half_day = self.half_day
+		leave_app.half_day = half_day
 
 		leave_app.insert(ignore_permissions=True)
 		leave_app.submit()

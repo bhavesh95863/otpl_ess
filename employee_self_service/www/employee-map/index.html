@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>India Map – Employee Locations</title>
+	<title>Our Presence – Employee Locations</title>
 
 	<!-- Leaflet -->
 	<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -274,8 +274,8 @@
 	<!-- ─── Right: Controls ───────────────────────────────────── -->
 	<div class="control-panel">
 		<div class="panel-header">
-			<h3>India Map</h3>
-			<span class="subtitle">Live employee check-in tracking &mdash; OTPL &amp; TRANZ</span>
+			<h3>Our Presence</h3>
+			<span class="subtitle">Live tracking all employees &mdash; OTPL &amp; TRANZ</span>
 		</div>
 
 		<div class="panel-body">
@@ -289,6 +289,15 @@
 				<select id="map-view-mode">
 					<option value="Cluster">Cluster</option>
 					<option value="Pins">Pins</option>
+				</select>
+			</div>
+
+			<div class="ctrl-group">
+				<label>Check-in Type</label>
+				<select id="map-log-type">
+					<option value="Both">Both (IN &amp; OUT)</option>
+					<option value="IN">IN only</option>
+					<option value="OUT">OUT only</option>
 				</select>
 			</div>
 
@@ -311,11 +320,26 @@
 				</div>
 				<div class="stat-row sub">
 					<span class="stat-label"><span class="dot" style="background:#e65100"></span> Oberoi Thermit Pvt. Ltd.</span>
-					<span class="stat-val" id="stat-oberoi">0</span>
+					<span class="stat-val"><a id="stat-oberoi" href="#" target="_blank" style="color:inherit;text-decoration:underline">0</a></span>
 				</div>
 				<div class="stat-row sub">
 					<span class="stat-label"><span class="dot" style="background:#1565c0"></span> Tranzrail</span>
-					<span class="stat-val" id="stat-tranzrail">0</span>
+					<span class="stat-val"><a id="stat-tranzrail" href="#" target="_blank" style="color:inherit;text-decoration:underline">0</a></span>
+				</div>
+			</div>
+
+			<div class="stats-card">
+				<div class="stat-row">
+					<span class="stat-label">No Team Leader Errors</span>
+					<span class="stat-val" id="stat-ntle-total">0</span>
+				</div>
+				<div class="stat-row sub">
+					<span class="stat-label"><span class="dot" style="background:#e65100"></span> NTLE Oberoi Thermit</span>
+					<span class="stat-val"><a id="stat-ntle-oberoi" href="#" target="_blank" style="color:inherit;text-decoration:underline">0</a></span>
+				</div>
+				<div class="stat-row sub">
+					<span class="stat-label"><span class="dot" style="background:#1565c0"></span> NTLE Tranz Rail</span>
+					<span class="stat-val"><a id="stat-ntle-tranzrail" href="#" target="_blank" style="color:inherit;text-decoration:underline">0</a></span>
 				</div>
 			</div>
 		</div>
@@ -354,9 +378,12 @@
 	// ── State ───────────────────────────────────────────────────
 	let map, clusterLayer, plainLayer, baseLayers = {};
 	let viewMode = "Cluster";
+	let logTypeFilter = "Both";
 	let allMarkers = [];
 	let allEmployees = [];
 	let totalActive = 0;
+	let ntleOberoi = 0;
+	let ntleTranzrail = 0;
 	let selectedEmployee = null;
 
 	// ── Helpers ──────────────────────────────────────────────────
@@ -496,7 +523,12 @@
 		const bounds = [];
 		let cntO = 0, cntT = 0;
 
-		allMarkers.forEach(function (m) {
+		const filteredMarkers = allMarkers.filter(function (m) {
+			if (logTypeFilter === "Both") return true;
+			return (m.log_type || "").toUpperCase() === logTypeFilter;
+		});
+
+		filteredMarkers.forEach(function (m) {
 			const isSel = selectedEmployee && m.employee === selectedEmployee;
 			const icon = isSel ? ICONS.highlight
 				: (m.source === "Oberoi" ? ICONS.oberoi : ICONS.tranzrail);
@@ -507,7 +539,9 @@
 				+ escapeHtml(m.company || m.source) + '</div>'
 				+ '<div><strong>' + escapeHtml(m.employee_name || "Unknown") + '</strong></div>'
 				+ '<div style="color:#8d99ae;font-size:12px">' + escapeHtml(m.employee || "") + '</div>'
-				+ '<div style="margin-top:4px;font-size:12px"><span style="color:#8d99ae">Time:</span> '
+				+ '<div style="margin-top:4px;font-size:12px"><span style="color:#8d99ae">Type:</span> '
+				+ escapeHtml(m.log_type || "—") + '</div>'
+				+ '<div style="margin-top:3px;font-size:12px"><span style="color:#8d99ae">Time:</span> '
 				+ escapeHtml(m.time || "") + '</div>';
 
 			if (m.address) {
@@ -538,10 +572,32 @@
 
 		// Update stats
 		const total = cntO + cntT;
+		const date = document.getElementById("map-date").value || today();
+		const dateFilter = encodeURIComponent('["between",["' + date + '","' + date + '"]]');
+
 		document.getElementById("stat-checked-in").textContent = total;
 		document.getElementById("stat-total").textContent = totalActive || total;
-		document.getElementById("stat-oberoi").textContent = cntO;
-		document.getElementById("stat-tranzrail").textContent = cntT;
+
+		// Oberoi checkin count (linked to Checkin Status Report on OTPL ERP)
+		var elOberoi = document.getElementById("stat-oberoi");
+		elOberoi.textContent = cntO;
+		elOberoi.href = "https://erp.oberoithermit.com/desk#query-report/Checkin%20Status%20Report?date=" + date + "&status=Checked+In";
+
+		// Tranzrail checkin count (linked to Checkin Status Report on TRANZ ERP)
+		var elTranz = document.getElementById("stat-tranzrail");
+		elTranz.textContent = cntT;
+		elTranz.href = "https://erp.tranzrail.co.in/desk#query-report/Checkin%20Status%20Report?date=" + date + "&status=Checked+In";
+
+		// NTLE stats
+		document.getElementById("stat-ntle-total").textContent = ntleOberoi + ntleTranzrail;
+
+		var elNtleO = document.getElementById("stat-ntle-oberoi");
+		elNtleO.textContent = ntleOberoi;
+		elNtleO.href = "https://erp.oberoithermit.com/desk#List/No%20Team%20Leader%20Error/Report?datetime=" + dateFilter;
+
+		var elNtleT = document.getElementById("stat-ntle-tranzrail");
+		elNtleT.textContent = ntleTranzrail;
+		elNtleT.href = "https://erp.tranzrail.co.in/desk#List/No%20Team%20Leader%20Error/Report?datetime=" + dateFilter;
 
 		if (bounds.length && !selectedEmployee) {
 			map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
@@ -589,6 +645,8 @@
 				allMarkers = data.markers || [];
 				allEmployees = data.employee_list || allMarkers.map(function (m) { return { employee: m.employee, employee_name: m.employee_name }; });
 				totalActive = data.total_active_employees || 0;
+				ntleOberoi = data.ntle_oberoi || 0;
+				ntleTranzrail = data.ntle_tranzrail || 0;
 			}
 
 			selectedEmployee = null;
@@ -614,6 +672,12 @@
 		// View mode
 		document.getElementById("map-view-mode").addEventListener("change", function () {
 			viewMode = this.value;
+			renderMarkers();
+		});
+
+		// Check-in type filter
+		document.getElementById("map-log-type").addEventListener("change", function () {
+			logTypeFilter = this.value;
 			renderMarkers();
 		});
 

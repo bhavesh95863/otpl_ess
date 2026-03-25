@@ -33,6 +33,7 @@ def get_otpl_leave_approval_list(start=0, page_length=10):
                 "reason",
                 "status",
                 "modified",
+                "half_day_period"
             ],
             filters={"status": "Pending", "approver": frappe.session.user},
         )
@@ -53,6 +54,7 @@ def get_otpl_leave_approval_list(start=0, page_length=10):
                 "reason",
                 "status",
                 "modified",
+                "half_day_period"
             ],
             filters=[
                 ["source_erp", "is", "set"],
@@ -646,6 +648,7 @@ def get_otpl_leave_approved_list(start=0, page_length=10):
                 "approved_from_date",
                 "approved_to_date",
                 "modified",
+                "half_day_period"
             ],
             filters={"status": "Approved", "approver": frappe.session.user},
         )

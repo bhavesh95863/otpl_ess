@@ -43,7 +43,10 @@
   "on_leave_message",
   "section_break_36",
   "approval_popup",
-  "skip_approval"
+  "skip_approval",
+  "column_break_40",
+  "auto_location_track_for_team_leader",
+  "location_update_time"
  ],
  "fields": [
   {
@@ -255,10 +258,26 @@
    "fieldname": "nearby_leader_distance_threshold",
    "fieldtype": "Float",
    "label": "Nearby Team Leader Distance Threshold (Meter)"
+  },
+  {
+   "fieldname": "column_break_40",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "auto_location_track_for_team_leader",
+   "fieldtype": "Check",
+   "label": "Auto Location Track For Team Leader"
+  },
+  {
+   "description": "In Minutes",
+   "fieldname": "location_update_time",
+   "fieldtype": "Int",
+   "label": "Location Update Time"
   }
  ],
  "issingle": 1,
- "modified": "2026-03-19 08:56:33.817014",
+ "modified": "2026-03-21 22:03:44.987539",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",

@@ -393,7 +393,8 @@ def get_leave_application(name):
             "alternate_mobile_no as 'alternate_mobile_number'",
             "approved_from_date",
             "approved_to_date",
-            "total_no_of_approved_days"
+            "total_no_of_approved_days",
+            "half_day_period"
         ]
 
         leave_application = frappe.db.sql(

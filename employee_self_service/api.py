@@ -29,6 +29,7 @@ def locations(date=None):
             ec.address,
             ec.business_vertical,
             ec.sales_order,
+            ec.log_type,
             emp.company
         FROM `tabEmployee Checkin` ec
         LEFT JOIN `tabEmployee` emp ON emp.name = ec.employee
@@ -36,6 +37,7 @@ def locations(date=None):
             ec.location IS NOT NULL
             AND ec.location != ''
             AND DATE(ec.time) = %(date)s
+            AND IFNULL(ec.rejected, 0) = 0
         ORDER BY ec.time DESC
     """, {"date": date}, as_dict=True)
 
@@ -50,6 +52,7 @@ def locations(date=None):
             "address": row.address or "",
             "business_vertical": row.business_vertical or "",
             "sales_order": row.sales_order or "",
+            "log_type": row.log_type or "",
         })
 
     # ── Active employee count + list ─────────────────────────────
@@ -72,8 +75,16 @@ def locations(date=None):
         for emp in employees
     ]
 
+    # ── NTLE count for today ───────────────────────────────────
+    ntle_count = frappe.db.sql("""
+        SELECT COUNT(*) AS cnt
+        FROM `tabNo Team Leader Error`
+        WHERE DATE(datetime) = %(date)s
+    """, {"date": date}, as_dict=True)[0].cnt or 0
+
     return {
         "records": records,
         "total_active_employees": len(employee_list),
         "employee_list": employee_list,
+        "ntle_count": ntle_count,
     }
