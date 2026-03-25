@@ -993,6 +993,7 @@ def get_last_log_details(employee):
         FROM `tabEmployee Checkin`
         WHERE employee=%s
         AND DATE(time)=%s
+        AND rejected=0 
         ORDER BY time DESC""",
         (employee, today()),
         as_dict=1,

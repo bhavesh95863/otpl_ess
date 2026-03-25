@@ -24,7 +24,8 @@ def process_daily_attendance():
 
 	employees = frappe.get_all("Employee",
 		filters={"status": "Active"},
-		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type","from_hours","to_hours"]
+		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type","from_hours","to_hours",
+			"late_arrival_threshold", "early_exit_threshold", "half_day_arrival_time", "half_day_departure_time"]
 	)
 
 	processed_count = 0
@@ -36,7 +37,9 @@ def process_daily_attendance():
 		try:
 			result = process_employee_attendance(
 				emp.name, emp.location, yesterday,
-				emp.get("no_check_in", 0), emp.get("staff_type"), emp.get("from_hours"), emp.get("to_hours")
+				emp.get("no_check_in", 0), emp.get("staff_type"), emp.get("from_hours"), emp.get("to_hours"),
+				emp.get("late_arrival_threshold"), emp.get("early_exit_threshold"),
+				emp.get("half_day_arrival_time"), emp.get("half_day_departure_time")
 			)
 
 			if result == "Processed":
@@ -79,7 +82,8 @@ def process_daily_attendance():
 	}
 
 
-def process_employee_attendance(employee, location, date, no_check_in=0, staff_type=None, from_hours=None, to_hours=None):
+def process_employee_attendance(employee, location, date, no_check_in=0, staff_type=None, from_hours=None, to_hours=None,
+	emp_late_arrival_threshold=None, emp_early_exit_threshold=None, emp_half_day_arrival_time=None, emp_half_day_departure_time=None):
 	"""
 	Process attendance for a single employee.
 	Returns: Processed, Skipped, Absent, or Error
@@ -228,6 +232,15 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 				location_rules.shift_end_time = to_hours
 				location_rules.late_arrival_threshold = from_hours
 				location_rules.early_exit_threshold = to_hours
+			# Override with employee-level thresholds if defined
+			if emp_late_arrival_threshold:
+				location_rules.late_arrival_threshold = emp_late_arrival_threshold
+			if emp_early_exit_threshold:
+				location_rules.early_exit_threshold = emp_early_exit_threshold
+			if emp_half_day_arrival_time:
+				location_rules.half_day_arrival_time = emp_half_day_arrival_time
+			if emp_half_day_departure_time:
+				location_rules.half_day_departure_time = emp_half_day_departure_time
 
 
 

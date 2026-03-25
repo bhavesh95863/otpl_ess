@@ -395,6 +395,7 @@ def validate(doc,method):
             "log_type": doc.log_type,
             "day_start": day_start,
             "day_end": day_end,
+            "rejected": 0
         }
         if not doc.is_new():
             conditions += " AND name != %(name)s"
