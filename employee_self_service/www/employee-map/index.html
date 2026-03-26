@@ -593,11 +593,11 @@
 
 		var elNtleO = document.getElementById("stat-ntle-oberoi");
 		elNtleO.textContent = ntleOberoi;
-		elNtleO.href = "https://erp.oberoithermit.com/desk#List/No%20Team%20Leader%20Error/Report?datetime=" + dateFilter;
+		elNtleO.href = "https://erp.oberoithermit.com/desk#query-report/Checkin%20Status%20Report?date=" + date + "&status=No+Team+Leader+Error";
 
 		var elNtleT = document.getElementById("stat-ntle-tranzrail");
 		elNtleT.textContent = ntleTranzrail;
-		elNtleT.href = "https://erp.tranzrail.co.in/desk#List/No%20Team%20Leader%20Error/Report?datetime=" + dateFilter;
+		elNtleT.href = "https://erp.tranzrail.co.in/desk#query-report/Checkin%20Status%20Report?date=" + date + "&status=No+Team+Leader+Error";
 
 		if (bounds.length && !selectedEmployee) {
 			map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });

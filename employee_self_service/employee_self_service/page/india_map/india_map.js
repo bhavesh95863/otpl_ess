@@ -1,4 +1,7 @@
 frappe.pages["india-map"].on_page_load = function (wrapper) {
+	window.location.href = "/employee-map";
+	return;
+
 	frappe.ui.make_app_page({
 		parent: wrapper,
 		title: "India Map",

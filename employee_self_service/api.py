@@ -1,5 +1,5 @@
 import frappe
-from frappe.utils import getdate, now_datetime
+from frappe.utils import getdate, now_datetime, add_days
 
 
 @frappe.whitelist(allow_guest=True)
@@ -75,12 +75,20 @@ def locations(date=None):
         for emp in employees
     ]
 
-    # ── NTLE count for today ───────────────────────────────────
+    # ── NTLE count: employees with NTLE but no check-in ─────────
+    day_start = date
+    day_end = str(add_days(getdate(date), 1))
     ntle_count = frappe.db.sql("""
-        SELECT COUNT(*) AS cnt
-        FROM `tabNo Team Leader Error`
-        WHERE DATE(datetime) = %(date)s
-    """, {"date": date}, as_dict=True)[0].cnt or 0
+        SELECT COUNT(DISTINCT ntle.employee) AS cnt
+        FROM `tabNo Team Leader Error` ntle
+        WHERE ntle.datetime >= %(day_start)s AND ntle.datetime < %(day_end)s
+        AND ntle.employee NOT IN (
+            SELECT DISTINCT ec.employee
+            FROM `tabEmployee Checkin` ec
+            WHERE ec.time >= %(day_start)s AND ec.time < %(day_end)s
+            AND ec.log_type = 'IN'
+        )
+    """, {"day_start": day_start, "day_end": day_end}, as_dict=True)[0].cnt or 0
 
     return {
         "records": records,
