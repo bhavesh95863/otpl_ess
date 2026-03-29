@@ -23,7 +23,7 @@ def get_work_progress_list(start=0, page_length=20, filters=None):
             fields=["name","sales_order","business_vertical"]
         )
         roles = frappe.get_roles(frappe.session.user)
-        if not "WPE Admin" in roles or not "WPE Manager" in roles or not "WPE User" in roles:
+        if not "WPE Admin" in roles and not "WPE Manager" in roles and not "WPE User" in roles:
             return gen_response(200, "Work Progress List fetched successfully", [])
         if "WPE Admin" in roles:
             pass
@@ -32,6 +32,7 @@ def get_work_progress_list(start=0, page_length=20, filters=None):
         elif "WPE User" in roles:
             filters["order_no"] = employee_details.sales_order
             filters["business_vertical"] = employee_details.business_vertical
+            filters["employee"] = employee_details.name
 
         work_progress_list = frappe.get_all(
             "Work Progress Entry",
