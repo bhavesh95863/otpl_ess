@@ -3263,7 +3263,7 @@ def get_employee_documents():
 def get_nearby_team_leaders(latitude=None, longitude=None):
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name","location", "reports_to","external_reporting_manager","external_report_to","employee_availability"]
+            frappe.session.user, fields=["name","location", "reports_to","external_reporting_manager","external_report_to","employee_availability","travelling","temp_tl"]
         )
         if emp_data.get("employee_availability") == "On Leave":
             on_leave_message = frappe.db.get_value("Employee Self Service Settings","Employee Self Service Settings","on_leave_message")
@@ -3376,6 +3376,35 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                     })
 
         if len(nearby_leaders) == 0:
+            if emp_data.get("temp_tl") == 1:
+                employee_name = frappe.db.get_value("Employee", emp_data.reports_to, "employee_name")
+                nearby_leaders.append({
+                    "employee": emp_data.reports_to,
+                    "employee_name": employee_name,
+                    "distance": 0,
+                    "external": 0,
+                })
+                return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)
+            # Check if the previous (not current) Employee Checkin with log_type "In" is an ESS Location check-in
+            last_checkin = frappe.db.sql("""
+                SELECT name, log_type, checkin_type
+                FROM `tabEmployee Checkin`
+                WHERE employee = %s AND log_type = 'IN'
+                ORDER BY time DESC
+            """, (emp_data.name,), as_dict=True)
+            last_checkin = last_checkin[0] if last_checkin else None
+            if last_checkin and last_checkin.checkin_type == "ESS Location" and emp_data.get("reports_to"):
+                frappe.db.set_value("Employee", emp_data.name, "travelling", 1)
+                frappe.db.commit()
+                employee_name = frappe.db.get_value("Employee", emp_data.reports_to, "employee_name")
+                nearby_leaders.append({
+                    "employee": emp_data.reports_to,
+                    "employee_name": employee_name,
+                    "distance": 0,
+                    "external": 0,
+                })
+                return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)
+
             no_team_log_doc = frappe.get_doc(dict(
                 doctype = "No Team Leader Error",
                 employee = emp_data.name,
@@ -3385,6 +3414,12 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             )).insert(ignore_permissions=True)
             frappe.db.commit()
             return gen_response(500, "No nearby team leaders found", [])
+        if len(nearby_leaders) > 0 and emp_data.get("travelling") == 1:
+            frappe.db.set_value("Employee", emp_data.name, "travelling", 0)
+            frappe.db.commit()
+        if len(nearby_leaders) > 0 and emp_data.get("temp_tl") == 1:
+            frappe.db.set_value("Employee", emp_data.name, "temp_tl", 0)
+            frappe.db.commit()
         return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)
     except Exception as e:
         return exception_handler(e)

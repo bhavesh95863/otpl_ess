@@ -11,7 +11,7 @@ frappe.query_reports['Checkin Status Report'] = {
 			fieldname: 'status',
 			label: __('Status'),
 			fieldtype: 'Select',
-			options: '\nChecked In\nNo Team Leader Error\nNot Attempted',
+			options: '\nChecked In\nNo Team Leader Error\nNot Attempted\nOn Leave',
 			default: ''
 		},
 		{

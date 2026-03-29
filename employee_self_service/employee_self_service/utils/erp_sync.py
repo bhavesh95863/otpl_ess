@@ -1613,3 +1613,141 @@ def push_expense_status_to_source(expense_pull_doc):
 			message=frappe.get_traceback(),
 			title="Error syncing Expense approval to source for {0}".format(expense_pull_doc.expense_id)
 		)
+
+
+# ==================== EXTERNAL ESS INFORMATION API ====================
+
+@frappe.whitelist()
+def get_external_employee_ess_details(employee):
+	"""
+	API endpoint to get ESS details (check-in time, device registration)
+	for one or more employees. Called from a remote ERP to fetch details
+	of employees managed locally.
+
+	Args:
+		employee: single employee ID (str) or JSON list of employee IDs
+	Returns:
+		dict with success flag and employee data keyed by employee ID
+	"""
+	try:
+		from frappe.utils import nowdate, format_datetime
+
+		if isinstance(employee, str):
+			try:
+				employee_list = json.loads(employee)
+			except (json.JSONDecodeError, TypeError):
+				employee_list = [employee]
+		else:
+			employee_list = employee
+
+		today = nowdate()
+		result = {}
+
+		for emp in employee_list:
+			if not frappe.db.exists("Employee", emp):
+				continue
+
+			data = frappe.db.get_value(
+				"Employee", emp,
+				["employee_name", "designation", "company"],
+				as_dict=True
+			)
+			if not data:
+				continue
+
+			# Check-in time
+			checkin = frappe.db.sql(
+				"""
+				SELECT time FROM `tabEmployee Checkin`
+				WHERE employee = %s AND log_type = 'IN' AND DATE(time) = %s
+				ORDER BY time ASC LIMIT 1
+				""",
+				(emp, today),
+				as_dict=True
+			)
+			checkin_time = ""
+			if checkin and checkin[0].get("time"):
+				checkin_time = format_datetime(checkin[0]["time"], "HH:mm:ss")
+
+			# Device registration
+			device_registered = "Yes" if frappe.db.exists(
+				"Employee Device Registration", {"employee": emp}
+			) else "No"
+
+			result[emp] = {
+				"employee": emp,
+				"employee_name": data.employee_name or "",
+				"designation": data.designation or "",
+				"company": data.company or "",
+				"checkin_time": checkin_time,
+				"device_registered": device_registered,
+			}
+
+		return {"success": True, "data": result}
+
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error getting external employee ESS details"
+		)
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def get_external_reportees(employee):
+	"""
+	API endpoint to get all employees who report to the given employee.
+	Called from a remote ERP to fetch reportees of an external manager.
+
+	Args:
+		employee: employee ID of the manager
+	Returns:
+		dict with success flag and list of reportee details
+	"""
+	try:
+		from frappe.utils import nowdate, format_datetime
+
+		today = nowdate()
+		reportees = frappe.db.get_all(
+			"Employee",
+			filters={"reports_to": employee, "status": "Active"},
+			fields=["name", "employee_name", "designation", "company"],
+			order_by="employee_name asc"
+		)
+
+		result = []
+		for emp in reportees:
+			checkin = frappe.db.sql(
+				"""
+				SELECT time FROM `tabEmployee Checkin`
+				WHERE employee = %s AND log_type = 'IN' AND DATE(time) = %s
+				ORDER BY time ASC LIMIT 1
+				""",
+				(emp.name, today),
+				as_dict=True
+			)
+			checkin_time = ""
+			if checkin and checkin[0].get("time"):
+				checkin_time = format_datetime(checkin[0]["time"], "HH:mm:ss")
+
+			device_registered = "Yes" if frappe.db.exists(
+				"Employee Device Registration", {"employee": emp.name}
+			) else "No"
+
+			result.append({
+				"employee": emp.name,
+				"employee_name": emp.employee_name or "",
+				"designation": emp.designation or "",
+				"company": emp.company or "",
+				"checkin_time": checkin_time,
+				"device_registered": device_registered,
+			})
+
+		return {"success": True, "data": result}
+
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error getting external reportees"
+		)
+		return {"success": False, "message": str(e)}
