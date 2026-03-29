@@ -41,8 +41,7 @@ def after_employee_checkin_insert(doc, method):
         doc.non_site_checkin_approver = 1
         doc.manager = frappe.db.get_value("Employee",doc.reports_to,"user_id")
     doc.save(ignore_permissions=True)
-
-
+       
 def sync_leader_location_to_remote(checkin_doc):
     """
     Sync Employee Checkin to remote ERPs as Leader Location if employee is team leader
@@ -291,7 +290,7 @@ def fetch_employee_details(doc):
         "Employee",
         doc.employee,
         ["name","business_vertical","sales_order","external_sales_order",
-        "external_order","external_so","external_business_vertical","staff_type","location","external_reporting_manager","external_report_to","reports_to","status","is_team_leader"],as_dict=True)
+        "external_order","external_so","external_business_vertical","staff_type","location","external_reporting_manager","external_report_to","reports_to","status","is_team_leader","travelling","temp_tl"],as_dict=True)
 
     if employee_details.status != "Active":
         frappe.throw("Employee is not active")
@@ -316,6 +315,19 @@ def fetch_employee_details(doc):
 
     doc.employee_location = employee_details.location
     doc.staff_type = employee_details.staff_type
+    if employee_details.get("temp_tl") == 1:
+        doc.team_leader = 1
+    if doc.staff_type == "Worker" and doc.employee_location == "Site" and doc.log_type == "IN":
+        if employee_details.get("travelling") == 1:
+            doc.checkin_type = "Travelling"
+            doc.approval_required = 1
+            doc.manager = frappe.db.get_value("Employee",doc.reports_to,"user_id")
+        elif frappe.db.exists("ESS Location",{"reporting_manager": doc.reports_to}):
+            doc.checkin_type = "ESS Location"
+        else:
+            doc.checkin_type = "Near By Team Leader"
+
+
 
 def get_address_from_lat_long(lat, lon):
     try:
