@@ -87,26 +87,34 @@ function show_ess_information(frm) {
         callback: function (r) {
             if (r.exc) return;
             const data = r.message || {};
-            const self_row   = data.self;
-            const manager    = data.reports_to;
-            const reportees  = data.reportees || [];
+            const self_row          = data.self;
+            const manager           = data.reports_to;
+            const external_manager  = data.external_reports_to;
+            const reportees         = data.reportees || [];
+            const external_reportees = data.external_reportees || [];
 
             /* ---- helpers ---- */
             const checkin_badge = (time) => time
                 ? `<span style="color:#2e7d32;font-weight:600;">${time}</span>`
                 : `<span style="color:#9e9e9e;">—</span>`;
 
-            const device_badge = (status) => status === 'Yes'
-                ? `<span class="badge" style="background:#1565c0;color:#fff;padding:2px 8px;border-radius:10px;">Yes</span>`
-                : `<span class="badge" style="background:#c62828;color:#fff;padding:2px 8px;border-radius:10px;">No</span>`;
+            const device_badge = (status) => {
+                if (status === 'N/A') return `<span style="color:#9e9e9e;">N/A</span>`;
+                return status === 'Yes'
+                    ? `<span class="badge" style="background:#1565c0;color:#fff;padding:2px 8px;border-radius:10px;">Yes</span>`
+                    : `<span class="badge" style="background:#c62828;color:#fff;padding:2px 8px;border-radius:10px;">No</span>`;
+            };
+
+            const external_tag = `<span class="badge" style="background:#e65100;color:#fff;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px;">External</span>`;
 
             const row_html = (row, label_tag) => {
                 if (!row) return '';
+                const ext = row.is_external ? external_tag : '';
                 return `
                     <tr>
                         <td style="padding:8px 10px;white-space:nowrap;">
                             ${label_tag ? `<span class="badge" style="background:#546e7a;color:#fff;font-size:10px;padding:2px 6px;border-radius:8px;margin-right:4px;">${label_tag}</span>` : ''}
-                            <strong>${frappe.utils.escape_html(row.employee_name)}</strong>
+                            <strong>${frappe.utils.escape_html(row.employee_name)}</strong>${ext}
                             <br><small style="color:#757575;">${frappe.utils.escape_html(row.employee)} · ${frappe.utils.escape_html(row.designation || '')}</small>
                         </td>
                         <td style="padding:8px 10px;text-align:center;">${checkin_badge(row.checkin_time)}</td>
@@ -129,19 +137,37 @@ function show_ess_information(frm) {
             /* Self */
             body += row_html(self_row, 'Self');
 
-            /* Manager */
+            /* Internal Manager */
             if (manager) {
                 body += `<tr><td colspan="3" style="padding:4px 10px;background:#f9fbe7;font-size:11px;font-weight:600;color:#558b2f;letter-spacing:.5px;">REPORTS TO</td></tr>`;
                 body += row_html(manager, '');
             }
 
-            /* Reportees */
+            /* External Manager */
+            if (external_manager) {
+                body += `<tr><td colspan="3" style="padding:4px 10px;background:#fff3e0;font-size:11px;font-weight:600;color:#e65100;letter-spacing:.5px;">EXTERNAL REPORTS TO</td></tr>`;
+                body += row_html(external_manager, '');
+            }
+
+            /* No manager at all */
+            if (!manager && !external_manager) {
+                body += `<tr><td colspan="3" style="padding:4px 10px;background:#f9fbe7;font-size:11px;font-weight:600;color:#558b2f;letter-spacing:.5px;">REPORTS TO</td></tr>`;
+                body += `<tr><td colspan="3" style="padding:10px;text-align:center;color:#9e9e9e;font-style:italic;">No reporting manager assigned</td></tr>`;
+            }
+
+            /* Internal Reportees */
             if (reportees.length) {
                 body += `<tr><td colspan="3" style="padding:4px 10px;background:#e8f5e9;font-size:11px;font-weight:600;color:#2e7d32;letter-spacing:.5px;">REPORTEES (${reportees.length})</td></tr>`;
                 reportees.forEach(rep => { body += row_html(rep, ''); });
             } else {
                 body += `<tr><td colspan="3" style="padding:4px 10px;background:#e8f5e9;font-size:11px;font-weight:600;color:#2e7d32;letter-spacing:.5px;">REPORTEES</td></tr>`;
                 body += `<tr><td colspan="3" style="padding:10px;text-align:center;color:#9e9e9e;font-style:italic;">No reportees found</td></tr>`;
+            }
+
+            /* External Reportees */
+            if (external_reportees.length) {
+                body += `<tr><td colspan="3" style="padding:4px 10px;background:#fff3e0;font-size:11px;font-weight:600;color:#e65100;letter-spacing:.5px;">EXTERNAL REPORTEES (${external_reportees.length})</td></tr>`;
+                external_reportees.forEach(rep => { body += row_html(rep, ''); });
             }
 
             body += `</tbody></table>`;

@@ -77,33 +77,43 @@ def get_data(filters):
 	staff_type_filter = filters.get("staff_type")
 	location_filter = filters.get("location")
 
-	# 1. Get all active employees not on leave
-	emp_filters = {
-		"status": "Active",
-		"employee_availability": ["not in", ["On Leave"]],
-	}
 	emp_fields = [
 		"name", "employee_name", "staff_type", "location",
 		"sales_order", "reports_to", "external_reporting_manager",
 		"external_report_to", "external_sales_order", "external_order",
 	]
 
-	employees = frappe.get_all("Employee", filters=emp_filters, fields=emp_fields, order_by="employee_name asc")
+	if status_filter == "On Leave":
+		# Only employees marked as On Leave
+		emp_filters = {
+			"status": "Active",
+			"employee_availability": "On Leave",
+		}
+		all_employees = frappe.get_all("Employee", filters=emp_filters, fields=emp_fields, order_by="employee_name asc")
+	elif not status_filter:
+		# Blank: all active employees regardless of leave status
+		emp_filters = {"status": "Active"}
+		all_employees = frappe.get_all("Employee", filters=emp_filters, fields=emp_fields, order_by="employee_name asc")
+	else:
+		# Checked In / No Team Leader Error / Not Attempted: exclude on-leave employees
+		emp_filters = {
+			"status": "Active",
+			"employee_availability": ["not in", ["On Leave"]],
+		}
+		employees = frappe.get_all("Employee", filters=emp_filters, fields=emp_fields, order_by="employee_name asc")
 
-	# Also include employees where employee_availability is null/empty
-	emp_null_filters = {
-		"status": "Active",
-		"employee_availability": ["is", "not set"],
-	}
-	employees_null = frappe.get_all("Employee", filters=emp_null_filters, fields=emp_fields, order_by="employee_name asc")
+		emp_null_filters = {
+			"status": "Active",
+			"employee_availability": ["is", "not set"],
+		}
+		employees_null = frappe.get_all("Employee", filters=emp_null_filters, fields=emp_fields, order_by="employee_name asc")
 
-	# Merge and deduplicate
-	seen = set()
-	all_employees = []
-	for emp in employees + employees_null:
-		if emp.name not in seen:
-			seen.add(emp.name)
-			all_employees.append(emp)
+		seen = set()
+		all_employees = []
+		for emp in employees + employees_null:
+			if emp.name not in seen:
+				seen.add(emp.name)
+				all_employees.append(emp)
 
 	# 2. Get all check-ins for the date (IN logs)
 	checkins = frappe.db.sql("""
@@ -161,6 +171,8 @@ def get_data(filters):
 			continue
 		if status_filter == "Not Attempted" and (checkin_time or ntle_name):
 			continue
+		if status_filter == "On Leave":
+			pass  # already filtered to on-leave employees
 		if staff_type_filter and emp.staff_type != staff_type_filter:
 			continue
 		if location_filter and emp.location != location_filter:

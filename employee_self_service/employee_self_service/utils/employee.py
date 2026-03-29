@@ -1,4 +1,6 @@
 import frappe
+import json
+import requests
 from frappe.utils import add_months, get_last_day, nowdate, getdate, get_datetime, format_datetime,flt
 
 def validate_employee(doc, method):
@@ -47,8 +49,10 @@ def get_ess_information(employee):
     """
     Returns ESS information for the given employee:
     - self: current employee's check-in and device registration details
-    - reports_to: details of the employee this person reports to
-    - reportees: list of employees who report to this employee, with their details
+    - reports_to: details of the employee's internal manager
+    - external_reports_to: details of the employee's external manager (from remote ERP)
+    - reportees: list of internal employees who report to this employee
+    - external_reportees: list of employees from remote ERP who report to this employee
     """
     today = nowdate()
 
@@ -92,14 +96,87 @@ def get_ess_information(employee):
             "device_registered": get_device_registered(emp),
         }
 
+    def call_remote_erp(api_method, params):
+        """Call a remote ERP API using ERP Sync Settings. Tries all enabled settings."""
+        sync_settings = frappe.get_all(
+            "ERP Sync Settings",
+            filters={"enabled": 1},
+            fields=["name"]
+        )
+        for s in sync_settings:
+            try:
+                settings = frappe.get_doc("ERP Sync Settings", s.name)
+                url = "{0}/api/method/employee_self_service.employee_self_service.utils.erp_sync.{1}".format(
+                    settings.erp_url, api_method
+                )
+                headers = {
+                    "Authorization": "token {0}:{1}".format(
+                        settings.get_password("api_key"),
+                        settings.get_password("api_secret")
+                    ),
+                    "Content-Type": "application/json"
+                }
+                response = requests.get(url, params=params, headers=headers, timeout=15)
+                if response.status_code == 200:
+                    data = response.json()
+                    msg = data.get("message", {})
+                    if msg.get("success"):
+                        return msg.get("data", {})
+            except Exception:
+                frappe.log_error(
+                    message=frappe.get_traceback(),
+                    title="ESS Info: Error calling remote ERP {0}".format(s.name)
+                )
+        return None
+
     # Self
     self_info = build_employee_row(employee)
 
-    # Manager (reports_to of the current employee)
-    reports_to_emp = frappe.db.get_value("Employee", employee, "reports_to")
-    manager_info = build_employee_row(reports_to_emp) if reports_to_emp else None
+    # Get external reporting fields
+    emp_data = frappe.db.get_value(
+        "Employee", employee,
+        ["reports_to", "external_reporting_manager", "external_report_to"],
+        as_dict=True
+    )
 
-    # Reportees (employees whose reports_to = this employee)
+    # Internal Manager
+    manager_info = build_employee_row(emp_data.reports_to) if emp_data and emp_data.reports_to else None
+
+    # External Manager (fetch from remote ERP via ERP Sync Settings)
+    external_manager_info = None
+    if emp_data and emp_data.external_reporting_manager and emp_data.external_report_to:
+        remote_data = call_remote_erp(
+            "get_external_employee_ess_details",
+            {"employee": emp_data.external_report_to}
+        )
+        if remote_data and emp_data.external_report_to in remote_data:
+            ext = remote_data[emp_data.external_report_to]
+            external_manager_info = {
+                "employee": ext.get("employee", ""),
+                "employee_name": ext.get("employee_name", ""),
+                "designation": ext.get("designation", ""),
+                "checkin_time": ext.get("checkin_time", ""),
+                "device_registered": ext.get("device_registered", "N/A"),
+                "is_external": True,
+            }
+        else:
+            # Fallback to local Employee Pull data
+            pull_data = frappe.db.get_value(
+                "Employee Pull", {"employee": emp_data.external_report_to},
+                ["employee", "employee_name", "company"],
+                as_dict=True
+            )
+            if pull_data:
+                external_manager_info = {
+                    "employee": pull_data.employee or "",
+                    "employee_name": pull_data.employee_name or "",
+                    "designation": pull_data.company or "External",
+                    "checkin_time": "",
+                    "device_registered": "N/A",
+                    "is_external": True,
+                }
+
+    # Internal Reportees (employees whose reports_to = this employee)
     reportees_list = frappe.db.get_all(
         "Employee",
         filters={"reports_to": employee, "status": "Active"},
@@ -108,8 +185,41 @@ def get_ess_information(employee):
     )
     reportees = [r for r in (build_employee_row(e.name) for e in reportees_list) if r]
 
+    # External Reportees - employees on remote ERP who report to this employee
+    external_reportees = []
+    remote_reportees = call_remote_erp(
+        "get_external_reportees",
+        {"employee": employee}
+    )
+    if remote_reportees:
+        for rep in remote_reportees:
+            external_reportees.append({
+                "employee": rep.get("employee", ""),
+                "employee_name": rep.get("employee_name", ""),
+                "designation": rep.get("designation", ""),
+                "checkin_time": rep.get("checkin_time", ""),
+                "device_registered": rep.get("device_registered", "N/A"),
+                "is_external": True,
+                "is_external_reportee": True,
+            })
+
+    # Also include local employees with external_report_to = this employee
+    local_ext_reportees_list = frappe.db.get_all(
+        "Employee",
+        filters={"external_report_to": employee, "status": "Active"},
+        fields=["name"],
+        order_by="employee_name asc"
+    )
+    for e in local_ext_reportees_list:
+        row = build_employee_row(e.name)
+        if row:
+            row["is_external_reportee"] = True
+            external_reportees.append(row)
+
     return {
         "self": self_info,
         "reports_to": manager_info,
+        "external_reports_to": external_manager_info,
         "reportees": reportees,
+        "external_reportees": external_reportees,
     }        
