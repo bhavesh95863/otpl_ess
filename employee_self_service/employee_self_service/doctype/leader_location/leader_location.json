@@ -7,7 +7,8 @@
   "employee",
   "employee_name",
   "datetime",
-  "location"
+  "location",
+  "team_leader"
  ],
  "fields": [
   {
@@ -33,9 +34,15 @@
    "fieldtype": "Read Only",
    "in_list_view": 1,
    "label": "Employee Name"
+  },
+  {
+   "default": "0",
+   "fieldname": "team_leader",
+   "fieldtype": "Check",
+   "label": "Team Leader"
   }
  ],
- "modified": "2026-03-18 08:07:45.029374",
+ "modified": "2026-03-31 04:01:21.550607",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Leader Location",

@@ -33,9 +33,9 @@ def after_employee_checkin_insert(doc, method):
 
 
     # Sync to remote ERPs as Leader Location if employee is team leader
-    sync_leader_location_to_remote(doc)
     distance_validation(doc)
     fetch_employee_details(doc)
+    sync_leader_location_to_remote(doc)
     if not doc.employee_location == "Site" and doc.sales_order:
         doc.approval_required = 1
         doc.non_site_checkin_approver = 1
@@ -66,6 +66,8 @@ def sync_leader_location_to_remote(checkin_doc):
             "company": company,
             "datetime": checkin_doc.time,
             "location": checkin_doc.get("location") or "Unknown",
+            "team_leader": checkin_doc.team_leader,
+
         }
 
         # Get all enabled ERP Sync Settings

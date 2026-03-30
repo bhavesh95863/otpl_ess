@@ -139,7 +139,8 @@ def receive_leader_location(data, source_site=None):
 			"doctype": "Leader Location",
 			"employee": employee_pull,  # Use Employee Pull name
 			"datetime": data.get("datetime"),
-			"location": data.get("location")
+			"location": data.get("location"),
+			"team_leader": data.get("team_leader", 0)
 		})
 		doc.flags.ignore_sync = True  # Prevent re-syncing back
 		doc.insert(ignore_permissions=True)
