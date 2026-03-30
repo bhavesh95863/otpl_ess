@@ -281,7 +281,7 @@ def get_all_leaders_with_distance(docname):
 		SELECT ec.employee, ec.location, ec.time, e.employee_name
 		FROM `tabEmployee Checkin` ec
 		INNER JOIN `tabEmployee` e ON e.name = ec.employee
-		WHERE e.is_team_leader = 1
+		WHERE ec.team_leader = 1
 		  AND e.status = 'Active'
 		  AND ec.time >= %(today)s
 		  AND ec.time <= %(error_time)s

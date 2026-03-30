@@ -3288,7 +3288,7 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             SELECT ec.employee, COALESCE(NULLIF(ec.location_update, ''), ec.location) as location, e.employee_name
             FROM `tabEmployee Checkin` ec
             INNER JOIN `tabEmployee` e ON e.name = ec.employee
-            WHERE e.is_team_leader = 1
+            WHERE ec.team_leader = 1
             AND e.status = 'Active'
             AND ec.time >= %s
             AND (ec.location IS NOT NULL AND ec.location != '' OR ec.location_update IS NOT NULL AND ec.location_update != '')
@@ -3344,7 +3344,6 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                     "distance": round(distance, 2),
                     "external": 1,
                 })
-
         if len(nearby_leaders) == 0:
             # Fallback: Check ESS Location records if user coordinates are within radius
             ess_locations = frappe.get_all(

@@ -33,6 +33,7 @@ def receive_employee_pull(data, source_site=None):
 			doc.sales_order = data.get("sales_order")
 			doc.business_line = data.get("business_line")
 			doc.company = data.get("company")
+			doc.is_team_leader = data.get("is_team_leader", 0)
 			doc.flags.ignore_sync = True  # Prevent re-syncing back
 			doc.save(ignore_permissions=True)
 		else:
@@ -43,7 +44,8 @@ def receive_employee_pull(data, source_site=None):
 				"employee_name": data.get("employee_name"),
 				"sales_order": data.get("sales_order"),
 				"business_line": data.get("business_line"),
-				"company": data.get("company")
+				"company": data.get("company"),
+				"is_team_leader": data.get("is_team_leader", 0)
 			})
 			doc.flags.ignore_sync = True  # Prevent re-syncing back
 			doc.insert(ignore_permissions=True)
@@ -397,7 +399,7 @@ def get_employees_for_sync(filters=None):
 	Uses metadata to dynamically get all fields
 	"""
 	try:
-		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so"]
+		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so","is_team_leader"]
 		
 
 		# Get all team leader or manager employees from Employee doctype
@@ -416,7 +418,8 @@ def get_employees_for_sync(filters=None):
 				"employee_name": emp.get("employee_name"),
 				"sales_order": emp.get("sales_order") if not emp.get("external_sales_order") == 1 else emp.get("external_so"),
 				"business_line": emp.get("business_vertical") if not emp.get("external_sales_order") == 1 else emp.get("external_business_vertical"),
-				"company": emp.get("company")
+				"company": emp.get("company"),
+				"is_team_leader": emp.get("is_team_leader", 0)
 			})
 		
 		return {"success": True, "data": employee_data}
@@ -553,6 +556,7 @@ def pull_employees_from_remote(settings):
 							doc.employee_name = emp.get("employee_name")
 							doc.sales_order = emp.get("sales_order")
 							doc.business_line = emp.get("business_line")
+							doc.is_team_leader = emp.get("is_team_leader", 0)
 							doc.flags.ignore_sync = True
 							doc.save(ignore_permissions=True)
 						else:
@@ -563,7 +567,8 @@ def pull_employees_from_remote(settings):
 								"employee_name": emp.get("employee_name"),
 								"sales_order": emp.get("sales_order"),
 								"business_line": emp.get("business_line"),
-								"company": emp.get("company")
+								"company": emp.get("company"),
+								"is_team_leader": emp.get("is_team_leader", 0)
 							})
 							doc.flags.ignore_sync = True
 							doc.insert(ignore_permissions=True)
@@ -1011,7 +1016,8 @@ def sync_employee_to_remote(doc, method=None):
 			"employee_name": doc.employee_name,
 			"sales_order": doc.get("sales_order") if not doc.get("external_sales_order") == 1 else doc.get("external_so"),
 			"business_line": doc.get("business_vertical") if not doc.get("external_sales_order") == 1 else doc.get("external_business_vertical"),
-			"company": doc.company
+			"company": doc.company,
+			"is_team_leader": doc.is_team_leader
 		}
 		
 		# Get all enabled ERP Sync Settings
