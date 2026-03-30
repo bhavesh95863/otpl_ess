@@ -3320,7 +3320,8 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             SELECT ll.employee, ll.location, ll.employee_name
             FROM `tabLeader Location` ll
             WHERE ll.datetime >= %s
-            AND ll.location IS NOT NULL
+            AND ll.location IS NOT NULL 
+            AND ll.team_leader = 1 
             AND ll.location != ''
             ORDER BY ll.datetime DESC
         """, (today(),), as_dict=1)
