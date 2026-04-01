@@ -42,7 +42,43 @@ def validate_employee(doc, method):
             doc.external_report_to = business_line_doc.external_reporting_manager
             doc.external_reporting_manager = 1
             doc.reports_to = None
+    if doc.temp_tl == 1:
+        doc.is_team_leader = 1
     
+
+def assign_team_leader_role_on_temp_tl(doc, method):
+    """Assign or remove 'TEAM LEADER' role on the linked user based on temp_tl."""
+    if not doc.user_id:
+        return
+
+    # if doc.temp_tl:
+    #     # Add TEAM LEADER role if not already present
+    #     user = frappe.get_doc("User", doc.user_id)
+    #     user_roles = [r.role for r in user.roles]
+    #     if "TEAM LEADER" not in user_roles:
+    #         user.append("roles", {"role": "TEAM LEADER"})
+    #         frappe.flags.syncing_employee_from_user_roles = True
+    #         try:
+    #             user.save(ignore_permissions=True)
+    #         finally:
+    #             frappe.flags.syncing_employee_from_user_roles = False
+
+def remove_team_leader_role(user_id):
+    """Remove the 'TEAM LEADER' role from the given user."""
+    user = frappe.get_doc("User", user_id)
+    role_to_remove = None
+    for r in user.roles:
+        if r.role == "TEAM LEADER":
+            role_to_remove = r
+            break
+    if role_to_remove:
+        user.roles.remove(role_to_remove)
+        frappe.flags.syncing_employee_from_user_roles = True
+        try:
+            user.save(ignore_permissions=True)
+        finally:
+            frappe.flags.syncing_employee_from_user_roles = False
+
 
 @frappe.whitelist()
 def get_ess_information(employee):
@@ -222,4 +258,27 @@ def get_ess_information(employee):
         "external_reports_to": external_manager_info,
         "reportees": reportees,
         "external_reportees": external_reportees,
-    }        
+    }
+
+
+@frappe.whitelist()
+def mark_travelling(employee, ess_location):
+    """Mark an employee as travelling and set reporting manager from the selected ESS Location."""
+    if not frappe.db.exists("Employee", employee):
+        frappe.throw("Employee not found")
+
+    ess_loc = frappe.db.get_value(
+        "ESS Location", ess_location, ["reporting_manager"], as_dict=True
+    )
+    if not ess_loc or not ess_loc.reporting_manager:
+        frappe.throw("Selected ESS Location does not have a Reporting Manager assigned")
+
+    frappe.db.set_value("Employee", employee, {
+        "travelling": 1,
+        "reports_to": ess_loc.reporting_manager,
+        "external_reporting_manager": 0,
+        "external_report_to": None,
+    })
+    frappe.db.commit()
+
+    return {"status": "success", "reporting_manager": ess_loc.reporting_manager}

@@ -21,6 +21,12 @@ frappe.ui.form.on('Employee', {
             frm.add_custom_button(__('ESS Information'), function () {
                 show_ess_information(frm);
             }, __('ESS'));
+
+            if (!frm.doc.travelling && (frappe.user.has_role("System Manager") || frappe.user.has_role("HR Manager"))) {
+                frm.add_custom_button(__('Mark Travelling'), function () {
+                    show_mark_travelling_dialog(frm);
+                });
+            }
         }
         if(frm.doc.sales_order) {
             frm.set_df_property("business_vertical", 'read_only', 1);
@@ -77,6 +83,50 @@ function toggle_employee_availability(frm) {
     frm.set_df_property('employee_availability', 'hidden', !show_field);
 }
 
+
+function show_mark_travelling_dialog(frm) {
+    const d = new frappe.ui.Dialog({
+        title: __('Mark Travelling'),
+        fields: [
+            {
+                fieldname: 'ess_location',
+                fieldtype: 'Link',
+                label: __('ESS Location'),
+                options: 'ESS Location',
+                reqd: 1,
+                get_query: function () {
+                    return {
+                        filters: {
+                            reporting_manager: ['is', 'set']
+                        }
+                    };
+                }
+            }
+        ],
+        primary_action_label: __('Mark Travelling'),
+        primary_action(values) {
+            frappe.call({
+                method: 'employee_self_service.employee_self_service.utils.employee.mark_travelling',
+                args: {
+                    employee: frm.doc.name,
+                    ess_location: values.ess_location
+                },
+                freeze: true,
+                freeze_message: __('Marking as Travelling...'),
+                callback: function (r) {
+                    if (r.exc) return;
+                    d.hide();
+                    frappe.show_alert({
+                        message: __('Employee marked as Travelling. Reporting Manager updated.'),
+                        indicator: 'green'
+                    });
+                    frm.reload_doc();
+                }
+            });
+        }
+    });
+    d.show();
+}
 
 function show_ess_information(frm) {
     frappe.call({

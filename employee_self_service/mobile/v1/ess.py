@@ -811,7 +811,8 @@ def get_dashboard():
                 "external_business_vertical",
                 "staff_type",
                 "status",
-                "is_team_leader"
+                "is_team_leader",
+                "temp_tl"
             ],
         )
         notice_board = get_notice_board(emp_data.get("name"))
@@ -844,7 +845,7 @@ def get_dashboard():
                     has_checkout = True
         is_team_leader = 0
         allow_location_update = 0
-        if emp_data.get("is_team_leader") == 1:
+        if emp_data.get("is_team_leader") == 1 and emp_data.get("temp_tl") == 0:
             is_team_leader = 1
             if last_log_type == "IN":
                 allow_location_update = 1
@@ -3419,7 +3420,14 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
             frappe.db.commit()
         if len(nearby_leaders) > 0 and emp_data.get("temp_tl") == 1:
             frappe.db.set_value("Employee", emp_data.name, "temp_tl", 0)
+            frappe.db.set_value("Employee", emp_data.name, "is_team_leader", 0)
             frappe.db.commit()
+            # Remove TEAM LEADER role from linked user
+            user_id = frappe.db.get_value("Employee", emp_data.name, "user_id")
+            if user_id:
+                from employee_self_service.employee_self_service.utils.employee import remove_team_leader_role
+                remove_team_leader_role(user_id)
+                
         return gen_response(200, "Nearby team leaders fetched successfully", nearby_leaders)
     except Exception as e:
         return exception_handler(e)
