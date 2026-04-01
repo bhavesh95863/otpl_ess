@@ -135,6 +135,10 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		from employee_self_service.employee_self_service.utils.driver_attendance import run_driver_attendance
 		return run_driver_attendance(employee, date)
 
+	# --- Field staff: checkin exists → Present, no checkin → Absent (irrespective of location) ---
+	if staff_type == "Field":
+		return _process_field_attendance(employee, date)
+
 	# --- Non-Worker: no_check_in employees are auto-marked Present ---
 	if no_check_in:
 		create_attendance_record(
@@ -266,6 +270,56 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 	)
 
 	return "Processed"
+
+
+def _process_field_attendance(employee, date):
+	"""
+	Field staff attendance: irrespective of location.
+	If any checkin exists for the day → Present (no checkout/hours needed).
+	No checkin → Absent.
+	"""
+	has_checkin = frappe.db.sql(
+		"""SELECT name FROM `tabEmployee Checkin`
+		WHERE employee = %s AND time >= %s AND time < %s
+		LIMIT 1""",
+		(employee, date, add_days(date, 1))
+	)
+
+	if has_checkin:
+		checkin_record = frappe.db.sql(
+			"""SELECT time FROM `tabEmployee Checkin`
+			WHERE employee = %s AND time >= %s AND time < %s
+			ORDER BY time ASC LIMIT 1""",
+			(employee, date, add_days(date, 1)),
+			as_dict=True
+		)
+		checkin_time = checkin_record[0].time if checkin_record else None
+
+		create_attendance_record(
+			employee=employee,
+			date=date,
+			status="Present",
+			late_entry=False,
+			early_exit=False,
+			working_hours=0,
+			remarks="Field Staff - Check-in recorded",
+			checkin_time=checkin_time,
+			checkout_time=None
+		)
+		return "Processed"
+	else:
+		create_attendance_record(
+			employee=employee,
+			date=date,
+			status="Absent",
+			late_entry=False,
+			early_exit=False,
+			working_hours=0,
+			remarks="Field Staff - No check-in recorded",
+			checkin_time=None,
+			checkout_time=None
+		)
+		return "Absent"
 
 
 def determine_status(checkin_time, checkout_time, location_rules, employee, date):
