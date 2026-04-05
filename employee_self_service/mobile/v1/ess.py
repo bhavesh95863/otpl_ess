@@ -3377,7 +3377,7 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
                     })
 
         if len(nearby_leaders) == 0:
-            if emp_data.get("temp_tl") == 1:
+            if emp_data.get("temp_tl") == 1 or emp_data.get("travelling") == 1:
                 employee_name = frappe.db.get_value("Employee", emp_data.reports_to, "employee_name")
                 nearby_leaders.append({
                     "employee": emp_data.reports_to,
@@ -3447,7 +3447,7 @@ def _haversine_distance(lat1, lon1, lat2, lon2):
 def team_leader_location_update(latitude=None, longitude=None):
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name","reports_to","external_reporting_manager","external_report_to"]
+            frappe.session.user, fields=["name","reports_to","external_reporting_manager","external_report_to","is_team_leader"]
         )
         if not latitude or not longitude:
             return gen_response(400, "latitude and longitude are required")
@@ -3462,6 +3462,7 @@ def team_leader_location_update(latitude=None, longitude=None):
             employee = emp_data.name,
             location = f"{lat},{lon}",
             time = now(),
+            team_leader = emp_data.is_team_leader
         )).insert(ignore_permissions=True)
        
         return gen_response(200, "Team leader location updated successfully")
