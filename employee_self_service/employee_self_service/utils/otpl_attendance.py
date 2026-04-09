@@ -322,8 +322,8 @@ def fetch_employee_details(doc):
     if doc.staff_type == "Worker" and doc.employee_location == "Site" and doc.log_type == "IN":
         if employee_details.get("travelling") == 1:
             doc.checkin_type = "Travelling"
-            doc.approval_required = 1
-            doc.manager = frappe.db.get_value("Employee",doc.reports_to,"user_id")
+            # doc.approval_required = 1
+            # doc.manager = frappe.db.get_value("Employee",doc.reports_to,"user_id")
         elif frappe.db.exists("ESS Location",{"reporting_manager": doc.reports_to}):
             doc.checkin_type = "ESS Location"
         else:

@@ -13,17 +13,60 @@ from employee_self_service.employee_self_service.utils.erp_sync import push_trav
 class TravelRequest(Document):
 	def validate(self):
 		self.validate_dates()
+		self.validate_date_conflict()
 		self.calculate_number_of_days()
 		self.set_approver()
 
 	def on_update(self):
 		"""Trigger sync to remote ERP when travel request has external report_to"""
 		push_travel_to_remote_erp(self)
+		self.update_employee_travel_status()
+
+	def update_employee_travel_status(self):
+		"""Immediately mark employee as travelling when approved and travel is active"""
+		if self.status != "Approved" or not self.employee:
+			return
+		if not self.date_of_departure or not self.date_of_arrival:
+			return
+
+		today = getdate(nowdate())
+		if getdate(self.date_of_departure) <= today <= getdate(self.date_of_arrival):
+			if self.purpose == "Going on Leave":
+				frappe.db.set_value("Employee", self.employee, "employee_availability", "On Leave")
+			else:
+				frappe.db.set_value("Employee", self.employee, "travelling", 1)
 
 	def validate_dates(self):
 		if self.date_of_departure and self.date_of_arrival:
 			if getdate(self.date_of_arrival) < getdate(self.date_of_departure):
 				frappe.throw(_("Date of Arrival cannot be before Date of Departure"))
+
+	def validate_date_conflict(self):
+		if not self.employee or not self.date_of_departure or not self.date_of_arrival:
+			return
+
+		filters = {
+			"employee": self.employee,
+			"name": ["!=", self.name],
+			"status": ["not in", ["Cancelled", "Rejected"]],
+			"date_of_departure": ["<=", self.date_of_arrival],
+			"date_of_arrival": [">=", self.date_of_departure],
+		}
+
+		overlapping = frappe.get_all(
+			"Travel Request",
+			filters=filters,
+			fields=["name", "date_of_departure", "date_of_arrival"],
+			limit=1,
+		)
+
+		if overlapping:
+			req = overlapping[0]
+			frappe.throw(
+				_("Travel Request dates overlap with existing request {0} ({1} to {2})").format(
+					req.name, req.date_of_departure, req.date_of_arrival
+				)
+			)
 
 	def calculate_number_of_days(self):
 		if self.date_of_departure and self.date_of_arrival:
@@ -33,9 +76,10 @@ class TravelRequest(Document):
 		if not self.employee:
 			return
 		employee_doc = frappe.get_doc("Employee", self.employee)
-		if not employee_doc.business_vertical:
+		if not employee_doc.business_vertical and not employee_doc.external_business_vertical:
 			frappe.throw(_("Employee does not have a Business Vertical assigned. Please contact HR."))
-		business_line_doc = frappe.get_doc("Business Line", employee_doc.business_vertical)
+		business_vertical = employee_doc.business_vertical or employee_doc.external_business_vertical
+		business_line_doc = frappe.get_doc("Business Line", business_vertical)
 		if business_line_doc.reporting_manager:
 			self.report_to = business_line_doc.reporting_manager
 		else:

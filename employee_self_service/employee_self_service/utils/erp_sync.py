@@ -1666,7 +1666,7 @@ def push_travel_to_remote_erp(travel_doc):
 			"purpose": travel_doc.purpose,
 			"ticket": travel_doc.ticket,
 			"status": travel_doc.status,
-			"report_to": travel_doc.external_report_to,
+			"report_to": frappe.db.get_value("Employee Pull", travel_doc.external_report_to, "employee"),
 			"has_external_report_to": travel_doc.has_external_report_to,
 			"external_report_to": travel_doc.external_report_to,
 			"remarks": travel_doc.remarks
@@ -1779,8 +1779,8 @@ def push_travel_status_to_source(travel_pull_doc):
 
 		if not sync_settings:
 			frappe.log_error(
-				"No ERP Sync Settings found for source ERP: {0}".format(travel_pull_doc.source_erp),
-				"Travel Status Sync Error"
+				message="No ERP Sync Settings found for source ERP: {0}".format(travel_pull_doc.source_erp),
+				title="Travel Status Sync Error"
 			)
 			return
 
