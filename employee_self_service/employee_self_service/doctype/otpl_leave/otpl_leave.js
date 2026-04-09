@@ -5,6 +5,9 @@ frappe.ui.form.on('OTPL Leave', {
 	refresh: function(frm) {
 		// Always make status field readonly
 		frm.set_df_property('status', 'read_only', 1);
+
+		// Short leave UI adjustments
+		frm.trigger('toggle_short_leave_fields');
 		
 		// Add custom buttons based on current status
 		if (!frm.is_new() && frm.doc.docstatus === 0) {
@@ -46,6 +49,7 @@ frappe.ui.form.on('OTPL Leave', {
 			frm.set_df_property('approver', 'read_only', 1);
 			frm.set_df_property('is_external_manager', 'read_only', 1);
 			frm.set_df_property('external_manager', 'read_only', 1);
+			frm.set_df_property('short_leave', 'read_only', 1);
 			
 			// Show appropriate message
 			if (frm.doc.status === 'Approved') {
@@ -175,5 +179,33 @@ frappe.ui.form.on('OTPL Leave', {
 				});
 			}
 		);
+	},
+
+	short_leave: function(frm) {
+		if (frm.doc.short_leave) {
+			frm.set_value('half_day', 0);
+			frm.set_value('to_date', frm.doc.from_date);
+		}
+		frm.trigger('toggle_short_leave_fields');
+	},
+
+	from_date: function(frm) {
+		if (frm.doc.short_leave && frm.doc.from_date) {
+			frm.set_value('to_date', frm.doc.from_date);
+		}
+	},
+
+	toggle_short_leave_fields: function(frm) {
+		if (frm.doc.short_leave) {
+			frm.set_df_property('to_date', 'read_only', 1);
+			frm.set_df_property('half_day', 'hidden', 1);
+			frm.set_df_property('half_day_date', 'hidden', 1);
+		} else {
+			if (frm.doc.status !== 'Approved' && frm.doc.status !== 'Cancelled') {
+				frm.set_df_property('to_date', 'read_only', 0);
+			}
+			frm.set_df_property('half_day', 'hidden', 0);
+			frm.set_df_property('half_day_date', 'hidden', 0);
+		}
 	}
 });

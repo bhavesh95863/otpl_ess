@@ -1,0 +1,85 @@
+{
+ "creation": "2026-04-08 10:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "department",
+  "designation",
+  "current_status",
+  "current_attendance",
+  "new_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employee",
+   "options": "Employee",
+   "reqd": 1,
+   "read_only": 1,
+   "columns": 2
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Employee Name",
+   "read_only": 1,
+   "columns": 2
+  },
+  {
+   "fetch_from": "employee.department",
+   "fieldname": "department",
+   "fieldtype": "Data",
+   "label": "Department",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fetch_from": "employee.designation",
+   "fieldname": "designation",
+   "fieldtype": "Data",
+   "label": "Designation",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "current_status",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Current Status",
+   "read_only": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "current_attendance",
+   "fieldtype": "Link",
+   "label": "Current Attendance",
+   "options": "Attendance",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "new_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "New Status",
+   "options": "\nPresent\nAbsent\nHalf Day",
+   "columns": 2
+  }
+ ],
+ "istable": 1,
+ "modified": "2026-04-08 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Attendance Mark Detail",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

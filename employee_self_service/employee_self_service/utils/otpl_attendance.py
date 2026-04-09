@@ -388,8 +388,11 @@ def validate(doc,method):
         ["location","staff_type","is_team_leader","employee_availability"],as_dict=True
     )
     if emp.employee_availability == "On Leave":
-        frappe.throw(_("आप छुट्टी पर हैं, ड्यूटी पर वापस आने के लिए सुश्री लतिका भाटिया (01204010000) से संपर्क करें।."))
-
+        on_leave_message = frappe.db.get_value("Employee Self Service Settings","Employee Self Service Settings","on_leave_message")
+        return gen_response(
+                    500,
+                    on_leave_message or "You are currently on leave. Please contact your administrator for more details.",
+                )
     enable_device_restrictions = frappe.db.get_value("Employee Self Service Settings", "Employee Self Service Settings", "enable_device_restrictions")
     if enable_device_restrictions == 1:
         if not frappe.db.exists("Employee Device Registration",{"employee":doc.employee}):

@@ -335,6 +335,7 @@ def get_leave_application_list():
             "reason as 'description'",
             "status",
             "DATE_FORMAT(creation, '%d-%m-%Y') as posting_date",
+            "short_leave",
         ]
         upcoming_leaves = frappe.get_all(
             "OTPL Leave",
@@ -386,6 +387,7 @@ def get_leave_application(name):
             "reason as 'description'",
             "status",
             "half_day",
+            "short_leave",
             "from_date",
             "to_date",
             "DATE_FORMAT(creation, '%%d-%%m-%%y') as 'posting_date'",
@@ -894,7 +896,8 @@ def get_dashboard():
             "android_mobile_link":settings.get("android_mobile_link"),
             "message": settings.get("message"),
             "people_on_leave": 0 if emp_data.get("location") == "Site" else 1,
-            "allow_location_update": allow_location_update
+            "allow_location_update": allow_location_update,
+            "travel_request": 1
         }
         reports_to_name = None
         if emp_data.get("reports_to"):

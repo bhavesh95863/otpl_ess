@@ -173,7 +173,8 @@ scheduler_events = {
         ],
         "0 0 * * *": [
             "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_driver",
-            "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance"
+            "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance",
+            "employee_self_service.employee_self_service.doctype.travel_request.travel_request.process_travel_requests"
         ],
         "*/5 * * * *": [
             "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"

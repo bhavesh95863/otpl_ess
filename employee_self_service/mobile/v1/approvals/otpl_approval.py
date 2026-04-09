@@ -28,6 +28,7 @@ def get_otpl_leave_approval_list(start=0, page_length=10):
                 "to_date",
                 "total_no_of_days",
                 "half_day",
+                "short_leave",
                 "half_day_date",
                 "alternate_mobile_no",
                 "reason",
@@ -641,6 +642,7 @@ def get_otpl_leave_approved_list(start=0, page_length=10):
                 "to_date",
                 "total_no_of_days",
                 "half_day",
+                "short_leave",
                 "half_day_date",
                 "alternate_mobile_no",
                 "reason",
@@ -700,6 +702,233 @@ def get_otpl_leave_approved_list(start=0, page_length=10):
         )
     except frappe.PermissionError:
         return gen_response(500, "Not permitted to read leave records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+# ==================== TRAVEL REQUEST APPROVALS ====================
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_travel_approval_list(start=0, page_length=10):
+    """
+    Get Travel Request and Travel Request Pull records that need approval.
+    Filters: status='Pending' and report_to is the session user's employee (for Travel Request)
+             status='Pending' and source_erp is set (for Travel Request Pull)
+    """
+    try:
+        current_user = frappe.session.user
+        emp_name = frappe.db.get_value("Employee", {"user_id": current_user}, "name")
+
+        travel_fields = [
+            "name",
+            "employee",
+            "employee_name",
+            "department",
+            "date_of_departure",
+            "date_of_arrival",
+            "number_of_days",
+            "purpose",
+            "ticket",
+            "status",
+            "report_to",
+            "remarks",
+            "modified",
+        ]
+
+        # Get Travel Request records where current user's employee is report_to
+        travel_list = []
+        if emp_name:
+            travel_list = frappe.get_all(
+                "Travel Request",
+                fields=travel_fields,
+                filters={"status": "Pending", "report_to": emp_name},
+            )
+
+        # Get Travel Request Pull records that need approval
+        travel_pull_list = frappe.get_all(
+            "Travel Request Pull",
+            fields=travel_fields,
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "=", "Pending"],
+            ],
+        )
+
+        # Combine both lists
+        combined_list = travel_list + travel_pull_list
+        combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
+
+        start = int(start)
+        page_length = int(page_length)
+        paginated_list = combined_list[start:start + page_length]
+
+        for item in paginated_list:
+            item.pop("modified", None)
+
+        return gen_response(
+            200, "Travel approval list retrieved successfully", paginated_list
+        )
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to read travel records")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def approve_travel_request():
+    """
+    Approve Travel Request or Travel Request Pull (auto-detects doctype).
+    Accepts: name, remarks (optional)
+    Sets status to 'Approved'.
+    """
+    try:
+        data = json.loads(frappe.request.get_data())
+        travel_name = data.get("name")
+        remarks = data.get("remarks")
+
+        if not travel_name:
+            return gen_response(500, "Travel Request name is required")
+
+        # Auto-detect if it's a Travel Request Pull or Travel Request
+        is_travel_pull = frappe.db.exists("Travel Request Pull", travel_name)
+        is_travel_request = frappe.db.exists("Travel Request", travel_name)
+
+        if not is_travel_pull and not is_travel_request:
+            return gen_response(500, "Travel Request does not exist")
+
+        if is_travel_pull:
+            doc = frappe.get_doc("Travel Request Pull", travel_name)
+            if doc.status == "Approved":
+                return gen_response(500, "Travel Request is already approved")
+            doc.status = "Approved"
+            if remarks:
+                doc.remarks = remarks
+            doc.save(ignore_permissions=True)
+            return gen_response(200, "Travel Request approved successfully")
+        else:
+            doc = frappe.get_doc("Travel Request", travel_name)
+            if doc.status != "Pending":
+                return gen_response(500, "Travel Request is already {0}".format(doc.status))
+            doc.status = "Approved"
+            if remarks:
+                doc.remarks = remarks
+            doc.save(ignore_permissions=True)
+            return gen_response(200, "Travel Request approved successfully")
+
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to approve Travel Request")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def reject_travel_request():
+    """
+    Reject Travel Request or Travel Request Pull (auto-detects doctype).
+    Accepts: name, remarks (optional)
+    Sets status to 'Rejected'.
+    """
+    try:
+        data = json.loads(frappe.request.get_data())
+        travel_name = data.get("name")
+        remarks = data.get("remarks")
+
+        if not travel_name:
+            return gen_response(500, "Travel Request name is required")
+
+        is_travel_pull = frappe.db.exists("Travel Request Pull", travel_name)
+        is_travel_request = frappe.db.exists("Travel Request", travel_name)
+
+        if not is_travel_pull and not is_travel_request:
+            return gen_response(500, "Travel Request does not exist")
+
+        if is_travel_pull:
+            doc = frappe.get_doc("Travel Request Pull", travel_name)
+            if doc.status != "Pending":
+                return gen_response(500, "Travel Request is already {0}".format(doc.status))
+            doc.status = "Rejected"
+            if remarks:
+                doc.remarks = remarks
+            doc.save(ignore_permissions=True)
+            return gen_response(200, "Travel Request rejected successfully")
+        else:
+            doc = frappe.get_doc("Travel Request", travel_name)
+            if doc.status != "Pending":
+                return gen_response(500, "Travel Request is already {0}".format(doc.status))
+            doc.status = "Rejected"
+            if remarks:
+                doc.remarks = remarks
+            doc.save(ignore_permissions=True)
+            return gen_response(200, "Travel Request rejected successfully")
+
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to reject Travel Request")
+    except Exception as e:
+        return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_travel_approved_list(start=0, page_length=10):
+    """
+    Get Travel Request and Travel Request Pull records that have been approved.
+    """
+    try:
+        current_user = frappe.session.user
+        emp_name = frappe.db.get_value("Employee", {"user_id": current_user}, "name")
+
+        travel_fields = [
+            "name",
+            "employee",
+            "employee_name",
+            "department",
+            "date_of_departure",
+            "date_of_arrival",
+            "number_of_days",
+            "purpose",
+            "ticket",
+            "status",
+            "report_to",
+            "remarks",
+            "modified",
+        ]
+
+        travel_list = []
+        if emp_name:
+            travel_list = frappe.get_all(
+                "Travel Request",
+                fields=travel_fields,
+                filters={"status": "Approved", "report_to": emp_name},
+            )
+
+        travel_pull_list = frappe.get_all(
+            "Travel Request Pull",
+            fields=travel_fields,
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "=", "Approved"],
+            ],
+        )
+
+        combined_list = travel_list + travel_pull_list
+        combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
+
+        start = int(start)
+        page_length = int(page_length)
+        paginated_list = combined_list[start:start + page_length]
+
+        for item in paginated_list:
+            item.pop("modified", None)
+
+        return gen_response(
+            200, "Approved travel list retrieved successfully", paginated_list
+        )
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to read travel records")
     except Exception as e:
         return exception_handler(e)
 
@@ -1113,8 +1342,28 @@ def pending_approval_counts():
             }
         ) if emp_name else 0
 
+        # Count Travel Request records
+        travel_count = 0
+        if emp_name:
+            travel_count = frappe.db.count(
+                "Travel Request",
+                filters={"status": "Pending", "report_to": emp_name}
+            )
+
+        # Count Travel Request Pull records
+        travel_pull_list = frappe.get_all(
+            "Travel Request Pull",
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "=", "Pending"],
+            ],
+            fields=["name"]
+        )
+        travel_pull_count = len(travel_pull_list)
+        travel_count = travel_count + travel_pull_count
+
         # Calculate total
-        total_count = leave_count + expense_count + checkin_count + checkout_count + site_expense_pending_count
+        total_count = leave_count + expense_count + checkin_count + checkout_count + site_expense_pending_count + travel_count
 
         # Prepare response data
         result = {
@@ -1123,6 +1372,7 @@ def pending_approval_counts():
             "checkin": checkin_count,
             "checkout": checkout_count,
             "site_expense_pending": site_expense_pending_count,
+            "travel": travel_count,
             "total": total_count
         }
 

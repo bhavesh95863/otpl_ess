@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.model.document import Document
-from frappe.utils import date_diff,add_days
+from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
 from erpnext.hr.doctype.leave_application.leave_application import get_leave_balance_on
 
@@ -14,15 +14,25 @@ class OTPLLeave(Document):
 		"""
 		Validate OTPL Leave before saving
 		"""
-		# Calculate total number of days
-		if self.from_date and self.to_date:
-			self.total_no_of_days = date_diff(self.to_date, self.from_date) + 1
-			if self.half_day:
-				self.total_no_of_days -= 0.5
-		if self.approved_from_date and self.approved_to_date:
-			self.total_no_of_approved_days = date_diff(self.approved_to_date, self.approved_from_date) + 1
-			if self.half_day:
-				self.total_no_of_approved_days -= 0.5
+		# Short leave must be single day, no half day
+		if self.short_leave:
+			self.half_day = 0
+			self.to_date = self.from_date
+			self.total_no_of_days = 1
+			if self.approved_from_date:
+				self.approved_to_date = self.approved_from_date
+				self.total_no_of_approved_days = 1
+			self.validate_short_leave_limit()
+		else:
+			# Calculate total number of days
+			if self.from_date and self.to_date:
+				self.total_no_of_days = date_diff(self.to_date, self.from_date) + 1
+				if self.half_day:
+					self.total_no_of_days -= 0.5
+			if self.approved_from_date and self.approved_to_date:
+				self.total_no_of_approved_days = date_diff(self.approved_to_date, self.approved_from_date) + 1
+				if self.half_day:
+					self.total_no_of_approved_days -= 0.5
 
 		# Validate status change to Cancelled
 		if not self.get("__islocal"):
@@ -50,6 +60,36 @@ class OTPLLeave(Document):
 		if employee_doc.staff_type == "Worker" and employee_doc.location == "Site" and not self.status == "Cancelled":
 			frappe.throw("आपकी छुट्टी सीधे साइट पर आपकी उपस्थिति या अनुपस्थिति से ली जाती है, छुट्टी के लिए आवेदन करने की कोई आवश्यकता नहीं है।")
 
+	def validate_short_leave_limit(self):
+		"""Validate that employee has not exceeded 2 short leaves in the month"""
+		if self.status == "Cancelled":
+			return
+
+		leave_date = getdate(self.from_date)
+		month_start = str(get_first_day(leave_date))
+		month_end = str(get_last_day(leave_date))
+
+		query = """
+			SELECT COUNT(*) FROM `tabOTPL Leave`
+			WHERE employee = %s
+			AND short_leave = 1
+			AND from_date BETWEEN %s AND %s
+			AND status IN ('Pending', 'Approved')
+		"""
+		params = [self.employee, month_start, month_end]
+
+		if not self.get("__islocal") and self.name:
+			query += " AND name != %s"
+			params.append(self.name)
+
+		existing_count = frappe.db.sql(query, params)[0][0] or 0
+		if existing_count >= 2:
+			frappe.throw(
+				f"Maximum 2 Short Leaves are allowed per month. "
+				f"Employee already has {existing_count} Short Leave(s) in {leave_date.strftime('%B %Y')}.",
+				title="Short Leave Limit Exceeded"
+			)
+
 	def on_update(self):
 		"""
 		Trigger sync to remote ERP when leave is saved with external manager
@@ -72,56 +112,75 @@ class OTPLLeave(Document):
 				and doc_before_save.status != "Approved"
 				and self.status == "Approved"
 			):
-				from_date = self.approved_from_date
-				to_date = self.approved_to_date
+				if self.short_leave:
+					self._create_short_leave_application()
+				else:
+					self._create_regular_leave_applications()
 
-				if not (from_date and to_date):
-					frappe.throw("Approved From Date and Approved To Date are required")
+	def _create_short_leave_application(self):
+		"""Create a Short Leave application - does not consume CL or LWP"""
+		from_date = self.approved_from_date or self.from_date
+		short_leave_type = "Short Leave"
 
-				calendar_days = date_diff(to_date, from_date) + 1
-				casual_leave = "Casual Leave"
-				lwp = "Leave Without Pay"
+		self.make_leave_application(
+			leave_type=short_leave_type,
+			from_date=from_date,
+			to_date=from_date,
+			total_days=1,
+			half_day=0
+		)
 
-				cl_balance = get_leave_balance_on(
-					employee=self.employee,
-					leave_type=casual_leave,
-					date=from_date,
-					consider_all_leaves_in_the_allocation_period=True
-				) or 0
+	def _create_regular_leave_applications(self):
+		from_date = self.approved_from_date
+		to_date = self.approved_to_date
 
-				# Use integer calendar days for the CL/LWP split to keep date arithmetic safe
-				cl_calendar_days = min(int(cl_balance), calendar_days)
-				lwp_calendar_days = calendar_days - cl_calendar_days
+		if not (from_date and to_date):
+			frappe.throw("Approved From Date and Approved To Date are required")
 
-				if cl_calendar_days > 0:
-					cl_to_date = add_days(from_date, cl_calendar_days - 1)
-					cl_leave_days = cl_calendar_days
-					cl_half_day = 0
-					if self.half_day and self._is_half_day_in_range(from_date, cl_to_date):
-						cl_leave_days -= 0.5
-						cl_half_day = 1
-					self.make_leave_application(
-						leave_type=casual_leave,
-						from_date=from_date,
-						to_date=cl_to_date,
-						total_days=cl_leave_days,
-						half_day=cl_half_day
-					)
+		calendar_days = date_diff(to_date, from_date) + 1
+		casual_leave = "Casual Leave"
+		lwp = "Leave Without Pay"
 
-				if lwp_calendar_days > 0:
-					lwp_from_date = add_days(from_date, cl_calendar_days)
-					lwp_leave_days = lwp_calendar_days
-					lwp_half_day = 0
-					if self.half_day and self._is_half_day_in_range(lwp_from_date, to_date):
-						lwp_leave_days -= 0.5
-						lwp_half_day = 1
-					self.make_leave_application(
-						leave_type=lwp,
-						from_date=lwp_from_date,
-						to_date=to_date,
-						total_days=lwp_leave_days,
-						half_day=lwp_half_day
-					)
+		cl_balance = get_leave_balance_on(
+			employee=self.employee,
+			leave_type=casual_leave,
+			date=from_date,
+			consider_all_leaves_in_the_allocation_period=True
+		) or 0
+
+		# Use integer calendar days for the CL/LWP split to keep date arithmetic safe
+		cl_calendar_days = min(int(cl_balance), calendar_days)
+		lwp_calendar_days = calendar_days - cl_calendar_days
+
+		if cl_calendar_days > 0:
+			cl_to_date = add_days(from_date, cl_calendar_days - 1)
+			cl_leave_days = cl_calendar_days
+			cl_half_day = 0
+			if self.half_day and self._is_half_day_in_range(from_date, cl_to_date):
+				cl_leave_days -= 0.5
+				cl_half_day = 1
+			self.make_leave_application(
+				leave_type=casual_leave,
+				from_date=from_date,
+				to_date=cl_to_date,
+				total_days=cl_leave_days,
+				half_day=cl_half_day
+			)
+
+		if lwp_calendar_days > 0:
+			lwp_from_date = add_days(from_date, cl_calendar_days)
+			lwp_leave_days = lwp_calendar_days
+			lwp_half_day = 0
+			if self.half_day and self._is_half_day_in_range(lwp_from_date, to_date):
+				lwp_leave_days -= 0.5
+				lwp_half_day = 1
+			self.make_leave_application(
+				leave_type=lwp,
+				from_date=lwp_from_date,
+				to_date=to_date,
+				total_days=lwp_leave_days,
+				half_day=lwp_half_day
+			)
 
 	def _is_half_day_in_range(self, start_date, end_date):
 		from frappe.utils import getdate

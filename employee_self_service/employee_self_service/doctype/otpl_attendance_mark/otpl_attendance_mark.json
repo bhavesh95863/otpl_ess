@@ -1,0 +1,167 @@
+{
+ "autoname": "ATT-MARK-.#####",
+ "creation": "2026-04-08 10:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "filters_section",
+  "staff_type",
+  "location",
+  "date",
+  "column_break_1",
+  "company",
+  "employee",
+  "fetch_employees",
+  "mark_all_present",
+  "mark_all_absent",
+  "section_break_employees",
+  "employees",
+  "section_break_actions",
+  "section_break_result",
+  "processing_log",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "filters_section",
+   "fieldtype": "Section Break",
+   "label": "Filters"
+  },
+  {
+   "fieldname": "staff_type",
+   "fieldtype": "Select",
+   "label": "Staff Type"
+  },
+  {
+   "fieldname": "location",
+   "fieldtype": "Select",
+   "label": "Location"
+  },
+  {
+   "default": "Today",
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "Employee",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "fetch_employees",
+   "fieldtype": "Button",
+   "label": "Fetch Employees"
+  },
+  {
+   "fieldname": "section_break_employees",
+   "fieldtype": "Section Break",
+   "label": "Employees"
+  },
+  {
+   "fieldname": "employees",
+   "fieldtype": "Table",
+   "label": "Employees",
+   "options": "OTPL Attendance Mark Detail"
+  },
+  {
+   "fieldname": "section_break_actions",
+   "fieldtype": "Section Break",
+   "label": "Quick Actions"
+  },
+  {
+   "fieldname": "mark_all_present",
+   "fieldtype": "Button",
+   "label": "Mark All Present"
+  },
+  {
+   "fieldname": "mark_all_absent",
+   "fieldtype": "Button",
+   "label": "Mark All Absent"
+  },
+  {
+   "collapsible": 1,
+   "depends_on": "processing_log",
+   "fieldname": "section_break_result",
+   "fieldtype": "Section Break",
+   "label": "Processing Log"
+  },
+  {
+   "fieldname": "processing_log",
+   "fieldtype": "Small Text",
+   "label": "Processing Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "OTPL Attendance Mark",
+   "print_hide": 1,
+   "read_only": 1
+  }
+ ],
+ "is_submittable": 1,
+ "modified": "2026-04-09 15:55:32.468280",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Attendance Mark",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "HR User",
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "title_field": "date"
+}

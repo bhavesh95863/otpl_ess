@@ -849,6 +849,10 @@ def send_to_remote_erp(erp_url, api_key, api_secret, doctype_name, data, sync_ac
 			api_method = "receive_leave_status_update"
 		elif doctype_name == "Expense Status Update":
 			api_method = "receive_expense_status_update"
+		elif doctype_name == "Travel Request Pull":
+			api_method = "receive_travel_request_pull"
+		elif doctype_name == "Travel Status Update":
+			api_method = "receive_travel_status_update"
 		else:
 			return False
 		
@@ -1623,6 +1627,169 @@ def push_expense_status_to_source(expense_pull_doc):
 
 
 # ==================== EXTERNAL ESS INFORMATION API ====================
+
+
+def push_travel_status_to_source(travel_pull_doc):
+	"""
+	Push Travel Request Pull status update back to source ERP's Travel Request.
+	Called from Travel Request Pull on_update hook.
+	"""
+	try:
+		if not travel_pull_doc.source_erp:
+			return
+
+		if hasattr(travel_pull_doc, 'flags') and travel_pull_doc.flags.get('ignore_sync'):
+			return
+
+		sync_settings = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1, "erp_url": travel_pull_doc.source_erp},
+			fields=["name"],
+			limit=1
+		)
+
+		if not sync_settings:
+			frappe.log_error(
+				"No ERP Sync Settings found for source ERP: {0}".format(travel_pull_doc.source_erp),
+				"Travel Status Sync Error"
+			)
+			return
+
+		status_data = {
+			"travel_request_id": travel_pull_doc.travel_request_id,
+			"status": travel_pull_doc.status,
+			"remarks": travel_pull_doc.remarks
+		}
+
+		settings = frappe.get_doc("ERP Sync Settings", sync_settings[0].name)
+
+		success = send_to_remote_erp(
+			settings.erp_url,
+			settings.get_password("api_key"),
+			settings.get_password("api_secret"),
+			"Travel Status Update",
+			status_data,
+			"Status Update"
+		)
+
+		if success:
+			frappe.log_error(
+				message="Successfully synced Travel status for {0} to source ERP".format(travel_pull_doc.travel_request_id),
+				title="Travel Status Sync Success"
+			)
+		else:
+			frappe.log_error(
+				message="Failed to sync Travel status for {0} to source ERP".format(travel_pull_doc.travel_request_id),
+				title="Travel Status Sync Failed"
+			)
+
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error syncing Travel status to source for {0}".format(travel_pull_doc.travel_request_id)
+		)
+
+
+@frappe.whitelist()
+def receive_travel_request_pull(data, source_site=None):
+	"""
+	API endpoint to receive Travel Request Pull data from remote ERP
+	"""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		travel_request_id = data.get("travel_request_id")
+		existing = frappe.db.exists("Travel Request Pull", travel_request_id)
+
+		if existing:
+			doc = frappe.get_doc("Travel Request Pull", travel_request_id)
+			doc.employee = data.get("employee")
+			doc.employee_name = data.get("employee_name")
+			doc.department = data.get("department")
+			doc.date_of_departure = data.get("date_of_departure")
+			doc.date_of_arrival = data.get("date_of_arrival")
+			doc.number_of_days = data.get("number_of_days")
+			doc.purpose = data.get("purpose")
+			doc.ticket = data.get("ticket")
+			doc.status = data.get("status")
+			doc.report_to = data.get("report_to")
+			doc.has_external_report_to = data.get("has_external_report_to", 0)
+			doc.external_report_to = data.get("external_report_to")
+			doc.remarks = data.get("remarks")
+			doc.source_erp = source_site
+			doc.flags.ignore_sync = True
+			doc.save(ignore_permissions=True)
+		else:
+			doc = frappe.get_doc({
+				"doctype": "Travel Request Pull",
+				"travel_request_id": travel_request_id,
+				"employee": data.get("employee"),
+				"employee_name": data.get("employee_name"),
+				"department": data.get("department"),
+				"date_of_departure": data.get("date_of_departure"),
+				"date_of_arrival": data.get("date_of_arrival"),
+				"number_of_days": data.get("number_of_days"),
+				"purpose": data.get("purpose"),
+				"ticket": data.get("ticket"),
+				"status": data.get("status"),
+				"report_to": data.get("report_to"),
+				"has_external_report_to": data.get("has_external_report_to", 0),
+				"external_report_to": data.get("external_report_to"),
+				"remarks": data.get("remarks"),
+				"source_erp": source_site
+			})
+			doc.flags.ignore_sync = True
+			doc.insert(ignore_permissions=True)
+
+		frappe.db.commit()
+		return {"success": True, "message": "Travel Request Pull synced successfully"}
+
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error receiving Travel Request Pull data"
+		)
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def receive_travel_status_update(data, source_site=None):
+	"""
+	API endpoint to receive status updates for Travel Request from remote ERP.
+	Updates the original Travel Request record when status changes in Travel Request Pull.
+	"""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		travel_request_id = data.get("travel_request_id")
+		status = data.get("status")
+
+		if not travel_request_id or not status:
+			return {"success": False, "message": "travel_request_id and status are required"}
+
+		if not frappe.db.exists("Travel Request", travel_request_id):
+			return {"success": False, "message": "Travel Request {0} not found".format(travel_request_id)}
+
+		doc = frappe.get_doc("Travel Request", travel_request_id)
+		doc.status = status
+
+		if data.get("remarks"):
+			doc.remarks = data.get("remarks")
+
+		doc.flags.ignore_sync = True
+		doc.save(ignore_permissions=True)
+
+		frappe.db.commit()
+		return {"success": True, "message": "Travel Request status updated successfully"}
+
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error receiving Travel status update"
+		)
+		return {"success": False, "message": str(e)}
 
 @frappe.whitelist()
 def get_external_employee_ess_details(employee):

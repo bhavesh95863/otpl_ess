@@ -8,6 +8,7 @@
   "from_date",
   "approved_from_date",
   "employee",
+  "short_leave",
   "half_day",
   "half_day_date",
   "half_day_period",
@@ -127,6 +128,13 @@
   },
   {
    "default": "0",
+   "fieldname": "short_leave",
+   "fieldtype": "Check",
+   "label": "Short Leave"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.short_leave==0",
    "fieldname": "half_day",
    "fieldtype": "Check",
    "label": "Half Day"
@@ -168,7 +176,7 @@
    "label": "Half Day Period"
   }
  ],
- "modified": "2026-03-22 02:48:39.703308",
+ "modified": "2026-04-09 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Leave",
