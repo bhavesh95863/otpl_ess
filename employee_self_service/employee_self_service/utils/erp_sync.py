@@ -1626,6 +1626,135 @@ def push_expense_status_to_source(expense_pull_doc):
 		)
 
 
+# ==================== TRAVEL REQUEST SYNC ====================
+
+
+def push_travel_to_remote_erp(travel_doc):
+	"""
+	Push Travel Request data to all enabled remote ERPs when external report_to is set.
+	Called from Travel Request on_update hook.
+	"""
+	try:
+		# Check if this is an external manager travel request
+		if not travel_doc.has_external_report_to or not travel_doc.external_report_to:
+			return
+
+		# Prevent infinite sync loop
+		if hasattr(travel_doc, 'flags') and travel_doc.flags.get('ignore_sync'):
+			return
+
+		# Get all enabled ERP Sync Settings
+		sync_settings_list = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1},
+			fields=["name"]
+		)
+
+		if not sync_settings_list:
+			frappe.log_error("No enabled ERP Sync Settings for Travel sync", "Travel Sync Debug")
+			return
+
+		# Prepare travel data for sync
+		travel_data = {
+			"travel_request_id": travel_doc.name,
+			"employee": travel_doc.employee,
+			"employee_name": travel_doc.employee_name,
+			"department": travel_doc.department,
+			"date_of_departure": str(travel_doc.date_of_departure) if travel_doc.date_of_departure else None,
+			"date_of_arrival": str(travel_doc.date_of_arrival) if travel_doc.date_of_arrival else None,
+			"number_of_days": travel_doc.number_of_days,
+			"purpose": travel_doc.purpose,
+			"ticket": travel_doc.ticket,
+			"status": travel_doc.status,
+			"report_to": travel_doc.external_report_to,
+			"has_external_report_to": travel_doc.has_external_report_to,
+			"external_report_to": travel_doc.external_report_to,
+			"remarks": travel_doc.remarks
+		}
+
+		# Queue sync for each enabled ERP Sync Settings
+		for settings in sync_settings_list:
+			queue_doc = frappe.get_doc({
+				"doctype": "ERP Sync Queue",
+				"erp_sync_settings": settings.name,
+				"doctype_name": "Travel Request",
+				"document_name": travel_doc.name,
+				"sync_action": "Create/Update",
+				"sync_data": json.dumps(travel_data),
+				"status": "Pending",
+				"retry_count": 0
+			})
+			queue_doc.insert(ignore_permissions=True)
+
+			# Enqueue the sync job
+			frappe.enqueue(
+				"employee_self_service.employee_self_service.utils.erp_sync.process_travel_sync_queue",
+				queue="default",
+				timeout=300,
+				queue_name=queue_doc.name,
+				is_async=True,
+				now=False
+			)
+
+		frappe.db.commit()
+		frappe.log_error(
+			message="Queued Travel sync for {0} to {1} ERP(s)".format(travel_doc.name, len(sync_settings_list)),
+			title="Travel Sync Queue Success"
+		)
+
+	except Exception as e:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error queueing Travel sync for {0}".format(travel_doc.name)
+		)
+
+
+def process_travel_sync_queue(queue_name):
+	"""
+	Process queued Travel Request sync from ERP Sync Queue
+	"""
+	try:
+		queue_doc = frappe.get_doc("ERP Sync Queue", queue_name)
+		queue_doc.status = "Processing"
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		# Get sync settings
+		sync_settings = frappe.get_doc("ERP Sync Settings", queue_doc.erp_sync_settings)
+
+		if not sync_settings.enabled:
+			queue_doc.status = "Failed"
+			queue_doc.error_log = "ERP Sync Settings is disabled"
+			queue_doc.save(ignore_permissions=True)
+			frappe.db.commit()
+			return
+
+		# Parse sync data
+		sync_data = json.loads(queue_doc.sync_data)
+
+		# Send to remote ERP's receive_travel_request_pull endpoint
+		success = send_to_remote_erp(
+			sync_settings.erp_url,
+			sync_settings.get_password("api_key"),
+			sync_settings.get_password("api_secret"),
+			"Travel Request Pull",
+			sync_data,
+			queue_doc.sync_action
+		)
+
+		if success:
+			queue_doc.status = "Completed"
+			queue_doc.error_log = ""
+		else:
+			raise Exception("Failed to sync Travel Request to remote ERP")
+
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+
+	except Exception as e:
+		handle_sync_error(queue_name, str(e))
+
+
 # ==================== EXTERNAL ESS INFORMATION API ====================
 
 

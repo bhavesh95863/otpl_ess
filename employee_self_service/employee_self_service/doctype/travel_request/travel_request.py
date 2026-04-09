@@ -7,6 +7,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import date_diff, getdate, nowdate
+from employee_self_service.employee_self_service.utils.erp_sync import push_travel_to_remote_erp
 
 
 class TravelRequest(Document):
@@ -14,6 +15,10 @@ class TravelRequest(Document):
 		self.validate_dates()
 		self.calculate_number_of_days()
 		self.set_approver()
+
+	def on_update(self):
+		"""Trigger sync to remote ERP when travel request has external report_to"""
+		push_travel_to_remote_erp(self)
 
 	def validate_dates(self):
 		if self.date_of_departure and self.date_of_arrival:
@@ -33,9 +38,14 @@ class TravelRequest(Document):
 		business_line_doc = frappe.get_doc("Business Line", employee_doc.business_vertical)
 		if business_line_doc.reporting_manager:
 			self.report_to = business_line_doc.reporting_manager
+		else:
+			self.report_to = None
 		if business_line_doc.external_reporting_manager:
 			self.has_external_report_to = 1
 			self.external_report_to = business_line_doc.external_reporting_manager
+		else:
+			self.has_external_report_to = 0
+			self.external_report_to = None
 
 
 def process_travel_requests():

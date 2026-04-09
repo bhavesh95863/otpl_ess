@@ -747,14 +747,17 @@ def get_travel_approval_list(start=0, page_length=10):
             )
 
         # Get Travel Request Pull records that need approval
-        travel_pull_list = frappe.get_all(
-            "Travel Request Pull",
-            fields=travel_fields,
-            filters=[
-                ["source_erp", "is", "set"],
-                ["status", "=", "Pending"],
-            ],
-        )
+        travel_pull_list = []
+        if emp_name:
+            travel_pull_list = frappe.get_all(
+                "Travel Request Pull",
+                fields=travel_fields,
+                filters=[
+                    ["source_erp", "is", "set"],
+                    ["status", "=", "Pending"],
+                    ["report_to", "=", emp_name],
+                ],
+            )
 
         # Combine both lists
         combined_list = travel_list + travel_pull_list
@@ -905,14 +908,17 @@ def get_travel_approved_list(start=0, page_length=10):
                 filters={"status": "Approved", "report_to": emp_name},
             )
 
-        travel_pull_list = frappe.get_all(
-            "Travel Request Pull",
-            fields=travel_fields,
-            filters=[
-                ["source_erp", "is", "set"],
-                ["status", "=", "Approved"],
-            ],
-        )
+        travel_pull_list = []
+        if emp_name:
+            travel_pull_list = frappe.get_all(
+                "Travel Request Pull",
+                fields=travel_fields,
+                filters=[
+                    ["source_erp", "is", "set"],
+                    ["status", "=", "Approved"],
+                    ["report_to", "=", emp_name],
+                ],
+            )
 
         combined_list = travel_list + travel_pull_list
         combined_list.sort(key=lambda x: x.get("modified"), reverse=True)
