@@ -22,19 +22,61 @@ class TravelRequest(Document):
 		push_travel_to_remote_erp(self)
 		self.update_employee_travel_status()
 
+	def on_trash(self):
+		"""Reverse employee availability/travelling changes when an approved travel request is deleted"""
+		self.reverse_employee_travel_status()
+
 	def update_employee_travel_status(self):
-		"""Immediately mark employee as travelling when approved and travel is active"""
+		"""
+		On approval, immediately update employee fields based on purpose:
+		- Going on Leave: mark travelling (availability changes to On Leave only after arrival)
+		- Going back to work: clear availability (was On Leave), mark travelling
+		- Going for official work: mark travelling (no availability change)
+		"""
 		if self.status != "Approved" or not self.employee:
 			return
 		if not self.date_of_departure or not self.date_of_arrival:
 			return
 
 		today = getdate(nowdate())
-		if getdate(self.date_of_departure) <= today <= getdate(self.date_of_arrival):
-			if self.purpose == "Going on Leave":
-				frappe.db.set_value("Employee", self.employee, "employee_availability", "On Leave")
+		departure = getdate(self.date_of_departure)
+		arrival = getdate(self.date_of_arrival)
+
+		if departure <= today <= arrival:
+			# Active travel period
+			if self.purpose == "Going back to work":
+				frappe.db.set_value("Employee", self.employee, {"employee_availability": "", "travelling": 1})
 			else:
+				# Going on Leave / Going for official work: just mark travelling
 				frappe.db.set_value("Employee", self.employee, "travelling", 1)
+		elif today > arrival:
+			# Already past arrival
+			apply_completed_travel(self.employee, self.purpose)
+
+	def reverse_employee_travel_status(self):
+		"""Reverse changes made by this travel request on deletion."""
+		if self.status != "Approved" or not self.employee:
+			return
+		if not self.date_of_departure or not self.date_of_arrival:
+			return
+
+		today = getdate(nowdate())
+		departure = getdate(self.date_of_departure)
+		arrival = getdate(self.date_of_arrival)
+
+		if departure <= today <= arrival:
+			# Travel is currently active — reverse active changes
+			if self.purpose == "Going back to work":
+				frappe.db.set_value("Employee", self.employee, {"employee_availability": "On Leave", "travelling": 0})
+			else:
+				# Going on Leave / Going for official work: was just travelling
+				frappe.db.set_value("Employee", self.employee, "travelling", 0)
+		elif today > arrival:
+			# Travel already completed — reverse completed changes
+			if self.purpose == "Going on Leave":
+				frappe.db.set_value("Employee", self.employee, {"employee_availability": "", "travelling": 0})
+			elif self.purpose == "Going back to work":
+				frappe.db.set_value("Employee", self.employee, "employee_availability", "On Leave")
 
 	def validate_dates(self):
 		if self.date_of_departure and self.date_of_arrival:
@@ -92,12 +134,31 @@ class TravelRequest(Document):
 			self.external_report_to = None
 
 
+def apply_completed_travel(employee, purpose):
+	"""Apply post-arrival changes for a completed travel request."""
+	if purpose == "Going on Leave":
+		frappe.db.set_value("Employee", employee, {"employee_availability": "On Leave", "travelling": 0})
+	elif purpose == "Going back to work":
+		frappe.db.set_value("Employee", employee, {"employee_availability": "", "travelling": 0})
+	else:
+		# Going for official work
+		frappe.db.set_value("Employee", employee, "travelling", 0)
+
+
 def process_travel_requests():
 	"""
 	Scheduled task: runs daily.
 	Uses date_of_departure and date_of_arrival as reference to update employee fields.
-	- Approved requests where today is between departure and arrival: set employee fields based on purpose.
-	- Approved requests where today is past arrival: reverse employee fields.
+
+	Active travel (departure <= today <= arrival):
+	  - Going on Leave: mark travelling=1 (availability stays blank during travel)
+	  - Going back to work: clear availability, mark travelling=1
+	  - Going for official work: mark travelling=1 (no availability change)
+
+	Completed travel (today > arrival):
+	  - Going on Leave: set availability=On Leave, travelling=0
+	  - Going back to work: set availability='', travelling=0
+	  - Going for official work: travelling=0 (no availability change)
 	"""
 	today = getdate(nowdate())
 
@@ -114,11 +175,10 @@ def process_travel_requests():
 
 	for req in active_requests:
 		try:
-			if req.purpose == "Going on Leave":
-				current = frappe.db.get_value("Employee", req.employee, "employee_availability")
-				if current != "On Leave":
-					frappe.db.set_value("Employee", req.employee, "employee_availability", "On Leave")
+			if req.purpose == "Going back to work":
+				frappe.db.set_value("Employee", req.employee, {"employee_availability": "", "travelling": 1})
 			else:
+				# Going on Leave / Going for official work: just mark travelling
 				travelling = frappe.db.get_value("Employee", req.employee, "travelling")
 				if not travelling:
 					frappe.db.set_value("Employee", req.employee, "travelling", 1)
@@ -141,13 +201,7 @@ def process_travel_requests():
 
 	for req in completed_requests:
 		try:
-			if req.purpose == "Going on Leave":
-				# Keep On Leave — leave continues after arrival
-				pass
-			elif req.purpose == "Going back to work":
-				frappe.db.set_value("Employee", req.employee, {"employee_availability": "", "travelling": 0})
-			else:
-				frappe.db.set_value("Employee", req.employee, "travelling", 0)
+			apply_completed_travel(req.employee, req.purpose)
 			frappe.db.commit()
 		except Exception:
 			frappe.log_error(

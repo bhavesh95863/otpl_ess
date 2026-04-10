@@ -173,29 +173,39 @@ def notification_processing(doc, event):
                 continue
 
         recipients = get_user_tokens(notification["name"], doc)
+
+        # Render templates and extract plain data before enqueuing,
+        # so the background job receives only serializable strings/dicts
+        # instead of the full doc object (which can fail to unpickle).
+        subject = frappe.render_template(notification["subject"], {"doc": doc})
+        message = frappe.render_template(notification["message"], {"doc": doc})
+        other_info = ""
+        document_type = doc.doctype
+        document_name = doc.name
+        if doc.doctype == "Notification Log":
+            other_info = doc.type
+            document_type = doc.document_type
+            document_name = doc.document_name
+
         frappe.enqueue(
             send_notification,
-            doc=doc,
-            notification=notification,
+            notification_name=notification["name"],
+            doctype_name=doc.doctype,
+            subject=subject,
+            message=message,
             recipients=recipients,
+            document_type=document_type,
+            document_name=document_name,
+            other_info=other_info,
             queue="short",
         )
 
 
-def send_notification(doc, notification, recipients):
-    subject = frappe.render_template(notification["subject"], {"doc": doc})
-    message = frappe.render_template(notification["message"], {"doc": doc})
-    other_info = ""
-    document_type = doc.doctype
-    document_name = doc.name
-    if doc.doctype == "Notification Log":
-        other_info = doc.type
-        document_type = doc.document_type
-        document_name = doc.document_name
+def send_notification(notification_name, doctype_name, subject, message, recipients, document_type, document_name, other_info=""):
     for user in recipients:
         notification_log(
-            notification["name"],
-            doc.doctype,
+            notification_name,
+            doctype_name,
             subject,
             message,
             user.get("name"),

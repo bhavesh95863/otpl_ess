@@ -853,6 +853,9 @@ def get_dashboard():
                 allow_location_update = 1
         if emp_data.get("staff_type") in ["Manager","Director","Partner"]:
             is_team_leader = 1
+        travel_request = 0
+        if not is_team_leader == 1 and emp_data.get("staff_type") == "Worker" and emp_data.get("location") == "Site":
+            travel_request = 1
 
         dashboard_data = {
             "notice_board": notice_board,
@@ -897,7 +900,7 @@ def get_dashboard():
             "message": settings.get("message"),
             "people_on_leave": 0 if emp_data.get("location") == "Site" else 1,
             "allow_location_update": allow_location_update,
-            "travel_request": 1
+            "travel_request": travel_request
         }
         reports_to_name = None
         if emp_data.get("reports_to"):

@@ -12,8 +12,6 @@ def notification_log(
     reference_name=None,
     other_info=None,
 ):
-    if frappe.session.user == recipient:
-        return
     notification_log = frappe.new_doc("ESS Notification Log")
     notification_log.notification_name = notification_name
     notification_log.document_type = doctype
