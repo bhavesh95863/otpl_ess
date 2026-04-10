@@ -847,7 +847,7 @@ def get_dashboard():
                     has_checkout = True
         is_team_leader = 0
         allow_location_update = 0
-        if emp_data.get("is_team_leader") == 1 and emp_data.get("temp_tl") == 0:
+        if emp_data.get("is_team_leader") == 1:
             is_team_leader = 1
             if last_log_type == "IN":
                 allow_location_update = 1
