@@ -104,7 +104,7 @@ def get_ess_calendar_details(year=None, month=None):
 
         # Get Employee Details
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name", "image", "department", "company"]
+            frappe.session.user, fields=["name", "image", "department", "company","no_check_in"]
         )
         if not emp_data:
             return gen_response(404, "Employee not found")
@@ -119,7 +119,7 @@ def get_ess_calendar_details(year=None, month=None):
 
         # Prepare Response Data
         attendance_data = build_attendance_data(
-            year, month, days_in_month, attendance_records, holidays
+            year, month, days_in_month, attendance_records, holidays,emp_data
         )
 
         return gen_response(
@@ -161,7 +161,7 @@ def get_employee_holidays(employee, start_date, end_date):
     return {getdate(h["holiday_date"]) for h in holiday_dates}
 
 
-def build_attendance_data(year, month, days_in_month, attendance_records, holidays):
+def build_attendance_data(year, month, days_in_month, attendance_records, holidays, emp_data):
     """Build the final attendance data structure."""
     attendance_data = {}
 
@@ -173,7 +173,9 @@ def build_attendance_data(year, month, days_in_month, attendance_records, holida
 
         if date in holidays:
             # Off day: only Present/Half Day count, everything else is Off Day
-            if status in ("Present", "Half Day"):
+            if emp_data.get("no_check_in") == 1:
+                 attendance_data[date_str] = "Holiday"
+            elif status in ("Present", "Half Day"):
                 attendance_data[date_str] = status
             else:
                 attendance_data[date_str] = "Holiday"

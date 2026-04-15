@@ -140,7 +140,8 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		return _process_field_attendance(employee, date)
 
 	# --- Non-Worker: no_check_in employees are auto-marked Present ---
-	if no_check_in:
+	is_holiday_for_company = is_holiday_for_company(date)
+	if no_check_in and not is_holiday_for_company:
 		create_attendance_record(
 			employee=employee,
 			date=date,
@@ -167,7 +168,7 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 	)
 
 	# --- Non-Worker: skip if company holiday and no checkin records ---
-	if is_holiday_for_company(date) and not checkins:
+	if is_holiday_for_company and not checkins:
 		return "Skipped"
 
 	# Check if any checkin is pending approval (not yet approved or rejected)
@@ -179,7 +180,7 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 	checkins = [c for c in checkins if not c.get("rejected")]
 
 	# --- Non-Worker on holiday with checkin records ---
-	if is_holiday_for_company(date) and checkins:
+	if is_holiday_for_company and checkins:
 		has_checkin = any(c.log_type == "IN" for c in checkins)
 		has_checkout = any(c.log_type == "OUT" for c in checkins)
 		if has_checkin and has_checkout:
