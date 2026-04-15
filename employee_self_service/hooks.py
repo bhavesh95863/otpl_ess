@@ -137,6 +137,9 @@ doc_events = {
     "Sales Order": {
         "on_update": "employee_self_service.employee_self_service.utils.erp_sync.sync_sales_order_to_remote",
     },
+    "Purchase Order": {
+        "on_submit": "employee_self_service.employee_self_service.doctype.otpl_expense.otpl_expense.on_purchase_order_submit",
+    },
     "User": {
         "on_update": "employee_self_service.employee_self_service.utils.user_role_sync.sync_employee_fields_from_user_roles"
     },

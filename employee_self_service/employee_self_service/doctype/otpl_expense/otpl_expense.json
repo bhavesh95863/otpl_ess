@@ -10,6 +10,7 @@
   "approval_manager",
   "expense_type",
   "expense_claim_type",
+  "expense_category",
   "column_break_2",
   "date_of_entry",
   "date_of_expense",
@@ -17,6 +18,22 @@
   "business_line",
   "approved_by_manager",
   "approve",
+  "gst_supplier_section",
+  "gst_number",
+  "supplier",
+  "supplier_name",
+  "column_break_gst",
+  "material_request",
+  "purchase_order",
+  "items_section",
+  "expense_items",
+  "totals_section",
+  "total_amount",
+  "total_gst_amount",
+  "column_break_totals",
+  "total_with_gst",
+  "transfer_section",
+  "transfer_to_employee",
   "section_break_5",
   "amount",
   "details_of_expense",
@@ -173,6 +190,113 @@
    "options": "OTPL Expense Type"
   },
   {
+   "fieldname": "expense_category",
+   "fieldtype": "Select",
+   "label": "Expense Category",
+   "options": "\nWith GST Invoice\nWithout GST Invoice\nWith Cash Memo\nOther Employee Transfer",
+   "permlevel": 1
+  },
+  {
+   "fieldname": "gst_supplier_section",
+   "fieldtype": "Section Break",
+   "label": "GST & Supplier Details",
+   "depends_on": "eval:doc.expense_category=='With GST Invoice' || doc.expense_category=='Without GST Invoice'"
+  },
+  {
+   "fieldname": "gst_number",
+   "fieldtype": "Data",
+   "label": "GST Number",
+   "depends_on": "eval:doc.expense_category=='With GST Invoice' || doc.expense_category=='Without GST Invoice'"
+  },
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "label": "Supplier",
+   "options": "Supplier",
+   "depends_on": "eval:doc.expense_category=='With GST Invoice' || doc.expense_category=='Without GST Invoice'"
+  },
+  {
+   "fetch_from": "supplier.supplier_name",
+   "fieldname": "supplier_name",
+   "fieldtype": "Read Only",
+   "label": "Supplier Name",
+   "depends_on": "eval:doc.supplier"
+  },
+  {
+   "fieldname": "column_break_gst",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "material_request",
+   "fieldtype": "Link",
+   "label": "Material Request",
+   "options": "Material Request",
+   "read_only": 1,
+   "depends_on": "eval:doc.material_request"
+  },
+  {
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Purchase Order",
+   "options": "Purchase Order",
+   "read_only": 1,
+   "depends_on": "eval:doc.purchase_order"
+  },
+  {
+   "fieldname": "items_section",
+   "fieldtype": "Section Break",
+   "label": "Expense Items",
+   "depends_on": "eval:(doc.expense_category=='With GST Invoice' || doc.expense_category=='Without GST Invoice') && doc.supplier"
+  },
+  {
+   "fieldname": "expense_items",
+   "fieldtype": "Table",
+   "label": "Expense Items",
+   "options": "OTPL Expense Item",
+   "depends_on": "eval:(doc.expense_category=='With GST Invoice' || doc.expense_category=='Without GST Invoice') && doc.supplier"
+  },
+  {
+   "fieldname": "totals_section",
+   "fieldtype": "Section Break",
+   "label": "Totals",
+   "depends_on": "eval:doc.expense_items && doc.expense_items.length > 0"
+  },
+  {
+   "fieldname": "total_amount",
+   "fieldtype": "Currency",
+   "label": "Total Amount (Before GST)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_gst_amount",
+   "fieldtype": "Currency",
+   "label": "Total GST Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_totals",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "total_with_gst",
+   "fieldtype": "Currency",
+   "label": "Total (With GST)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "transfer_section",
+   "fieldtype": "Section Break",
+   "label": "Employee Transfer",
+   "depends_on": "eval:doc.expense_category=='Other Employee Transfer'"
+  },
+  {
+   "fieldname": "transfer_to_employee",
+   "fieldtype": "Link",
+   "label": "Transfer To Employee",
+   "options": "Employee",
+   "depends_on": "eval:doc.expense_category=='Other Employee Transfer'"
+  },
+  {
    "default": "0",
    "fieldname": "approved_by_manager",
    "fieldtype": "Check",
@@ -192,7 +316,7 @@
   }
  ],
  "is_submittable": 1,
- "modified": "2026-02-02 19:53:43.519032",
+ "modified": "2026-04-14 19:53:43.519032",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Expense",
@@ -211,6 +335,12 @@
    "write": 1
   },
   {
+   "permlevel": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
    "create": 1,
    "email": 1,
    "export": 1,
@@ -219,6 +349,53 @@
    "report": 1,
    "role": "SITE EXPENSE INITIATOR",
    "share": 1,
+   "write": 1
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "SITE EXPENSE INITIATOR"
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Purchase Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Purchase Manager",
+   "write": 1
+  },
+  {
+   "permlevel": 1,
+   "read": 1,
+   "role": "Purchase User",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Purchase User",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Stock Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Stock User",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Accounts Manager",
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Accounts User",
    "write": 1
   }
  ],
