@@ -9,6 +9,7 @@ from calendar import monthrange
 from employee_self_service.mobile.v1.attendance import (
 	get_attendance_records,
 	get_employee_holidays,
+	build_attendance_data,
 )
 
 
@@ -87,7 +88,7 @@ def get_data(filters, year, month, days_in_month):
 	employees = frappe.get_all(
 		"Employee",
 		filters=emp_filters,
-		fields=["name", "employee_name", "department"],
+		fields=["name", "employee_name", "department", "company", "no_check_in"],
 		order_by="employee_name asc",
 	)
 
@@ -110,47 +111,58 @@ def get_data(filters, year, month, days_in_month):
 			"total_no_record": 0,
 		}
 
-		# Use shared API functions for consistent data
+		# Use shared build_attendance_data for consistent holiday/no_check_in handling
 		attendance_records = get_attendance_records(emp.name, month_start, month_end)
 		emp_holidays = get_employee_holidays(emp.name, month_start, month_end)
+		emp_data = {"no_check_in": emp.get("no_check_in")}
+		attendance_map = build_attendance_data(
+			year, month, days_in_month, attendance_records, emp_holidays, emp_data
+		)
 
-		# Build attendance map: {date: status}
-		emp_attendance = {}
-		for rec in attendance_records:
-			emp_attendance[getdate(rec.attendance_date)] = rec.status
+		# Track original "On Leave" dates (build_attendance_data maps them to "Absent")
+		on_leave_dates = {
+			getdate(rec.attendance_date).strftime("%Y-%m-%d")
+			for rec in attendance_records
+			if rec.status == "On Leave"
+		}
 
 		for day in range(1, days_in_month + 1):
 			date = getdate(f"{year}-{month:02d}-{day:02d}")
-			status = emp_attendance.get(date)
-			is_holiday = date in emp_holidays
+			date_str = date.strftime("%Y-%m-%d")
+			status = attendance_map.get(date_str, "")
 
-			if status:
-				if status == "Present":
-					display = "P"
-					row["total_present"] += 1
-				elif status == "Absent":
-					display = "A"
-					row["total_absent"] += 1
-				elif status == "On Leave":
-					display = "L"
-					row["total_leave"] += 1
-				elif status == "Half Day":
-					display = "HD"
-					row["total_half_day"] += 1
-				elif status == "Work From Home":
-					display = "WFH"
-					row["total_present"] += 1
-				else:
-					display = status[:1]
-					row["total_present"] += 1
-			elif is_holiday:
+			# Restore "On Leave" distinction
+			if status == "Absent" and date_str in on_leave_dates:
+				status = "On Leave"
+
+			if status == "Present":
+				display = "P"
+				row["total_present"] += 1
+			elif status == "Absent":
+				display = "A"
+				row["total_absent"] += 1
+			elif status == "On Leave":
+				display = "L"
+				row["total_leave"] += 1
+			elif status == "Half Day":
+				display = "HD"
+				row["total_half_day"] += 1
+			elif status == "Work From Home":
+				display = "WFH"
+				row["total_present"] += 1
+			elif status == "Holiday":
 				display = "H"
 				row["total_holiday"] += 1
-			elif date > today:
-				display = ""
+			elif status == "No Record":
+				if date > today:
+					display = ""
+				else:
+					display = "-"
+					row["total_no_record"] += 1
 			else:
-				display = "-"
-				row["total_no_record"] += 1
+				display = status[:1] if status else ""
+				if status:
+					row["total_present"] += 1
 
 			row[f"day_{day}"] = display
 
