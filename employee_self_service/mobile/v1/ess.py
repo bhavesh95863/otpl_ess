@@ -3270,7 +3270,7 @@ def get_employee_documents():
 def get_nearby_team_leaders(latitude=None, longitude=None):
     try:
         emp_data = get_employee_by_user(
-            frappe.session.user, fields=["name","location", "reports_to","external_reporting_manager","external_report_to","employee_availability","travelling","temp_tl"]
+            frappe.session.user, fields=["name","location", "reports_to","external_reporting_manager","external_report_to","employee_availability","travelling","temp_tl","business_vertical","external_business_vertical"]
         )
         if emp_data.get("employee_availability") == "On Leave":
             on_leave_message = frappe.db.get_value("Employee Self Service Settings","Employee Self Service Settings","on_leave_message")
@@ -3290,98 +3290,112 @@ def get_nearby_team_leaders(latitude=None, longitude=None):
         seen = set()
         nearby_leaders = []
         distance_setting = flt(frappe.db.get_value("Employee Self Service Settings", "Employee Self Service Settings", "nearby_leader_distance_threshold")) or 100  
-        # Fetch internal team leaders (external=0) from Employee Checkin
-        internal_checkins = frappe.db.sql("""
-            SELECT ec.employee, COALESCE(NULLIF(ec.location_update, ''), ec.location) as location, e.employee_name
-            FROM `tabEmployee Checkin` ec
-            INNER JOIN `tabEmployee` e ON e.name = ec.employee
-            WHERE ec.team_leader = 1
-            AND e.status = 'Active'
-            AND ec.time >= %s
-            AND (ec.location IS NOT NULL AND ec.location != '' OR ec.location_update IS NOT NULL AND ec.location_update != '')
-            ORDER BY ec.time DESC
-        """, (today(),), as_dict=1)
-        for checkin in internal_checkins:
-            if checkin.employee in seen:
-                continue
-            seen.add(checkin.employee)
-
+        # Step 1: Check ESS Location records first
+        ess_locations = frappe.get_all(
+            "ESS Location",
+            filters={
+                "latitude": ["is", "set"],
+                "longitude": ["is", "set"],
+                "reporting_manager": ["is", "set"],
+            },
+            fields=["location", "latitude", "longitude", "radius", "reporting_manager"],
+        )
+        for loc in ess_locations:
             try:
-                parts = checkin.location.split(",")
-                checkin_lat = float(parts[0].strip())
-                checkin_lon = float(parts[1].strip())
-            except (ValueError, IndexError, AttributeError):
-                frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
-
-            distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
-            if distance <= distance_setting:
-                nearby_leaders.append({
-                    "employee": checkin.employee,
-                    "employee_name": checkin.employee_name,
-                    "distance": round(distance, 2),
-                    "external": 0,
-                })
-
-        # Fetch external team leaders (external=1) from Leader Location
-        external_checkins = frappe.db.sql("""
-            SELECT ll.employee, ll.location, ll.employee_name
-            FROM `tabLeader Location` ll
-            WHERE ll.datetime >= %s
-            AND ll.location IS NOT NULL 
-            AND ll.team_leader = 1 
-            AND ll.location != ''
-            ORDER BY ll.datetime DESC
-        """, (today(),), as_dict=1)
-        for checkin in external_checkins:
-            if checkin.employee in seen:
+                loc_lat = float(loc.latitude)
+                loc_lon = float(loc.longitude)
+                loc_radius = flt(loc.radius) or distance_setting
+            except (ValueError, TypeError):
                 continue
-            seen.add(checkin.employee)
 
-            try:
-                parts = checkin.location.split(",")
-                checkin_lat = float(parts[0].strip())
-                checkin_lon = float(parts[1].strip())
-            except (ValueError, IndexError, AttributeError):
-                frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
-
-            distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
+            distance = _haversine_distance(user_lat, user_lon, loc_lat, loc_lon)
             if distance <= distance_setting:
-                nearby_leaders.append({
-                    "employee": checkin.employee,
-                    "employee_name": checkin.employee_name,
-                    "distance": round(distance, 2),
-                    "external": 1,
-                })
-        if len(nearby_leaders) == 0:
-            # Fallback: Check ESS Location records if user coordinates are within radius
-            ess_locations = frappe.get_all(
-                "ESS Location",
-                filters={
-                    "latitude": ["is", "set"],
-                    "longitude": ["is", "set"],
-                    "reporting_manager": ["is", "set"],
-                },
-                fields=["location", "latitude", "longitude", "radius", "reporting_manager"],
-            )
-            for loc in ess_locations:
-                try:
-                    loc_lat = float(loc.latitude)
-                    loc_lon = float(loc.longitude)
-                    loc_radius = flt(loc.radius) or distance_setting
-                except (ValueError, TypeError):
-                    continue
-
-                distance = _haversine_distance(user_lat, user_lon, loc_lat, loc_lon)
-                if distance <= distance_setting:
-                    seen.add(loc.reporting_manager)
-                    employee_name = frappe.db.get_value("Employee", loc.reporting_manager, "employee_name")
+                business_vertical = emp_data.get("business_vertical") or emp_data.get("external_business_vertical")
+                business_line_doc = frappe.get_doc("Business Line", business_vertical)
+                if business_line_doc.reporting_manager:
+                    seen.add(business_line_doc.reporting_manager)
+                    employee_name = frappe.db.get_value("Employee", business_line_doc.reporting_manager, "employee_name")
                     nearby_leaders.append({
-                        "employee": loc.reporting_manager,
+                        "employee": business_line_doc.reporting_manager,
                         "employee_name": employee_name,
                         "distance": round(distance, 2),
                         "external": 0,
                     })
+                if business_line_doc.external_reporting_manager:
+                    seen.add(business_line_doc.external_reporting_manager)
+                    employee_name = frappe.db.get_value("Employee Pull", business_line_doc.external_reporting_manager, "employee_name")
+                    nearby_leaders.append({
+                        "employee": business_line_doc.external_reporting_manager,
+                        "employee_name": employee_name,
+                        "distance": round(distance, 2),
+                        "external": 1,
+                    })
 
+        if len(nearby_leaders) == 0:
+            # Step 2: Fetch internal team leaders (external=0) from Employee Checkin
+            internal_checkins = frappe.db.sql("""
+                SELECT ec.employee, COALESCE(NULLIF(ec.location_update, ''), ec.location) as location, e.employee_name
+                FROM `tabEmployee Checkin` ec
+                INNER JOIN `tabEmployee` e ON e.name = ec.employee
+                WHERE ec.team_leader = 1
+                AND e.status = 'Active'
+                AND ec.time >= %s
+                AND (ec.location IS NOT NULL AND ec.location != '' OR ec.location_update IS NOT NULL AND ec.location_update != '')
+                ORDER BY ec.time DESC
+            """, (today(),), as_dict=1)
+            for checkin in internal_checkins:
+                if checkin.employee in seen:
+                    continue
+                seen.add(checkin.employee)
+
+                try:
+                    parts = checkin.location.split(",")
+                    checkin_lat = float(parts[0].strip())
+                    checkin_lon = float(parts[1].strip())
+                except (ValueError, IndexError, AttributeError):
+                    frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
+
+                distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
+                if distance <= distance_setting:
+                    nearby_leaders.append({
+                        "employee": checkin.employee,
+                        "employee_name": checkin.employee_name,
+                        "distance": round(distance, 2),
+                        "external": 0,
+                    })
+
+            # Step 3: Fetch external team leaders (external=1) from Leader Location
+            external_checkins = frappe.db.sql("""
+                SELECT ll.employee, ll.location, ll.employee_name
+                FROM `tabLeader Location` ll
+                WHERE ll.datetime >= %s
+                AND ll.location IS NOT NULL 
+                AND ll.team_leader = 1 
+                AND ll.location != ''
+                ORDER BY ll.datetime DESC
+            """, (today(),), as_dict=1)
+            for checkin in external_checkins:
+                if checkin.employee in seen:
+                    continue
+                seen.add(checkin.employee)
+
+                try:
+                    parts = checkin.location.split(",")
+                    checkin_lat = float(parts[0].strip())
+                    checkin_lon = float(parts[1].strip())
+                except (ValueError, IndexError, AttributeError):
+                    frappe.throw("Invalid location for the nearest team leader: {}".format(checkin.employee_name))
+
+                distance = _haversine_distance(user_lat, user_lon, checkin_lat, checkin_lon)
+                if distance <= distance_setting:
+                    nearby_leaders.append({
+                        "employee": checkin.employee,
+                        "employee_name": checkin.employee_name,
+                        "distance": round(distance, 2),
+                        "external": 1,
+                    })
+
+        # Step 4: Fallback to temp_tl / travelling
         if len(nearby_leaders) == 0:
             if emp_data.get("temp_tl") == 1 or emp_data.get("travelling") == 1:
                 employee_name = frappe.db.get_value("Employee", emp_data.reports_to, "employee_name")

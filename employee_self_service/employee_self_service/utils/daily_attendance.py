@@ -154,10 +154,6 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		)
 		return "Processed"
 
-	# --- Non-Worker: skip if company holiday ---
-	if is_holiday_for_company(date):
-		return "Skipped"
-
 	# --- Non-Worker: standard attendance processing ---
 	# Get checkin records for the employee
 	checkins = frappe.get_all(
@@ -170,6 +166,10 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		order_by="time asc"
 	)
 
+	# --- Non-Worker: skip if company holiday and no checkin records ---
+	if is_holiday_for_company(date) and not checkins:
+		return "Skipped"
+
 	# Check if any checkin is pending approval (not yet approved or rejected)
 	for checkin in checkins:
 		if checkin.get("approval_required") and not checkin.get("approved") and not checkin.get("rejected"):
@@ -177,6 +177,37 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 
 	# Filter out rejected checkins — treat them as if they don't exist
 	checkins = [c for c in checkins if not c.get("rejected")]
+
+	# --- Non-Worker on holiday with checkin records ---
+	if is_holiday_for_company(date) and checkins:
+		has_checkin = any(c.log_type == "IN" for c in checkins)
+		has_checkout = any(c.log_type == "OUT" for c in checkins)
+		if has_checkin and has_checkout:
+			checkin_time = None
+			checkout_time = None
+			for log in checkins:
+				if log.log_type == "IN":
+					checkin_time = log.time
+					break
+			for log in reversed(checkins):
+				if log.log_type == "OUT":
+					checkout_time = log.time
+					break
+			create_attendance_record(
+				employee=employee,
+				date=date,
+				status="Present",
+				late_entry=False,
+				early_exit=False,
+				working_hours=0,
+				remarks="Present on off day (holiday with check-in and check-out)",
+				checkin_time=checkin_time,
+				checkout_time=checkout_time
+			)
+			return "Processed"
+		else:
+			# Checkin exists but no checkout on holiday → skip (shows as Off Day in calendar)
+			return "Skipped"
 
 	checkin_time = None
 	checkout_time = None
@@ -208,6 +239,27 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			checkout_time=None
 		)
 		return "Absent"
+
+	# Non-Worker, non-Field, non-Site with a defined ESS Location:
+	# If approved out-of-office checkin/checkout exists → Present without late/early/half day
+	if location and location != "Site" and frappe.db.exists("ESS Location", location):
+		has_approved_out_of_office = any(
+			c.get("approval_required") and c.get("approved")
+			for c in checkins
+		)
+		if has_approved_out_of_office and (checkin_time or checkout_time):
+			create_attendance_record(
+				employee=employee,
+				date=date,
+				status="Present",
+				late_entry=False,
+				early_exit=False,
+				working_hours=0,
+				remarks="Present - Approved out-of-office check-in/check-out",
+				checkin_time=checkin_time,
+				checkout_time=checkout_time
+			)
+			return "Processed"
 
 	# Non-Worker, non-Site: Absent if check-in or check-out is missing
 	if location != "Site":

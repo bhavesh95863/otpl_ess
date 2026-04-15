@@ -168,8 +168,17 @@ def build_attendance_data(year, month, days_in_month, attendance_records, holida
     # Populate Attendance records
     for record in attendance_records:
         date_str = getdate(record["attendance_date"]).strftime("%Y-%m-%d")
+        date = getdate(record["attendance_date"])
         status = record["status"]
-        attendance_data[date_str] = "Absent" if status == "On Leave" else status
+
+        if date in holidays:
+            # Off day: only Present/Half Day count, everything else is Off Day
+            if status in ("Present", "Half Day"):
+                attendance_data[date_str] = status
+            else:
+                attendance_data[date_str] = "Holiday"
+        else:
+            attendance_data[date_str] = "Absent" if status == "On Leave" else status
 
     # Populate Holidays and Other Days
     for day in range(1, days_in_month + 1):

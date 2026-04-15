@@ -40,6 +40,7 @@ def run_worker_attendance(employee, location, date):
 	Routes to site or non-site handler based on location.
 	Returns: Processed, Skipped, or Absent
 	"""
+	
 	if location == "Site":
 		return _process_worker_site(employee, date)
 	else:

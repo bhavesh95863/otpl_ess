@@ -496,7 +496,7 @@ def approve_employee_checkin():
             employee_location = frappe.db.get_value("Employee", employee, "location")
 
             # Only auto-process attendance if the checkin is for a past day (not current day)
-            if attendance_date >= current_date:
+            if attendance_date == current_date:
                 return gen_response(
                     200,
                     "Check-in approved successfully.",
@@ -528,7 +528,7 @@ def approve_employee_checkin():
                     frappe.db.commit()
 
             # Process attendance for the past day
-            process_employee_attendance(employee, employee_location, attendance_date)
+            process_employee_attendance(employee, employee_location, attendance_date,staff_type=checkin_doc.staff_type)
 
             return gen_response(
                 200, "Check-in approved and attendance processed successfully"
