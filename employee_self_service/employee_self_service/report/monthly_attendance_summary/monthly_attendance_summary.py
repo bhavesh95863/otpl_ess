@@ -6,7 +6,10 @@ from __future__ import unicode_literals
 import frappe
 from frappe.utils import getdate
 from calendar import monthrange
-from erpnext.hr.doctype.employee.employee import get_holiday_list_for_employee
+from employee_self_service.mobile.v1.attendance import (
+	get_attendance_records,
+	get_employee_holidays,
+)
 
 
 def execute(filters=None):
@@ -91,41 +94,6 @@ def get_data(filters, year, month, days_in_month):
 	if not employees:
 		return []
 
-	employee_ids = [e.name for e in employees]
-
-	# Fetch all attendance records for the month
-	attendance_records = frappe.get_all(
-		"Attendance",
-		filters={
-			"employee": ["in", employee_ids],
-			"attendance_date": ["between", [month_start, month_end]],
-			"docstatus": 1,
-		},
-		fields=["employee", "attendance_date", "status"],
-	)
-
-	# Build attendance map: {employee: {date: status}}
-	attendance_map = {}
-	for rec in attendance_records:
-		attendance_map.setdefault(rec.employee, {})[getdate(rec.attendance_date)] = rec.status
-
-	# Build holiday map per employee
-	holiday_map = {}
-	for emp_id in employee_ids:
-		holiday_list = get_holiday_list_for_employee(emp_id, raise_exception=False)
-		if holiday_list:
-			holiday_dates = frappe.get_all(
-				"Holiday",
-				filters={
-					"parent": holiday_list,
-					"holiday_date": ["between", [month_start, month_end]],
-				},
-				fields=["holiday_date"],
-			)
-			holiday_map[emp_id] = {getdate(h.holiday_date) for h in holiday_dates}
-		else:
-			holiday_map[emp_id] = set()
-
 	today = getdate()
 	data = []
 
@@ -142,8 +110,14 @@ def get_data(filters, year, month, days_in_month):
 			"total_no_record": 0,
 		}
 
-		emp_attendance = attendance_map.get(emp.name, {})
-		emp_holidays = holiday_map.get(emp.name, set())
+		# Use shared API functions for consistent data
+		attendance_records = get_attendance_records(emp.name, month_start, month_end)
+		emp_holidays = get_employee_holidays(emp.name, month_start, month_end)
+
+		# Build attendance map: {date: status}
+		emp_attendance = {}
+		for rec in attendance_records:
+			emp_attendance[getdate(rec.attendance_date)] = rec.status
 
 		for day in range(1, days_in_month + 1):
 			date = getdate(f"{year}-{month:02d}-{day:02d}")
