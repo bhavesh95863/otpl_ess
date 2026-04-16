@@ -4,7 +4,7 @@
 
 from __future__ import unicode_literals
 import frappe
-from frappe.utils import getdate
+from frappe.utils import getdate, add_days
 from calendar import monthrange
 from employee_self_service.mobile.v1.attendance import (
 	get_attendance_records,
@@ -96,6 +96,7 @@ def get_data(filters, year, month, days_in_month):
 		return []
 
 	today = getdate()
+	yesterday = getdate(add_days(today, -1))
 	data = []
 
 	for emp in employees:
@@ -129,6 +130,12 @@ def get_data(filters, year, month, days_in_month):
 		for day in range(1, days_in_month + 1):
 			date = getdate(f"{year}-{month:02d}-{day:02d}")
 			date_str = date.strftime("%Y-%m-%d")
+
+			# Only show data up to yesterday; today and future dates are blank
+			if date > yesterday:
+				row[f"day_{day}"] = ""
+				continue
+
 			status = attendance_map.get(date_str, "")
 
 			# Restore "On Leave" distinction
@@ -154,11 +161,8 @@ def get_data(filters, year, month, days_in_month):
 				display = "H"
 				row["total_holiday"] += 1
 			elif status == "No Record":
-				if date > today:
-					display = ""
-				else:
-					display = "-"
-					row["total_no_record"] += 1
+				display = "-"
+				row["total_no_record"] += 1
 			else:
 				display = status[:1] if status else ""
 				if status:

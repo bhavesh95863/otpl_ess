@@ -984,7 +984,7 @@ def get_leave_balance_dashboard():
 @frappe.whitelist()
 def get_attendance_details_dashboard():
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["name", "company"])
+        emp_data = get_employee_by_user(frappe.session.user, fields=["name", "company", "no_check_in"])
         attendance_details = get_attendance_details(emp_data)
         return gen_response(
             200, "Leave balance data get successfully", attendance_details
@@ -1037,36 +1037,52 @@ def get_notice_board(employee=None):
 
 
 def get_attendance_details(emp_data, year=None, month=None):
-    first_date = get_first_day(today())
-    last_date = get_last_day(today())
-    yesterday = add_days(today(), -1)
-    total_days = date_diff(last_date, first_date) + 1
-    till_date_days = date_diff(yesterday, first_date) + 1  # Count till yesterday only
-
-    # Get present days count from Attendance records using SQL (till yesterday)
-    total_present = frappe.db.sql("""
-        SELECT COUNT(*)
-        FROM `tabAttendance`
-        WHERE employee = %s
-        AND attendance_date BETWEEN %s AND %s
-        AND status = 'Present'
-        AND docstatus = 1
-    """, (emp_data.get("name"), first_date, yesterday))[0][0] or 0
-
-    # Get holidays from company's holiday list (this is days off) - till yesterday
-    days_off = get_holidays_for_employee(
-        emp_data.get("name"),
-        emp_data.get("company"),
-        first_date,
-        yesterday
+    from calendar import monthrange
+    from employee_self_service.mobile.v1.attendance import (
+        get_attendance_records,
+        get_employee_holidays,
+        build_attendance_data,
     )
 
-    # Calculate absent days (till_date_days - present - days_off)
-    # Absent includes any day not marked as Present and not a holiday
-    absent = max(0, till_date_days - flt(total_present) - flt(days_off))
+    if year and month:
+        year, month = cint(year), cint(month)
+    else:
+        year = getdate().year
+        month = getdate().month
+
+    days_in_month = monthrange(year, month)[1]
+    first_date = f"{year}-{month:02d}-01"
+    last_date = f"{year}-{month:02d}-{days_in_month}"
+    total_days = days_in_month
+
+    # Use build_attendance_data for consistent logic
+    attendance_records = get_attendance_records(emp_data.get("name"), first_date, last_date)
+    emp_holidays = get_employee_holidays(emp_data.get("name"), first_date, last_date)
+    attendance_map = build_attendance_data(
+        year, month, days_in_month, attendance_records, emp_holidays, emp_data
+    )
+
+    # Count statuses from build_attendance_data (which already excludes today & future)
+    total_present = 0
+    days_off = 0
+    absent = 0
+    till_date_days = 0
+
+    for date_str, status in attendance_map.items():
+        till_date_days += 1
+        if status in ("Present", "Work From Home"):
+            total_present += 1
+        elif status == "Half Day":
+            total_present += 1
+        elif status == "Holiday":
+            days_off += 1
+        elif status == "Absent":
+            absent += 1
+        elif status == "No Record":
+            absent += 1
 
     attendance_details = {
-        "month_title": f"{frappe.utils.getdate().strftime('%B')} Details",
+        "month_title": f"{getdate(first_date).strftime('%B')} Details",
         "data": [
             {
                 "type": "Total Days",
@@ -3141,7 +3157,7 @@ def get_task_status_list():
 @frappe.whitelist()
 def get_attendance_details_by_month(year, month):
     try:
-        emp_data = get_employee_by_user(frappe.session.user, fields=["name", "company"])
+        emp_data = get_employee_by_user(frappe.session.user, fields=["name", "company", "no_check_in"])
         attendance_details = get_attendance_details(emp_data, year, month)
         return gen_response(
             200, "Leave balance data get successfully", attendance_details

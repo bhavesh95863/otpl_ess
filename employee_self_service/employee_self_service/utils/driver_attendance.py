@@ -37,12 +37,12 @@ def run_driver_attendance(employee, date):
 		"Employee Checkin",
 		filters={
 			"employee": employee,
-			"time": ["between", [date, add_days(date, 1)]]
+			"time": ["between", [date, date]]
 		},
 		fields=["time", "log_type", "approval_required", "approved", "rejected"],
 		order_by="time asc"
 	)
-
+	print(checkins)
 	# If any checkin is pending approval (not yet approved or rejected), skip
 	for checkin in checkins:
 		if checkin.get("approval_required") and not checkin.get("approved") and not checkin.get("rejected"):
