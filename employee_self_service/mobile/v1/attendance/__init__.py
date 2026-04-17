@@ -164,12 +164,17 @@ def get_employee_holidays(employee, start_date, end_date):
 def build_attendance_data(year, month, days_in_month, attendance_records, holidays, emp_data):
     """Build the final attendance data structure."""
     attendance_data = {}
+    yesterday = getdate(frappe.utils.add_days(getdate(), -1))
 
     # Populate Attendance records
     for record in attendance_records:
         date_str = getdate(record["attendance_date"]).strftime("%Y-%m-%d")
         date = getdate(record["attendance_date"])
         status = record["status"]
+
+        # Skip dates after yesterday
+        if date > yesterday:
+            continue
 
         if date in holidays:
             # Off day: only Present/Half Day count, everything else is Off Day
@@ -182,10 +187,13 @@ def build_attendance_data(year, month, days_in_month, attendance_records, holida
         else:
             attendance_data[date_str] = "Absent" if status == "On Leave" else status
 
-    # Populate Holidays and Other Days
+    # Populate Holidays and Other Days (only up to yesterday)
     for day in range(1, days_in_month + 1):
         date = getdate(f"{year}-{month:02d}-{day}")
         date_str = date.strftime("%Y-%m-%d")
+
+        if date > yesterday:
+            continue
 
         if date_str not in attendance_data:
             attendance_data[date_str] = "Holiday" if date in holidays else "No Record"

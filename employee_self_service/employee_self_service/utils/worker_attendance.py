@@ -140,7 +140,7 @@ def _process_worker_non_site(employee, location, date):
 		"Employee Checkin",
 		filters={
 			"employee": employee,
-			"time": ["between", [date, add_days(date, 1)]]
+			"time": ["between", [date, date]]
 		},
 		fields=["time", "log_type", "approval_required", "approved", "rejected"],
 		order_by="time asc"
