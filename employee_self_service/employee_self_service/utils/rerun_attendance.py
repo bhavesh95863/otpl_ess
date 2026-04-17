@@ -10,7 +10,7 @@ from datetime import datetime
 
 @frappe.whitelist()
 def rerun_attendance_for_period(from_date=None, to_date=None):
-	from_date = "2026-04-02"
+	from_date = "2026-04-01"
 	to_date = "2026-04-15"
 	"""
 	Re-run attendance processing for all active employees for a given date range.
@@ -217,7 +217,7 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 		"Employee Checkin",
 		filters={
 			"employee": employee,
-			"time": ["between", [date, add_days(date, 1)]]
+			"time": ["between", [date,date]]
 		},
 		fields=["time", "log_type", "approval_required", "approved", "rejected"],
 		order_by="time asc"
