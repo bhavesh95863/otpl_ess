@@ -40,11 +40,16 @@ frappe.ui.form.on('OTPL Expense', {
 			frm.set_value('total_amount', 0);
 			frm.set_value('total_gst_amount', 0);
 			frm.set_value('total_with_gst', 0);
+			frm.set_value('taxes_and_charges', '');
 		}
 		if (frm.doc.expense_category !== 'Other Employee Transfer') {
 			frm.set_value('transfer_to_employee', '');
 		}
 		frm.refresh_fields();
+	},
+
+	taxes_and_charges: function(frm) {
+		calculate_totals(frm);
 	},
 
 	gst_number: function(frm) {
@@ -89,9 +94,6 @@ frappe.ui.form.on('OTPL Expense Item', {
 	quantity: function(frm, cdt, cdn) {
 		calculate_row_and_totals(frm, cdt, cdn);
 	},
-	gst_rate: function(frm, cdt, cdn) {
-		calculate_row_and_totals(frm, cdt, cdn);
-	},
 	expense_items_remove: function(frm) {
 		calculate_totals(frm);
 	}
@@ -106,20 +108,41 @@ function calculate_row_and_totals(frm, cdt, cdn) {
 
 function calculate_totals(frm) {
 	var total_amount = 0;
-	var total_gst = 0;
 
 	(frm.doc.expense_items || []).forEach(function(row) {
 		var base = flt(row.rate) * flt(row.quantity);
 		row.amount = base;
 		total_amount += base;
-		total_gst += base * flt(row.gst_rate) / 100;
 	});
 
 	frm.set_value('total_amount', total_amount);
-	frm.set_value('total_gst_amount', total_gst);
-	frm.set_value('total_with_gst', total_amount + total_gst);
-	frm.set_value('amount_approved', total_amount + total_gst);
 	frm.refresh_field('expense_items');
+
+	// Fetch tax rate from selected template and recalculate
+	if (frm.doc.taxes_and_charges) {
+		frappe.call({
+			method: 'employee_self_service.employee_self_service.doctype.otpl_expense.otpl_expense.get_tax_details',
+			args: { template_name: frm.doc.taxes_and_charges },
+			async: false,
+			callback: function(r) {
+				var total_tax = 0;
+				(r.message || []).forEach(function(tax) {
+					if (tax.charge_type === 'On Net Total') {
+						total_tax += flt(total_amount) * flt(tax.rate) / 100;
+					} else if (tax.charge_type === 'On Previous Row Total') {
+						total_tax += flt(total_amount + total_tax) * flt(tax.rate) / 100;
+					}
+				});
+				frm.set_value('total_gst_amount', total_tax);
+				frm.set_value('total_with_gst', total_amount + total_tax);
+				frm.set_value('amount_approved', total_amount + total_tax);
+			}
+		});
+	} else {
+		frm.set_value('total_gst_amount', 0);
+		frm.set_value('total_with_gst', total_amount);
+		frm.set_value('amount_approved', total_amount);
+	}
 }
 
 function set_item_field_permissions(frm) {
@@ -137,8 +160,6 @@ function set_item_field_permissions(frm) {
 	frm.fields_dict.expense_items.grid.toggle_enable('item', is_stock_role);
 	frm.fields_dict.expense_items.grid.toggle_enable('quantity', is_stock_role);
 
-	// Rate, GST Rate, GST Type: editable only for Accounts Manager, Accounts User, System Manager
+	// Rate: editable only for Accounts Manager, Accounts User, System Manager
 	frm.fields_dict.expense_items.grid.toggle_enable('rate', is_accounts_role);
-	frm.fields_dict.expense_items.grid.toggle_enable('gst_rate', is_accounts_role);
-	frm.fields_dict.expense_items.grid.toggle_enable('gst_type', is_accounts_role);
 }

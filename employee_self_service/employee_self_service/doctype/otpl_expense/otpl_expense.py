@@ -44,20 +44,33 @@ class OTPLExpense(Document):
 			frappe.throw("Please select the employee to whom the fund is being transferred.")
 
 	def calculate_item_totals(self):
-		"""Calculate totals from expense_items table and set amount_approved"""
+		"""Calculate totals from expense_items table and compute tax from taxes_and_charges template"""
 		total_amount = 0
-		total_gst = 0
 		for row in self.get("expense_items", []):
 			base = flt(row.rate) * flt(row.quantity)
 			row.amount = base
-			gst_amt = base * flt(row.gst_rate) / 100
 			total_amount += base
-			total_gst += gst_amt
 
 		self.total_amount = total_amount
-		self.total_gst_amount = total_gst
-		self.total_with_gst = total_amount + total_gst
-		# Auto-set approved amount from calculated total
+
+		# Calculate tax from the selected Purchase Taxes and Charges Template
+		total_tax = 0
+		if self.taxes_and_charges:
+			tax_rows = frappe.get_all(
+				"Purchase Taxes and Charges",
+				filters={"parent": self.taxes_and_charges, "parenttype": "Purchase Taxes and Charges Template"},
+				fields=["charge_type", "rate"],
+				order_by="idx asc"
+			)
+			for tax in tax_rows:
+				if tax.charge_type == "On Net Total":
+					total_tax += flt(total_amount) * flt(tax.rate) / 100
+				elif tax.charge_type == "On Previous Row Total":
+					total_tax += flt(total_amount + total_tax) * flt(tax.rate) / 100
+
+		self.total_gst_amount = total_tax
+		self.total_with_gst = total_amount + total_tax
+		# Auto-set approved amount from grand total
 		self.amount_approved = self.total_with_gst
 
 	def on_update(self):
@@ -103,12 +116,8 @@ class OTPLExpense(Document):
 						missing.append(f"Quantity in Row {idx}")
 					if not row.rate or flt(row.rate) <= 0:
 						missing.append(f"Rate in Row {idx}")
-					if not row.gst_rate and row.gst_rate != 0:
-						missing.append(f"GST Rate in Row {idx}")
-					if not row.gst_type:
-						missing.append(f"GST Type in Row {idx}")
-			if not self.total_with_gst or flt(self.total_with_gst) <= 0:
-				missing.append("Total (With GST) must be greater than zero")
+			if not self.total_amount or flt(self.total_amount) <= 0:
+				missing.append("Total Amount must be greater than zero")
 
 		elif self.expense_category == "Other Employee Transfer":
 			if not self.transfer_to_employee:
@@ -254,14 +263,18 @@ class OTPLExpense(Document):
 				"material_request_item": mr_doc.items[idx].name if idx < len(mr_doc.items) else None,
 			})
 
-		po_doc = frappe.get_doc({
+		po_data = {
 			"doctype": "Purchase Order",
 			"supplier": self.supplier,
 			"company": company,
 			"transaction_date": expense_date,
 			"schedule_date": expense_date,
 			"items": po_items,
-		})
+		}
+		if self.taxes_and_charges:
+			po_data["taxes_and_charges"] = self.taxes_and_charges
+
+		po_doc = frappe.get_doc(po_data)
 		po_doc.flags.ignore_permissions = True
 		po_doc.flags.ignore_mandatory = True
 		po_doc.insert()
@@ -340,9 +353,21 @@ class OTPLExpense(Document):
 		if not self.amount_approved or self.amount_approved <= 0:
 			frappe.throw("Amount Approved must be greater than zero to create transfer Journal Entry.")
 
-		payable_account = frappe.db.get_value("Business Line", self.business_line, "payroll_payable")
-		if not payable_account:
-			frappe.throw("Payroll Payable (employee payable) account not configured on Business Line.")
+		# Fetch payroll payable for the sender (giving funds) via their business vertical
+		sender_business_vertical = frappe.db.get_value("Employee", self.sent_by, "business_vertical")
+		if not sender_business_vertical:
+			frappe.throw(f"Business Vertical not set for employee {self.sent_by}.")
+		sender_payable = frappe.db.get_value("Business Line", sender_business_vertical, "payroll_payable")
+		if not sender_payable:
+			frappe.throw(f"Payroll Payable account not configured on Business Line {sender_business_vertical}.")
+
+		# Fetch payroll payable for the receiver (receiving funds) via their business vertical
+		receiver_business_vertical = frappe.db.get_value("Employee", self.transfer_to_employee, "business_vertical")
+		if not receiver_business_vertical:
+			frappe.throw(f"Business Vertical not set for employee {self.transfer_to_employee}.")
+		receiver_payable = frappe.db.get_value("Business Line", receiver_business_vertical, "payroll_payable")
+		if not receiver_payable:
+			frappe.throw(f"Payroll Payable account not configured on Business Line {receiver_business_vertical}.")
 
 		company = frappe.db.get_value("Global Defaults", "Global Defaults", "default_company")
 		order_cost_center = frappe.db.get_value("Cost Center", {"sales_order": self.sales_order}, "name")
@@ -357,14 +382,14 @@ class OTPLExpense(Document):
 			"user_remark": f"Transfer from {self.employee_name or self.sent_by} to {transfer_employee_name or self.transfer_to_employee} - {self.details_of_expense or self.purpose}",
 			"accounts": [
 				{
-					"account": payable_account,
+					"account": receiver_payable,
 					"debit_in_account_currency": self.amount_approved,
 					"party_type": "Employee",
 					"party": self.transfer_to_employee,
 					"cost_center": order_cost_center
 				},
 				{
-					"account": payable_account,
+					"account": sender_payable,
 					"credit_in_account_currency": self.amount_approved,
 					"party_type": "Employee",
 					"party": self.sent_by,
@@ -386,6 +411,19 @@ class OTPLExpense(Document):
 			title="Transfer Entry Created",
 			indicator="green"
 		)
+
+
+@frappe.whitelist()
+def get_tax_details(template_name):
+	"""Fetch tax rows from a Purchase Taxes and Charges Template"""
+	if not template_name:
+		return []
+	return frappe.get_all(
+		"Purchase Taxes and Charges",
+		filters={"parent": template_name, "parenttype": "Purchase Taxes and Charges Template"},
+		fields=["charge_type", "rate"],
+		order_by="idx asc"
+	)
 
 
 @frappe.whitelist()
