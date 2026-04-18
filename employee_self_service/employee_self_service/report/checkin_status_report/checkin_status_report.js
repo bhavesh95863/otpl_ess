@@ -27,6 +27,25 @@ frappe.query_reports['Checkin Status Report'] = {
 			fieldtype: 'Select',
 			options: '\n' + (frappe.get_meta('Employee').fields.find(f => f.fieldname === 'location')?.options || '').split('\n').join('\n'),
 			default: ''
+		},
+		{
+			fieldname: 'log_type',
+			label: __('Log Type'),
+			fieldtype: 'Select',
+			options: '\nIN\nOUT',
+			default: ''
+		},
+		{
+			fieldname: 'change_in_location',
+			label: __('Change in Location'),
+			fieldtype: 'Check',
+			default: 0
+		},
+		{
+			fieldname: 'change_in_reports_to',
+			label: __('Change in Reports To'),
+			fieldtype: 'Check',
+			default: 0
 		}
 	]
 };

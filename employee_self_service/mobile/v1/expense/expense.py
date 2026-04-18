@@ -127,3 +127,26 @@ def get_expense_type():
         return gen_response(200, "Expense type get successfully", expense_types)
     except Exception as e:
         return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_approver():
+    try:
+        emp_data = get_employee_by_user(
+            frappe.session.user, fields=["name", "reports_to"]
+        )
+        if not emp_data:
+            return gen_response(500, "Employee does not exist")
+        if not emp_data.get("reports_to"):
+            return gen_response(500, "No reporting manager set for this employee")
+        reports_to = emp_data.get("reports_to")
+        reports_to_name = frappe.db.get_value("Employee", reports_to, "employee_name")
+        return gen_response(200, "Approver fetched successfully", {
+            "reports_to": reports_to,
+            "reports_to_name": reports_to_name,
+        })
+    except frappe.PermissionError:
+        return gen_response(500, "Not permitted to perform this action")
+    except Exception as e:
+        return exception_handler(e)

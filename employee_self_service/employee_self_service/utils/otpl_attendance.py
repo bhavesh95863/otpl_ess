@@ -389,10 +389,7 @@ def validate(doc,method):
     )
     if emp.employee_availability == "On Leave":
         on_leave_message = frappe.db.get_value("Employee Self Service Settings","Employee Self Service Settings","on_leave_message")
-        return gen_response(
-                    500,
-                    on_leave_message or "You are currently on leave. Please contact your administrator for more details.",
-                )
+        frappe.throw(on_leave_message or "You are currently on leave. Please contact your administrator for more details.")
     enable_device_restrictions = frappe.db.get_value("Employee Self Service Settings", "Employee Self Service Settings", "enable_device_restrictions")
     if enable_device_restrictions == 1:
         if not frappe.db.exists("Employee Device Registration",{"employee":doc.employee}):

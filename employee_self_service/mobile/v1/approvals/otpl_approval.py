@@ -745,6 +745,8 @@ def get_travel_approval_list(start=0, page_length=10):
                 fields=travel_fields,
                 filters={"status": "Pending", "report_to": emp_name},
             )
+            for item in travel_list:
+                item["doctype"] = "Travel Request"
 
         # Get Travel Request Pull records that need approval
         travel_pull_list = []
@@ -758,6 +760,8 @@ def get_travel_approval_list(start=0, page_length=10):
                     ["report_to", "=", emp_name],
                 ],
             )
+            for item in travel_pull_list:
+                item["doctype"] = "Travel Request Pull"
 
         # Combine both lists
         combined_list = travel_list + travel_pull_list
@@ -783,21 +787,26 @@ def get_travel_approval_list(start=0, page_length=10):
 @ess_validate(methods=["POST"])
 def approve_travel_request():
     """
-    Approve Travel Request or Travel Request Pull (auto-detects doctype).
-    Accepts: name, remarks (optional)
+    Approve Travel Request or Travel Request Pull.
+    Accepts: name, doctype (optional - 'Travel Request' or 'Travel Request Pull'), remarks (optional)
     Sets status to 'Approved'.
     """
     try:
         data = json.loads(frappe.request.get_data())
         travel_name = data.get("name")
         remarks = data.get("remarks")
+        request_doctype = data.get("doctype")
 
         if not travel_name:
             return gen_response(500, "Travel Request name is required")
 
-        # Auto-detect if it's a Travel Request Pull or Travel Request
-        is_travel_pull = frappe.db.exists("Travel Request Pull", travel_name)
-        is_travel_request = frappe.db.exists("Travel Request", travel_name)
+        # Use provided doctype if available, otherwise auto-detect
+        if request_doctype in ("Travel Request Pull", "Travel Request"):
+            is_travel_pull = request_doctype == "Travel Request Pull"
+            is_travel_request = request_doctype == "Travel Request"
+        else:
+            is_travel_pull = frappe.db.exists("Travel Request Pull", travel_name)
+            is_travel_request = frappe.db.exists("Travel Request", travel_name)
 
         if not is_travel_pull and not is_travel_request:
             return gen_response(500, "Travel Request does not exist")
@@ -831,20 +840,26 @@ def approve_travel_request():
 @ess_validate(methods=["POST"])
 def reject_travel_request():
     """
-    Reject Travel Request or Travel Request Pull (auto-detects doctype).
-    Accepts: name, remarks (optional)
+    Reject Travel Request or Travel Request Pull.
+    Accepts: name, doctype (optional - 'Travel Request' or 'Travel Request Pull'), remarks (optional)
     Sets status to 'Rejected'.
     """
     try:
         data = json.loads(frappe.request.get_data())
         travel_name = data.get("name")
         remarks = data.get("remarks")
+        request_doctype = data.get("doctype")
 
         if not travel_name:
             return gen_response(500, "Travel Request name is required")
 
-        is_travel_pull = frappe.db.exists("Travel Request Pull", travel_name)
-        is_travel_request = frappe.db.exists("Travel Request", travel_name)
+        # Use provided doctype if available, otherwise auto-detect
+        if request_doctype in ("Travel Request Pull", "Travel Request"):
+            is_travel_pull = request_doctype == "Travel Request Pull"
+            is_travel_request = request_doctype == "Travel Request"
+        else:
+            is_travel_pull = frappe.db.exists("Travel Request Pull", travel_name)
+            is_travel_request = frappe.db.exists("Travel Request", travel_name)
 
         if not is_travel_pull and not is_travel_request:
             return gen_response(500, "Travel Request does not exist")
@@ -907,6 +922,8 @@ def get_travel_approved_list(start=0, page_length=10):
                 fields=travel_fields,
                 filters={"status": "Approved", "report_to": emp_name},
             )
+            for item in travel_list:
+                item["doctype"] = "Travel Request"
 
         travel_pull_list = []
         if emp_name:
@@ -919,6 +936,8 @@ def get_travel_approved_list(start=0, page_length=10):
                     ["report_to", "=", emp_name],
                 ],
             )
+            for item in travel_pull_list:
+                item["doctype"] = "Travel Request Pull"
 
         combined_list = travel_list + travel_pull_list
         combined_list.sort(key=lambda x: x.get("modified"), reverse=True)

@@ -1,4 +1,5 @@
 {
+ "allow_rename": 1,
  "autoname": "field:travel_request_id",
  "creation": "2026-04-08 18:00:00",
  "doctype": "DocType",
@@ -166,7 +167,7 @@
    "read_only": 1
   }
  ],
- "modified": "2026-04-08 18:00:00.000000",
+ "modified": "2026-04-18 14:58:30.976126",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Travel Request Pull",

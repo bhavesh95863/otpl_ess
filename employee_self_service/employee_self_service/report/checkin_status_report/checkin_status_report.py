@@ -115,14 +115,32 @@ def get_data(filters):
 				seen.add(emp.name)
 				all_employees.append(emp)
 
-	# 2. Get all check-ins for the date (IN logs)
+	# 2. Get all check-ins for the date
+	log_type_filter = filters.get("log_type")
+	change_in_location = filters.get("change_in_location")
+	change_in_reports_to = filters.get("change_in_reports_to")
+
+	checkin_conditions = "WHERE time >= %(day_start)s AND time < %(day_end)s"
+	checkin_params = {"day_start": day_start, "day_end": day_end}
+
+	if log_type_filter:
+		checkin_conditions += " AND log_type = %(log_type)s"
+		checkin_params["log_type"] = log_type_filter
+	else:
+		checkin_conditions += " AND log_type = 'IN'"
+
+	if change_in_location:
+		checkin_conditions += " AND team_leader_location_changed = 1"
+
+	if change_in_reports_to:
+		checkin_conditions += " AND reports_to_change = 1"
+
 	checkins = frappe.db.sql("""
 		SELECT employee, MIN(time) as checkin_time
 		FROM `tabEmployee Checkin`
-		WHERE time >= %(day_start)s AND time < %(day_end)s
-		AND log_type = 'IN'
+		{conditions}
 		GROUP BY employee
-	""", {"day_start": day_start, "day_end": day_end}, as_dict=True)
+	""".format(conditions=checkin_conditions), checkin_params, as_dict=True)
 
 	checkin_map = {c.employee: c.checkin_time for c in checkins}
 
@@ -177,6 +195,8 @@ def get_data(filters):
 			continue
 		if location_filter and emp.location != location_filter:
 			continue
+		if (change_in_location or change_in_reports_to) and not checkin_time:
+			continue
 
 		data.append({
 			"employee": emp.name,
@@ -188,5 +208,8 @@ def get_data(filters):
 			"checkin_time": checkin_time,
 			"no_team_leader_error": ntle_name,
 		})
+
+	# Sort by checkin time descending (entries with no checkin time go last)
+	data.sort(key=lambda x: x.get("checkin_time") or "", reverse=True)
 
 	return data

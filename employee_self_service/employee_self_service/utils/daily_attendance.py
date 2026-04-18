@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.utils import getdate, get_datetime, add_days, get_first_day, time_diff_in_hours
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 @frappe.whitelist()
@@ -300,7 +300,11 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			if emp_half_day_departure_time:
 				location_rules.half_day_departure_time = emp_half_day_departure_time
 
-
+	# Adjust thresholds if employee has an approved short leave for this date
+	if location_rules:
+		short_leave_period = get_approved_short_leave_period(employee, date)
+		if short_leave_period:
+			location_rules = adjust_thresholds_for_short_leave(location_rules, short_leave_period)
 
 	# Determine attendance status based on rules
 	status, late_entry, early_exit, remarks = determine_status(
@@ -583,6 +587,68 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 			error_log=traceback_msg
 		)
 		raise
+
+
+def get_approved_short_leave_period(employee, date):
+	"""Check if employee has an approved OTPL Leave with short_leave on this date.
+	Returns the half_day_period ('First Half' or 'Second Half') or None."""
+	result = frappe.db.get_value(
+		"OTPL Leave",
+		{
+			"employee": employee,
+			"short_leave": 1,
+			"status": "Approved",
+			"approved_from_date": ["<=", date],
+			"approved_to_date": [">=", date]
+		},
+		"half_day_period"
+	)
+	return result if result else None
+
+
+def adjust_thresholds_for_short_leave(location_rules, short_leave_period):
+	"""Adjust location_rules timing thresholds based on short leave period.
+
+	First Half short leave: employee is off in the morning, so start time
+	shifts forward by 2 hours (e.g. 9:30 → 11:30).
+
+	Second Half short leave: employee leaves early, so end time shifts
+	back by 2 hours (e.g. 18:00 → 16:00).
+	"""
+	SHORT_LEAVE_OFFSET = timedelta(hours=2)
+
+	def _shift_time(time_val, offset):
+		"""Add/subtract offset from a timedelta or time string and return as timedelta."""
+		if not time_val:
+			return time_val
+		# Convert to timedelta seconds for arithmetic
+		if isinstance(time_val, timedelta):
+			total = time_val
+		else:
+			parts = str(time_val).split(":")
+			total = timedelta(hours=int(parts[0]), minutes=int(parts[1]),
+							  seconds=int(parts[2]) if len(parts) > 2 else 0)
+		new_total = total + offset
+		# Clamp to 0–24h range
+		if new_total.total_seconds() < 0:
+			new_total = timedelta(0)
+		if new_total.total_seconds() > 86400:
+			new_total = timedelta(hours=24)
+		return new_total
+
+	if short_leave_period == "First Half":
+		location_rules.shift_start_time = _shift_time(location_rules.shift_start_time, SHORT_LEAVE_OFFSET)
+		location_rules.late_arrival_threshold = _shift_time(location_rules.late_arrival_threshold, SHORT_LEAVE_OFFSET)
+		if location_rules.half_day_arrival_time:
+			location_rules.half_day_arrival_time = _shift_time(location_rules.half_day_arrival_time, SHORT_LEAVE_OFFSET)
+
+	elif short_leave_period == "Second Half":
+		location_rules.shift_end_time = _shift_time(location_rules.shift_end_time, -SHORT_LEAVE_OFFSET)
+		location_rules.early_exit_threshold = _shift_time(location_rules.early_exit_threshold, -SHORT_LEAVE_OFFSET)
+		if location_rules.half_day_departure_time:
+			location_rules.half_day_departure_time = _shift_time(location_rules.half_day_departure_time, -SHORT_LEAVE_OFFSET)
+
+	return location_rules
 
 
 def is_holiday_for_company(date):

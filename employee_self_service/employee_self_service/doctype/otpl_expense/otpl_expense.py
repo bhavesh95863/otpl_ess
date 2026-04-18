@@ -98,8 +98,6 @@ class OTPLExpense(Document):
 			missing.append("Business Line")
 		if not self.amount or flt(self.amount) <= 0:
 			missing.append("Amount")
-		if not self.details_of_expense:
-			missing.append("Details of Expense")
 
 		if self.expense_category in ("With GST Invoice", "Without GST Invoice"):
 			if not self.gst_number:
@@ -168,19 +166,33 @@ class OTPLExpense(Document):
 			pe_doc.flags.ignore_permissions = True
 			pe_doc.cancel()
 
+		# Cancel Purchase Invoice if linked
+		if self.get("purchase_invoice"):
+			pi_doc = frappe.get_doc("Purchase Invoice", self.purchase_invoice)
+			if pi_doc.docstatus == 1:
+				pi_doc.flags.ignore_permissions = True
+				pi_doc.cancel()
+
+		# Cancel Purchase Receipt if linked
+		if self.get("purchase_receipt"):
+			pr_doc = frappe.get_doc("Purchase Receipt", self.purchase_receipt)
+			if pr_doc.docstatus == 1:
+				pr_doc.flags.ignore_permissions = True
+				pr_doc.cancel()
+
+		# Cancel Purchase Order if linked
+		if self.purchase_order:
+			po_doc = frappe.get_doc("Purchase Order", self.purchase_order)
+			if po_doc.docstatus == 1:
+				po_doc.flags.ignore_permissions = True
+				po_doc.cancel()
+
 		# Cancel Material Request if linked
 		if self.material_request:
 			mr_doc = frappe.get_doc("Material Request", self.material_request)
 			if mr_doc.docstatus == 1:
 				mr_doc.flags.ignore_permissions = True
 				mr_doc.cancel()
-
-		# Cancel Purchase Order if linked (only if still in draft or submitted)
-		if self.purchase_order:
-			po_doc = frappe.get_doc("Purchase Order", self.purchase_order)
-			if po_doc.docstatus == 1:
-				po_doc.flags.ignore_permissions = True
-				po_doc.cancel()
 
 	def after_delete(self):
 		# remove linked Journal Entries / Payment Entries if force deleting
@@ -193,43 +205,55 @@ class OTPLExpense(Document):
 		for row in pe_list:
 			frappe.delete_doc("Payment Entry", row.name, ignore_permissions=True, force=1)
 
-		# Delete linked Material Request
-		if self.material_request:
-			frappe.delete_doc("Material Request", self.material_request, ignore_permissions=True, force=1)
+		# Delete linked Purchase Invoice
+		if self.get("purchase_invoice"):
+			frappe.delete_doc("Purchase Invoice", self.purchase_invoice, ignore_permissions=True, force=1)
+		# Delete linked Purchase Receipt
+		if self.get("purchase_receipt"):
+			frappe.delete_doc("Purchase Receipt", self.purchase_receipt, ignore_permissions=True, force=1)
 		# Delete linked Purchase Order
 		if self.purchase_order:
 			frappe.delete_doc("Purchase Order", self.purchase_order, ignore_permissions=True, force=1)
+		# Delete linked Material Request
+		if self.material_request:
+			frappe.delete_doc("Material Request", self.material_request, ignore_permissions=True, force=1)
 
 	# ─── GST Invoice flow: Material Request + Purchase Order ───
 
 	def create_material_request_and_po(self):
-		"""Create Material Request (auto-submitted) and Purchase Order (draft) for GST expense categories"""
+		"""Create Material Request (auto-submitted) and Purchase Order (auto-submitted) for GST expense categories.
+		Uses frappe.get_meta() to dynamically detect fields on PO since custom fields are not in fixtures."""
 		if not self.expense_items or len(self.expense_items) == 0:
 			frappe.throw("Please add items in the Expense Items table before submitting.")
 		if not self.supplier:
 			frappe.throw("Please select a Supplier before submitting.")
 
 		company = frappe.db.get_value("Global Defaults", "Global Defaults", "default_company")
-		default_warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
-		if not default_warehouse:
-			# Fallback: pick first warehouse for the company
-			default_warehouse = frappe.db.get_value("Warehouse", {"company": company, "is_group": 0}, "name")
-		if not default_warehouse:
-			frappe.throw("No default warehouse configured. Please set one in Stock Settings.")
+
+		# Get target warehouse from the employee making this entry (Warehouse has employee link field)
+		employee_warehouse = frappe.db.get_value("Warehouse", {"employee": self.sent_by, "is_group": 0}, "name")
+		if not employee_warehouse:
+			# Fallback: stock settings default
+			employee_warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
+		if not employee_warehouse:
+			employee_warehouse = frappe.db.get_value("Warehouse", {"company": company, "is_group": 0}, "name")
+		if not employee_warehouse:
+			frappe.throw("No warehouse found for this employee. Please assign a warehouse.")
 
 		expense_date = self.date_of_expense or self.date_of_entry or today()
 
 		# --- Create Material Request (Material Indent) ---
 		mr_items = []
 		for row in self.expense_items:
+			stock_uom = frappe.db.get_value("Item", row.item, "stock_uom") or "Nos"
 			mr_items.append({
 				"item_code": row.item,
 				"item_name": row.item_name,
 				"qty": row.quantity,
 				"schedule_date": expense_date,
-				"warehouse": default_warehouse,
-				"uom": frappe.db.get_value("Item", row.item, "stock_uom") or "Nos",
-				"stock_uom": frappe.db.get_value("Item", row.item, "stock_uom") or "Nos",
+				"warehouse": employee_warehouse,
+				"uom": stock_uom,
+				"stock_uom": stock_uom,
 			})
 
 		mr_doc = frappe.get_doc({
@@ -247,18 +271,19 @@ class OTPLExpense(Document):
 
 		frappe.db.set_value(self.doctype, self.name, "material_request", mr_doc.name)
 
-		# --- Create Purchase Order (draft - for manual approval) ---
+		# --- Create Purchase Order (auto-submitted) ---
 		po_items = []
 		for idx, row in enumerate(self.expense_items):
+			stock_uom = frappe.db.get_value("Item", row.item, "stock_uom") or "Nos"
 			po_items.append({
 				"item_code": row.item,
 				"item_name": row.item_name,
 				"qty": row.quantity,
 				"rate": row.rate,
 				"schedule_date": expense_date,
-				"warehouse": default_warehouse,
-				"uom": frappe.db.get_value("Item", row.item, "stock_uom") or "Nos",
-				"stock_uom": frappe.db.get_value("Item", row.item, "stock_uom") or "Nos",
+				"warehouse": employee_warehouse,
+				"uom": stock_uom,
+				"stock_uom": stock_uom,
 				"material_request": mr_doc.name,
 				"material_request_item": mr_doc.items[idx].name if idx < len(mr_doc.items) else None,
 			})
@@ -269,24 +294,249 @@ class OTPLExpense(Document):
 			"company": company,
 			"transaction_date": expense_date,
 			"schedule_date": expense_date,
+			"set_warehouse": employee_warehouse,
 			"items": po_items,
 		}
+
+		# Use metadata to dynamically set custom fields on PO
+		po_meta = frappe.get_meta("Purchase Order")
+		po_field_names = {f.fieldname for f in po_meta.fields}
+
+		if "prepaid_percentage" in po_field_names:
+			po_data["prepaid_percentage"] = 100
+
+		if "supplier_mobile_whatsapp_number" in po_field_names:
+			po_data["supplier_mobile_whatsapp_number"] = "9999999999"
+
+		if "contact_mobile" in po_field_names:
+			po_data["contact_mobile"] = "9999999999"
+
+		if "business_line" in po_field_names and self.business_line:
+			po_data["business_line"] = self.business_line
+
+		if "material_already_received" in po_field_names:
+			po_data["material_already_received"] = "Yes"
+
+		# Set tax template and let taxes be calculated
 		if self.taxes_and_charges:
 			po_data["taxes_and_charges"] = self.taxes_and_charges
+			# Fetch tax rows from the template and populate the taxes child table
+			tax_rows = frappe.get_all(
+				"Purchase Taxes and Charges",
+				filters={"parent": self.taxes_and_charges, "parenttype": "Purchase Taxes and Charges Template"},
+				fields=["charge_type", "account_head", "rate", "description", "cost_center", "tax_amount",
+						"add_deduct_tax", "category", "included_in_print_rate"],
+				order_by="idx asc"
+			)
+			if tax_rows:
+				po_data["taxes"] = []
+				for tax in tax_rows:
+					po_data["taxes"].append({
+						"charge_type": tax.charge_type,
+						"account_head": tax.account_head,
+						"rate": tax.rate,
+						"description": tax.description or tax.account_head,
+						"cost_center": tax.cost_center,
+						"add_deduct_tax": tax.add_deduct_tax or "Add",
+						"category": tax.category or "Total",
+						"included_in_print_rate": tax.included_in_print_rate,
+					})
 
 		po_doc = frappe.get_doc(po_data)
 		po_doc.flags.ignore_permissions = True
 		po_doc.flags.ignore_mandatory = True
+		# Flag to skip the hook — we'll create PR/PI/PE directly below
+		po_doc.flags.skip_otpl_auto_entries = True
 		po_doc.insert()
-		# PO is NOT submitted - it will be approved/submitted manually
+		po_doc.submit()
 
 		frappe.db.set_value(self.doctype, self.name, "purchase_order", po_doc.name)
 
+		# --- Create Purchase Receipt (auto-submitted) ---
+		pr_doc = self._create_purchase_receipt(po_doc, company, employee_warehouse)
+		frappe.db.set_value(self.doctype, self.name, "purchase_receipt", pr_doc.name)
+
+		# --- Create Purchase Invoice (auto-submitted) ---
+		pi_doc = self._create_purchase_invoice(po_doc, pr_doc, company, employee_warehouse)
+		frappe.db.set_value(self.doctype, self.name, "purchase_invoice", pi_doc.name)
+
+		# --- Create Payment Entry (auto-submitted) ---
+		pe_doc = self._create_payment_entry(pi_doc, company)
+		frappe.db.set_value(self.doctype, self.name, "payment_entry", pe_doc.name)
+
 		frappe.msgprint(
-			f"Material Request <b>{mr_doc.name}</b> submitted and Purchase Order <b>{po_doc.name}</b> created (pending approval).",
-			title="Entries Created",
+			f"Material Request <b>{mr_doc.name}</b>, Purchase Order <b>{po_doc.name}</b>, "
+			f"Purchase Receipt <b>{pr_doc.name}</b>, Purchase Invoice <b>{pi_doc.name}</b>, "
+			f"and Payment Entry <b>{pe_doc.name}</b> created and submitted automatically.",
+			title="All Entries Created",
 			indicator="green"
 		)
+
+	def _create_purchase_receipt(self, po_doc, company, target_warehouse):
+		"""Create Purchase Receipt from submitted PO using metadata for custom fields."""
+		pr_meta = frappe.get_meta("Purchase Receipt")
+		pr_field_names = {f.fieldname for f in pr_meta.fields}
+
+		pr_items = []
+		for item in po_doc.items:
+			pr_items.append({
+				"item_code": item.item_code,
+				"item_name": item.item_name,
+				"qty": item.qty,
+				"rate": item.rate,
+				"warehouse": target_warehouse or item.warehouse,
+				"uom": item.uom,
+				"stock_uom": item.stock_uom,
+				"purchase_order": po_doc.name,
+				"purchase_order_item": item.name,
+			})
+
+		pr_data = {
+			"doctype": "Purchase Receipt",
+			"supplier": po_doc.supplier,
+			"company": company,
+			"posting_date": today(),
+			"set_warehouse": target_warehouse,
+			"items": pr_items,
+		}
+
+		if "business_line" in pr_field_names and self.business_line:
+			pr_data["business_line"] = self.business_line
+
+		if po_doc.taxes_and_charges:
+			pr_data["taxes_and_charges"] = po_doc.taxes_and_charges
+			if po_doc.taxes:
+				pr_data["taxes"] = []
+				for tax in po_doc.taxes:
+					pr_data["taxes"].append({
+						"charge_type": tax.charge_type,
+						"account_head": tax.account_head,
+						"rate": tax.rate,
+						"description": tax.description or tax.account_head,
+						"cost_center": tax.cost_center,
+						"add_deduct_tax": tax.add_deduct_tax or "Add",
+						"category": tax.category or "Total",
+						"included_in_print_rate": tax.included_in_print_rate,
+					})
+
+		pr_doc = frappe.get_doc(pr_data)
+		pr_doc.flags.ignore_permissions = True
+		pr_doc.flags.ignore_mandatory = True
+		pr_doc.insert()
+		pr_doc.submit()
+		return pr_doc
+
+	def _create_purchase_invoice(self, po_doc, pr_doc, company, target_warehouse):
+		"""Create Purchase Invoice from submitted PO + PR using metadata for custom fields."""
+		pi_meta = frappe.get_meta("Purchase Invoice")
+		pi_field_names = {f.fieldname for f in pi_meta.fields}
+
+		pi_items = []
+		for idx, item in enumerate(po_doc.items):
+			pi_item = {
+				"item_code": item.item_code,
+				"item_name": item.item_name,
+				"qty": item.qty,
+				"rate": item.rate,
+				"warehouse": target_warehouse or item.warehouse,
+				"uom": item.uom,
+				"stock_uom": item.stock_uom,
+				"purchase_order": po_doc.name,
+				"po_detail": item.name,
+				"purchase_receipt": pr_doc.name,
+			}
+			if idx < len(pr_doc.items):
+				pi_item["pr_detail"] = pr_doc.items[idx].name
+			pi_items.append(pi_item)
+
+		pi_data = {
+			"doctype": "Purchase Invoice",
+			"supplier": po_doc.supplier,
+			"company": company,
+			"posting_date": today(),
+			"set_warehouse": target_warehouse,
+			"update_stock": 0,
+			"items": pi_items,
+		}
+
+		if "business_line" in pi_field_names and self.business_line:
+			pi_data["business_line"] = self.business_line
+
+		if po_doc.taxes_and_charges:
+			pi_data["taxes_and_charges"] = po_doc.taxes_and_charges
+			if po_doc.taxes:
+				pi_data["taxes"] = []
+				for tax in po_doc.taxes:
+					pi_data["taxes"].append({
+						"charge_type": tax.charge_type,
+						"account_head": tax.account_head,
+						"rate": tax.rate,
+						"description": tax.description or tax.account_head,
+						"cost_center": tax.cost_center,
+						"add_deduct_tax": tax.add_deduct_tax or "Add",
+						"category": tax.category or "Total",
+						"included_in_print_rate": tax.included_in_print_rate,
+					})
+
+		pi_doc = frappe.get_doc(pi_data)
+		pi_doc.flags.ignore_permissions = True
+		pi_doc.flags.ignore_mandatory = True
+		pi_doc.insert()
+		pi_doc.submit()
+		return pi_doc
+
+	def _create_payment_entry(self, pi_doc, company):
+		"""Create Payment Entry against the Purchase Invoice using metadata for custom fields."""
+		creditor_account = None
+		if self.business_line:
+			creditor_account = frappe.db.get_value("Business Line", self.business_line, "supplier_creditor_account")
+		if not creditor_account:
+			creditor_account = frappe.db.get_value("Company", company, "default_payable_account")
+		if not creditor_account:
+			frappe.throw(f"No supplier creditor account configured for Business Line {self.business_line} or company default.")
+
+		bank_account = frappe.db.get_value("Company", company, "default_bank_account")
+		if not bank_account:
+			frappe.throw("No default bank account configured for the company.")
+
+		paid_amount = flt(pi_doc.grand_total)
+
+		pe_data = {
+			"doctype": "Payment Entry",
+			"payment_type": "Pay",
+			"party_type": "Supplier",
+			"party": self.supplier,
+			"company": company,
+			"posting_date": today(),
+			"paid_from": bank_account,
+			"paid_to": creditor_account,
+			"paid_amount": paid_amount,
+			"received_amount": paid_amount,
+			"reference_no": self.name,
+			"reference_date": today(),
+			"references": [{
+				"reference_doctype": "Purchase Invoice",
+				"reference_name": pi_doc.name,
+				"total_amount": paid_amount,
+				"outstanding_amount": paid_amount,
+				"allocated_amount": paid_amount,
+			}],
+		}
+
+		pe_meta = frappe.get_meta("Payment Entry")
+		pe_field_names = {f.fieldname for f in pe_meta.fields}
+
+		if "otpl_ref_doctype" in pe_field_names:
+			pe_data["otpl_ref_doctype"] = self.doctype
+		if "otpl_ref_name" in pe_field_names:
+			pe_data["otpl_ref_name"] = self.name
+
+		pe_doc = frappe.get_doc(pe_data)
+		pe_doc.flags.ignore_permissions = True
+		pe_doc.flags.ignore_mandatory = True
+		pe_doc.insert()
+		pe_doc.submit()
+		return pe_doc
 
 	# ─── Cash Memo flow: Expense Journal Entry ───
 
@@ -446,8 +696,14 @@ def get_supplier_by_gstin(gstin):
 
 
 def on_purchase_order_submit(doc, method):
-	"""Hook: when a Purchase Order linked to an OTPL Expense is submitted,
-	auto-create Purchase Receipt and Purchase Invoice."""
+	"""Hook: when a Purchase Order linked to an OTPL Expense is submitted externally
+	(not from the OTPL Expense on_submit flow), auto-create Purchase Receipt, Purchase Invoice, and Payment Entry.
+	Uses frappe.get_meta() to dynamically detect fields since custom fields are not in fixtures."""
+
+	# Skip if already handled inside create_material_request_and_po
+	if getattr(doc.flags, "skip_otpl_auto_entries", False):
+		return
+
 	expense_name = frappe.db.get_value(
 		"OTPL Expense",
 		{"purchase_order": doc.name, "docstatus": 1},
@@ -456,65 +712,29 @@ def on_purchase_order_submit(doc, method):
 	if not expense_name:
 		return
 
+	expense_doc = frappe.get_doc("OTPL Expense", expense_name)
 	company = doc.company
-	# --- Create Purchase Receipt (auto-submitted) ---
-	pr_items = []
-	for item in doc.items:
-		pr_items.append({
-			"item_code": item.item_code,
-			"item_name": item.item_name,
-			"qty": item.qty,
-			"rate": item.rate,
-			"warehouse": item.warehouse,
-			"uom": item.uom,
-			"stock_uom": item.stock_uom,
-			"purchase_order": doc.name,
-			"purchase_order_item": item.name,
-		})
+	target_warehouse = doc.set_warehouse or (doc.items[0].warehouse if doc.items else None)
 
-	pr_doc = frappe.get_doc({
-		"doctype": "Purchase Receipt",
-		"supplier": doc.supplier,
-		"company": company,
-		"posting_date": today(),
-		"items": pr_items,
-	})
-	pr_doc.flags.ignore_permissions = True
-	pr_doc.flags.ignore_mandatory = True
-	pr_doc.insert()
-	pr_doc.submit()
+	# Create PR, PI, PE via the expense doc methods
+	pr_doc = expense_doc._create_purchase_receipt(doc, company, target_warehouse)
+	frappe.db.set_value("OTPL Expense", expense_name, "purchase_receipt", pr_doc.name)
 
-	# --- Create Purchase Invoice (auto-submitted) ---
-	pi_items = []
-	for item in doc.items:
-		pi_items.append({
-			"item_code": item.item_code,
-			"item_name": item.item_name,
-			"qty": item.qty,
-			"rate": item.rate,
-			"warehouse": item.warehouse,
-			"uom": item.uom,
-			"stock_uom": item.stock_uom,
-			"purchase_order": doc.name,
-			"po_detail": item.name,
-			"purchase_receipt": pr_doc.name,
-		})
+	pi_doc = expense_doc._create_purchase_invoice(doc, pr_doc, company, target_warehouse)
+	frappe.db.set_value("OTPL Expense", expense_name, "purchase_invoice", pi_doc.name)
 
-	pi_doc = frappe.get_doc({
-		"doctype": "Purchase Invoice",
-		"supplier": doc.supplier,
-		"company": company,
-		"posting_date": today(),
-		"items": pi_items,
-	})
-	pi_doc.flags.ignore_permissions = True
-	pi_doc.flags.ignore_mandatory = True
-	pi_doc.insert()
-	pi_doc.submit()
+	pe_doc = expense_doc._create_payment_entry(pi_doc, company)
+	frappe.db.set_value("OTPL Expense", expense_name, "payment_entry", pe_doc.name)
 
 	frappe.msgprint(
-		f"Purchase Receipt <b>{pr_doc.name}</b> and Purchase Invoice <b>{pi_doc.name}</b> auto-created from OTPL Expense <b>{expense_name}</b>.",
+		f"Purchase Receipt <b>{pr_doc.name}</b>, Purchase Invoice <b>{pi_doc.name}</b>, "
+		f"and Payment Entry <b>{pe_doc.name}</b> auto-created from OTPL Expense <b>{expense_name}</b>.",
 		title="Auto Entries Created",
 		indicator="green"
 	)
+
+
+def _create_payment_entry_for_expense(expense_doc, pi_doc, company):
+	"""Deprecated — kept for backward compatibility. Use OTPLExpense._create_payment_entry instead."""
+	return expense_doc._create_payment_entry(pi_doc, company)
 	
