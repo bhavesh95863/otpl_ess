@@ -11,6 +11,7 @@
   "column_break_3",
   "longitude",
   "datetime",
+  "mobile_no",
   "employee_address",
   "previous_checkin_distance",
   "previous_checkin_address",
@@ -31,7 +32,8 @@
   "column_break_16",
   "nearest_team_leader_latitude",
   "nearest_team_leader_longitude",
-  "nearest_team_leader_distance"
+  "nearest_team_leader_distance",
+  "nearest_team_leader"
  ],
  "fields": [
   {
@@ -176,10 +178,17 @@
    "fieldname": "nearest_team_leader_name",
    "fieldtype": "Read Only",
    "label": "Nearest Team Leader"
+  },
+  {
+   "fetch_from": "employee.cell_number",
+   "fetch_if_empty": 1,
+   "fieldname": "mobile_no",
+   "fieldtype": "Read Only",
+   "label": "Mobile No"
   }
  ],
  "in_create": 1,
- "modified": "2026-03-21 12:00:00.000000",
+ "modified": "2026-04-20 08:44:01.074331",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "No Team Leader Error",

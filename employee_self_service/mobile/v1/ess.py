@@ -814,7 +814,9 @@ def get_dashboard():
                 "staff_type",
                 "status",
                 "is_team_leader",
-                "temp_tl"
+                "temp_tl",
+                "travelling",
+                "employee_availability"
             ],
         )
         notice_board = get_notice_board(emp_data.get("name"))
@@ -857,6 +859,10 @@ def get_dashboard():
         if not is_team_leader == 1 and emp_data.get("staff_type") == "Worker" and emp_data.get("location") == "Site":
             travel_request = 1
         allow_leave = 1
+        leave_message = ""
+        if emp_data.get("employee_availability") == "On Leave":
+            leave_message = "You are on leave"
+
         dashboard_data = {
             "notice_board": notice_board,
             "leave_balance": [],
@@ -901,7 +907,10 @@ def get_dashboard():
             "people_on_leave": 0 if emp_data.get("location") == "Site" else 1,
             "allow_location_update": allow_location_update,
             "travel_request": travel_request,
-            "allow_leave": allow_leave
+            "allow_leave": allow_leave,
+            "travelling": emp_data.get("travelling"),
+            "employee_availability": emp_data.get("employee_availability"),
+            "leave_message": leave_message
         }
         reports_to_name = None
         if emp_data.get("reports_to"):
@@ -941,6 +950,9 @@ def get_dashboard():
                 # No check-in yet or only check-out (shouldn't happen) - allow check-in
                 dashboard_data["allow_checkin"] = 1
                 dashboard_data["allow_checkout"] = 0
+        if emp_data.get("employee_availability") == "On Leave":
+            dashboard_data["allow_checkin"] = 0
+            dashboard_data["allow_checkout"] = 0
 
         get_latest_leave(dashboard_data, emp_data.get("name"))
         get_latest_expense(dashboard_data, emp_data.get("name"))
