@@ -35,12 +35,52 @@ def after_employee_checkin_insert(doc, method):
     # Sync to remote ERPs as Leader Location if employee is team leader
     distance_validation(doc)
     fetch_employee_details(doc)
+    validate_site_checkin_radius(doc)
     sync_leader_location_to_remote(doc)
     if not doc.employee_location == "Site" and doc.sales_order:
         doc.approval_required = 1
         doc.non_site_checkin_approver = 1
         doc.manager = frappe.db.get_value("Employee",doc.reports_to,"user_id")
     doc.save(ignore_permissions=True)
+
+
+def validate_site_checkin_radius(doc):
+    """Mark approval required when Site employee checkin is outside ESS Location radius."""
+    if doc.employee_location == "Site" or doc.staff_type == "Driver":
+        return
+
+    if not doc.location:
+        return
+
+    ess_location = frappe.db.get_value(
+        "ESS Location",
+        {"location": doc.employee_location},
+        ["latitude", "longitude", "radius"],
+        as_dict=True,
+    )
+
+    if not ess_location:
+        return
+
+    try:
+        checkin_lat, checkin_lon = map(float, doc.location.split(","))
+        ess_lat = float(ess_location.latitude)
+        ess_lon = float(ess_location.longitude)
+        ess_radius = float(ess_location.radius)
+    except (TypeError, ValueError, AttributeError):
+        return
+
+    if ess_radius <= 0:
+        return
+
+    distance_in_meters = calculate_distance_km(
+        checkin_lat, checkin_lon, ess_lat, ess_lon
+    ) * 1000
+    frappe.log_error(title="Check-in Distance Validation", message="Employee: {0}, Distance from ESS Location: {1:.2f} meters".format(doc.employee, distance_in_meters))
+    if distance_in_meters > ess_radius:
+        doc.approval_required = 1
+        if doc.reports_to:
+            doc.manager = frappe.db.get_value("Employee", doc.reports_to, "user_id")
        
 def sync_leader_location_to_remote(checkin_doc):
     """
