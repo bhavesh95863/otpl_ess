@@ -126,8 +126,6 @@ def get_data(filters):
 	if log_type_filter:
 		checkin_conditions += " AND log_type = %(log_type)s"
 		checkin_params["log_type"] = log_type_filter
-	else:
-		checkin_conditions += " AND log_type = 'IN'"
 
 	if change_in_location:
 		checkin_conditions += " AND team_leader_location_changed = 1"
@@ -210,6 +208,7 @@ def get_data(filters):
 		})
 
 	# Sort by checkin time descending (entries with no checkin time go last)
-	data.sort(key=lambda x: x.get("checkin_time") or "", reverse=True)
+	from datetime import datetime
+	data.sort(key=lambda x: x.get("checkin_time") or datetime.min, reverse=True)
 
 	return data
