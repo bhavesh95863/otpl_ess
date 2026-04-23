@@ -34,7 +34,7 @@ def create_expense(**data):
             expense_doc.external_sales_order = emp_data.get("external_so")
             msg = "Expense create successfully"
         expense_doc.update(data)
-        expense_doc.save()
+        expense_doc.save(ignore_permissions=True)
         if "file" in frappe.request.files:
             file = upload_file()
             file.attached_to_doctype = "OTPL Expense"
@@ -43,9 +43,10 @@ def create_expense(**data):
             frappe.db.set_value("OTPL Expense",expense_doc.name,"invoice_upload",file.file_url)
         return gen_response(200, msg)
     except frappe.PermissionError:
-            return gen_response(500, "Not permitted to perform this action")
+        frappe.log_error(message=frappe.get_traceback(), title="Expense Creation Failed")
+        return gen_response(500, "Not permitted to perform this action")
     except Exception as e:
-            return exception_handler(e)
+        return exception_handler(e)
 
 @frappe.whitelist()
 @ess_validate(methods=["GET"])

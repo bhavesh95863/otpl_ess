@@ -123,7 +123,13 @@ class TravelRequest(Document):
 		business_vertical = employee_doc.business_vertical or employee_doc.external_business_vertical
 		business_line_doc = frappe.get_doc("Business Line", business_vertical)
 		if business_line_doc.reporting_manager:
-			self.report_to = business_line_doc.reporting_manager
+			report_to = business_line_doc.reporting_manager
+			# If the reporting manager is on leave during the travel period,
+			# fall back to the employee's `reports_to`.
+			if self._is_on_leave(report_to):
+				manager_report_to = frappe.db.get_value("Employee", report_to, "reports_to")
+				if manager_report_to:
+					self.report_to = manager_report_to
 		else:
 			self.report_to = None
 		if business_line_doc.external_reporting_manager:
@@ -132,6 +138,24 @@ class TravelRequest(Document):
 		else:
 			self.has_external_report_to = 0
 			self.external_report_to = None
+
+	def _is_on_leave(self, employee):
+		"""Check whether the given employee has an approved Leave Application
+		covering this travel request's date_of_departure."""
+		if not employee or not self.date_of_departure:
+			return False
+		return bool(
+			frappe.db.exists(
+				"Leave Application",
+				{
+					"employee": employee,
+					"status": "Approved",
+					"docstatus": 1,
+					"from_date": ["<=", self.date_of_departure],
+					"to_date": [">=", self.date_of_departure],
+				},
+			)
+		)
 
 
 def apply_completed_travel(employee, purpose):

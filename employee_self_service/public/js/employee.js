@@ -86,21 +86,46 @@ function toggle_employee_availability(frm) {
 
 function show_mark_travelling_dialog(frm) {
     const d = new frappe.ui.Dialog({
-        title: __('Mark Travelling'),
+        title: __('Create Travel Request'),
         fields: [
             {
-                fieldname: 'ess_location',
-                fieldtype: 'Link',
-                label: __('ESS Location'),
-                options: 'ESS Location',
+                fieldname: 'date_of_departure',
+                fieldtype: 'Date',
+                label: __('Date of Departure'),
                 reqd: 1,
-                get_query: function () {
-                    return {
-                        filters: {
-                            reporting_manager: ['is', 'set']
-                        }
-                    };
-                }
+                default: frappe.datetime.get_today()
+            },
+            {
+                fieldname: 'date_of_arrival',
+                fieldtype: 'Date',
+                label: __('Date of Arrival'),
+                reqd: 1,
+                default: frappe.datetime.get_today()
+            },
+            {
+                fieldname: 'col_break_1',
+                fieldtype: 'Column Break'
+            },
+            {
+                fieldname: 'purpose',
+                fieldtype: 'Select',
+                label: __('Purpose'),
+                options: '\nGoing on Leave\nGoing back to work\nGoing for official work',
+                reqd: 1
+            },
+            {
+                fieldname: 'ticket',
+                fieldtype: 'Attach',
+                label: __('Ticket')
+            },
+            {
+                fieldname: 'section_break_1',
+                fieldtype: 'Section Break'
+            },
+            {
+                fieldname: 'remarks',
+                fieldtype: 'Small Text',
+                label: __('Remarks')
             }
         ],
         primary_action_label: __('Mark Travelling'),
@@ -109,15 +134,19 @@ function show_mark_travelling_dialog(frm) {
                 method: 'employee_self_service.employee_self_service.utils.employee.mark_travelling',
                 args: {
                     employee: frm.doc.name,
-                    ess_location: values.ess_location
+                    date_of_departure: values.date_of_departure,
+                    date_of_arrival: values.date_of_arrival,
+                    purpose: values.purpose,
+                    ticket: values.ticket || '',
+                    remarks: values.remarks || ''
                 },
                 freeze: true,
-                freeze_message: __('Marking as Travelling...'),
+                freeze_message: __('Creating Travel Request...'),
                 callback: function (r) {
                     if (r.exc) return;
                     d.hide();
                     frappe.show_alert({
-                        message: __('Employee marked as Travelling. Reporting Manager updated.'),
+                        message: __('Travel Request {0} created and approved.', [(r.message && r.message.name) || '']),
                         indicator: 'green'
                     });
                     frm.reload_doc();

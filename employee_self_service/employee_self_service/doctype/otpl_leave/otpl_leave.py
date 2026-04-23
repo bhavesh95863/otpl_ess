@@ -52,13 +52,21 @@ class OTPLLeave(Document):
 			self.approver = ""
 		else:
 			if employee_doc.reports_to:
-				user = frappe.db.get_value("Employee", employee_doc.reports_to, "user_id")
+				report_to = employee_doc.reports_to
+				# If the reports_to manager is on leave on this leave's from_date,
+				# escalate to that manager's reports_to.
+				if self._is_on_leave(report_to):
+					manager_doc = frappe.get_doc("Employee", report_to)
+					if manager_doc.reports_to:
+						report_to = manager_doc.reports_to
+				user = frappe.db.get_value("Employee", report_to, "user_id")
 				if user:
 					self.approver = user
 					self.is_external_manager = 0
 					self.external_manager = ""
-		if employee_doc.staff_type == "Worker" and employee_doc.location == "Site" and not self.status == "Cancelled":
-			frappe.throw("आपकी छुट्टी सीधे साइट पर आपकी उपस्थिति या अनुपस्थिति से ली जाती है, छुट्टी के लिए आवेदन करने की कोई आवश्यकता नहीं है।")
+		if employee_doc.location == "Site" and employee_doc.staff_type == "Worker":
+			if self.short_leave == 1 or self.half_day == 1:
+				frappe.throw("Short Leave or Half Day not allowed")
 
 	def validate_short_leave_limit(self):
 		"""Validate that employee has not exceeded 2 short leaves in the month"""
@@ -89,6 +97,24 @@ class OTPLLeave(Document):
 				f"Employee already has {existing_count} Short Leave(s) in {leave_date.strftime('%B %Y')}.",
 				title="Short Leave Limit Exceeded"
 			)
+
+	def _is_on_leave(self, employee):
+		"""Check whether the given employee has an approved Leave Application
+		covering this OTPL Leave's from_date."""
+		if not employee or not self.from_date:
+			return False
+		return bool(
+			frappe.db.exists(
+				"Leave Application",
+				{
+					"employee": employee,
+					"status": "Approved",
+					"docstatus": 1,
+					"from_date": ["<=", self.from_date],
+					"to_date": [">=", self.from_date],
+				},
+			)
+		)
 
 	def on_update(self):
 		"""

@@ -1,6 +1,7 @@
 import frappe
 import json
 import requests
+from frappe import _
 from frappe.utils import add_months, get_last_day, nowdate, getdate, get_datetime, format_datetime,flt
 
 def validate_employee(doc, method):
@@ -262,23 +263,26 @@ def get_ess_information(employee):
 
 
 @frappe.whitelist()
-def mark_travelling(employee, ess_location):
-    """Mark an employee as travelling and set reporting manager from the selected ESS Location."""
+def mark_travelling(employee, date_of_departure, date_of_arrival, purpose, ticket=None, remarks=None):
+    """Create an auto-approved Travel Request for the employee.
+
+    The Travel Request's own lifecycle hooks (`update_employee_travel_status`)
+    will mark the employee as travelling based on the dates and purpose.
+    """
     if not frappe.db.exists("Employee", employee):
-        frappe.throw("Employee not found")
+        frappe.throw(_("Employee not found"))
 
-    ess_loc = frappe.db.get_value(
-        "ESS Location", ess_location, ["reporting_manager"], as_dict=True
-    )
-    if not ess_loc or not ess_loc.reporting_manager:
-        frappe.throw("Selected ESS Location does not have a Reporting Manager assigned")
-
-    frappe.db.set_value("Employee", employee, {
-        "travelling": 1,
-        "reports_to": ess_loc.reporting_manager,
-        "external_reporting_manager": 0,
-        "external_report_to": None,
+    travel_request = frappe.get_doc({
+        "doctype": "Travel Request",
+        "employee": employee,
+        "date_of_departure": date_of_departure,
+        "date_of_arrival": date_of_arrival,
+        "purpose": purpose,
+        "ticket": ticket or None,
+        "remarks": remarks or None,
+        "status": "Approved",
     })
+    travel_request.insert(ignore_permissions=True)
     frappe.db.commit()
 
-    return {"status": "success", "reporting_manager": ess_loc.reporting_manager}
+    return {"status": "success", "name": travel_request.name}

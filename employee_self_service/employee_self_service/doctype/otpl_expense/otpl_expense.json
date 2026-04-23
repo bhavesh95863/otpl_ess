@@ -97,8 +97,7 @@
   {
    "fieldname": "details_of_expense",
    "fieldtype": "Small Text",
-   "label": "Details of expense",
-   "reqd": 1
+   "label": "Details of expense"
   },
   {
    "fieldname": "invoice_upload",
@@ -365,7 +364,7 @@
   }
  ],
  "is_submittable": 1,
- "modified": "2026-04-18 15:36:12.572865",
+ "modified": "2026-04-23 11:10:35.467624",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Expense",
