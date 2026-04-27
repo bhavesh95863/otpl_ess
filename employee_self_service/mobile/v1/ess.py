@@ -931,7 +931,7 @@ def get_dashboard():
         )
 
         # Determine allow_checkin and allow_checkout based on location and today's logs
-        if emp_data.get("location") == "Site":
+        if emp_data.get("location") == "Site" or emp_data.get("staff_type") == "Field":
             # Site employees: only allow check-in, no check-out
             dashboard_data["allow_checkout"] = 0
             dashboard_data["allow_checkin"] = 1

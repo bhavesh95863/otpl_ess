@@ -44,7 +44,37 @@ class OTPLLeave(Document):
 
 		# Add any necessary validation logic here
 		employee_doc = frappe.get_doc("Employee", self.employee)
-		if employee_doc.external_reporting_manager == 1:
+		if (
+			employee_doc.staff_type == "Worker"
+			and employee_doc.location == "Site"
+			and not employee_doc.is_team_leader
+		):
+			# Worker on site (not a team leader): approval goes to the
+			# Business Line Manager defined on the Business Line, same as Travel Request.
+			business_vertical = employee_doc.business_vertical or employee_doc.external_business_vertical
+			if not business_vertical:
+				frappe.throw("Employee does not have a Business Vertical assigned. Please contact HR.")
+			business_line_doc = frappe.get_doc("Business Line", business_vertical)
+			if not business_line_doc.reporting_manager or not business_line_doc.external_reporting_manager:
+				frappe.throw("Business Line does not have a Reporting Manager assigned. Please contact HR.")
+			if business_line_doc.reporting_manager:
+				report_to = business_line_doc.reporting_manager
+				# If the business line reporting manager is on leave on this leave's from_date,
+				# escalate to that manager's reports_to.
+				if self._is_on_leave(report_to):
+					manager_report_to = frappe.db.get_value("Employee", report_to, "reports_to")
+					if manager_report_to:
+						report_to = manager_report_to
+				user = frappe.db.get_value("Employee", report_to, "user_id")
+				if user:
+					self.approver = user
+					self.is_external_manager = 0
+					self.external_manager = ""
+			if business_line_doc.external_reporting_manager:
+				self.is_external_manager = 1
+				self.external_manager = business_line_doc.external_reporting_manager
+				self.approver = ""
+		elif employee_doc.external_reporting_manager == 1:
 			external_report_to = employee_doc.external_report_to
 			report_to = frappe.db.get_value("Employee Pull", external_report_to, "employee")
 			self.is_external_manager = 1

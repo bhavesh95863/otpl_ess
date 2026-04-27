@@ -10,7 +10,10 @@
   "sales_order",
   "business_line",
   "company",
-  "is_team_leader"
+  "is_team_leader",
+  "column_break_7",
+  "leave_status",
+  "reports_to"
  ],
  "fields": [
   {
@@ -43,9 +46,23 @@
    "fieldname": "is_team_leader",
    "fieldtype": "Check",
    "label": "Is Team Leader"
+  },
+  {
+   "fieldname": "column_break_7",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "leave_status",
+   "fieldtype": "Read Only",
+   "label": "Leave Status"
+  },
+  {
+   "fieldname": "reports_to",
+   "fieldtype": "Read Only",
+   "label": "Reports To"
   }
  ],
- "modified": "2026-03-31 03:50:57.417225",
+ "modified": "2026-04-27 22:24:04.607306",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Pull",
