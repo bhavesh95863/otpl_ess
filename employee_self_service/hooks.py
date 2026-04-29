@@ -167,7 +167,8 @@ doc_events = {
 
 scheduler_events = {
     "daily": [
-        "employee_self_service.mobile.v1.ess.daily_notice_board_event"
+        "employee_self_service.mobile.v1.ess.daily_notice_board_event",
+        "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_leave_status_to_remote"
     ],
     "cron": {
         "0 9 * * *": [
@@ -181,9 +182,6 @@ scheduler_events = {
         ],
         "*/5 * * * *": [
             "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"
-        ],
-        "*/15 * * * *": [
-            "employee_self_service.employee_self_service.utils.erp_sync.sync_employee_leave_status_to_remote"
         ]
     },
 }
