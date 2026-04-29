@@ -7,6 +7,7 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
+from employee_self_service.employee_self_service.utils.leave_escalation import resolve_external_manager_pull
 from erpnext.hr.doctype.leave_application.leave_application import get_leave_balance_on
 
 class OTPLLeave(Document):
@@ -55,7 +56,7 @@ class OTPLLeave(Document):
 			if not business_vertical:
 				frappe.throw("Employee does not have a Business Vertical assigned. Please contact HR.")
 			business_line_doc = frappe.get_doc("Business Line", business_vertical)
-			if not business_line_doc.reporting_manager or not business_line_doc.external_reporting_manager:
+			if not business_line_doc.reporting_manager and not business_line_doc.external_reporting_manager:
 				frappe.throw("Business Line does not have a Reporting Manager assigned. Please contact HR.")
 			if business_line_doc.reporting_manager:
 				report_to = business_line_doc.reporting_manager
@@ -71,12 +72,16 @@ class OTPLLeave(Document):
 					self.is_external_manager = 0
 					self.external_manager = ""
 			if business_line_doc.external_reporting_manager:
+				active_pull = resolve_external_manager_pull(business_line_doc.external_reporting_manager)
+				external_manager = active_pull.get("employee") if active_pull else business_line_doc.external_reporting_manager
+
 				self.is_external_manager = 1
-				self.external_manager = business_line_doc.external_reporting_manager
+				self.external_manager = external_manager
 				self.approver = ""
 		elif employee_doc.external_reporting_manager == 1:
-			external_report_to = employee_doc.external_report_to
-			report_to = frappe.db.get_value("Employee Pull", external_report_to, "employee")
+			active_pull = resolve_external_manager_pull(employee_doc.external_report_to)
+			report_to = active_pull.get("employee") if active_pull else None
+
 			self.is_external_manager = 1
 			self.external_manager = report_to
 			self.approver = ""

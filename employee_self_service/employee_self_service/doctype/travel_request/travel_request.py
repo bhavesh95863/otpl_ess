@@ -8,6 +8,7 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import date_diff, getdate, nowdate
 from employee_self_service.employee_self_service.utils.erp_sync import push_travel_to_remote_erp
+from employee_self_service.employee_self_service.utils.leave_escalation import resolve_external_manager_pull
 
 
 class TravelRequest(Document):
@@ -133,8 +134,9 @@ class TravelRequest(Document):
 		else:
 			self.report_to = None
 		if business_line_doc.external_reporting_manager:
+			active_pull = resolve_external_manager_pull(business_line_doc.external_reporting_manager)
 			self.has_external_report_to = 1
-			self.external_report_to = business_line_doc.external_reporting_manager
+			self.external_report_to = active_pull.get("name") if active_pull else business_line_doc.external_reporting_manager
 		else:
 			self.has_external_report_to = 0
 			self.external_report_to = None

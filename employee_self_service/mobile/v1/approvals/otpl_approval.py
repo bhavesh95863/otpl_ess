@@ -1381,6 +1381,7 @@ def pending_approval_counts():
             filters=[
                 ["source_erp", "is", "set"],
                 ["status", "=", "Pending"],
+                ["report_to","=", emp_name],
             ],
             fields=["name"]
         )
