@@ -55,20 +55,23 @@
   {
    "fieldname": "leave_status",
    "fieldtype": "Read Only",
+   "in_list_view": 1,
    "label": "Leave Status"
   },
   {
    "fieldname": "reports_to",
    "fieldtype": "Read Only",
+   "in_list_view": 1,
    "label": "Reports To"
   },
   {
    "fieldname": "external_reports_to",
    "fieldtype": "Read Only",
+   "in_list_view": 1,
    "label": "External Reports To"
   }
  ],
- "modified": "2026-04-29 08:25:22.666854",
+ "modified": "2026-04-29 09:20:43.415943",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Pull",

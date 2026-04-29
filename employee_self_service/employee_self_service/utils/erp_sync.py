@@ -12,39 +12,34 @@ from frappe.utils import now, get_datetime, today
 
 def get_employee_leave_status(employee):
 	"""
-	Return current Leave Application status for the given employee.
+	Return whether the employee is currently on leave.
 
-	Looks up a non-cancelled Leave Application that covers today's date and
-	returns its status (e.g. "Approved", "Open"). If multiple exist, the most
-	recently modified one wins. Returns an empty string when none is found.
+	Checks for an Approved Leave Application that covers today's date.
+	Returns "On Leave" if found, otherwise "Available".
 	"""
 	if not employee:
-		return ""
+		return "Available"
 	try:
 		today_date = today()
-		row = frappe.db.sql(
+		exists = frappe.db.sql(
 			"""
-			SELECT status
+			SELECT name
 			FROM `tabLeave Application`
 			WHERE employee = %s
-				AND status != 'Cancelled'
+				AND status = 'Approved'
 				AND from_date <= %s
 				AND to_date >= %s
-			ORDER BY modified DESC
 			LIMIT 1
 			""",
 			(employee, today_date, today_date),
-			as_dict=True,
 		)
-		if row:
-			return row[0].get("status") or ""
-		return ""
+		return "On Leave" if exists else "Available"
 	except Exception:
 		frappe.log_error(
 			message=frappe.get_traceback(),
 			title="get_employee_leave_status failed for {0}".format(employee),
 		)
-		return ""
+		return "Available"
 
 
 # ==================== WHITELISTED APIs FOR RECEIVING SYNC DATA ====================
