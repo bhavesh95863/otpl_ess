@@ -13,7 +13,8 @@
   "is_team_leader",
   "column_break_7",
   "leave_status",
-  "reports_to"
+  "reports_to",
+  "external_reports_to"
  ],
  "fields": [
   {
@@ -60,9 +61,14 @@
    "fieldname": "reports_to",
    "fieldtype": "Read Only",
    "label": "Reports To"
+  },
+  {
+   "fieldname": "external_reports_to",
+   "fieldtype": "Read Only",
+   "label": "External Reports To"
   }
  ],
- "modified": "2026-04-27 22:24:04.607306",
+ "modified": "2026-04-29 08:25:22.666854",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Pull",

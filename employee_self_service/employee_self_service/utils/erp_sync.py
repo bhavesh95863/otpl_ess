@@ -7,7 +7,44 @@ import frappe
 import json
 import requests
 from frappe import _
-from frappe.utils import now, get_datetime
+from frappe.utils import now, get_datetime, today
+
+
+def get_employee_leave_status(employee):
+	"""
+	Return current Leave Application status for the given employee.
+
+	Looks up a non-cancelled Leave Application that covers today's date and
+	returns its status (e.g. "Approved", "Open"). If multiple exist, the most
+	recently modified one wins. Returns an empty string when none is found.
+	"""
+	if not employee:
+		return ""
+	try:
+		today_date = today()
+		row = frappe.db.sql(
+			"""
+			SELECT status
+			FROM `tabLeave Application`
+			WHERE employee = %s
+				AND status != 'Cancelled'
+				AND from_date <= %s
+				AND to_date >= %s
+			ORDER BY modified DESC
+			LIMIT 1
+			""",
+			(employee, today_date, today_date),
+			as_dict=True,
+		)
+		if row:
+			return row[0].get("status") or ""
+		return ""
+	except Exception:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="get_employee_leave_status failed for {0}".format(employee),
+		)
+		return ""
 
 
 # ==================== WHITELISTED APIs FOR RECEIVING SYNC DATA ====================
@@ -34,6 +71,12 @@ def receive_employee_pull(data, source_site=None):
 			doc.business_line = data.get("business_line")
 			doc.company = data.get("company")
 			doc.is_team_leader = data.get("is_team_leader", 0)
+			if "reports_to" in data:
+				doc.reports_to = data.get("reports_to")
+			if "external_reports_to" in data:
+				doc.external_reports_to = data.get("external_reports_to")
+			if "leave_status" in data:
+				doc.leave_status = data.get("leave_status")
 			doc.flags.ignore_sync = True  # Prevent re-syncing back
 			doc.save(ignore_permissions=True)
 		else:
@@ -45,7 +88,10 @@ def receive_employee_pull(data, source_site=None):
 				"sales_order": data.get("sales_order"),
 				"business_line": data.get("business_line"),
 				"company": data.get("company"),
-				"is_team_leader": data.get("is_team_leader", 0)
+				"is_team_leader": data.get("is_team_leader", 0),
+				"reports_to": data.get("reports_to"),
+				"external_reports_to": data.get("external_reports_to"),
+				"leave_status": data.get("leave_status")
 			})
 			doc.flags.ignore_sync = True  # Prevent re-syncing back
 			doc.insert(ignore_permissions=True)
@@ -400,7 +446,7 @@ def get_employees_for_sync(filters=None):
 	Uses metadata to dynamically get all fields
 	"""
 	try:
-		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so","is_team_leader"]
+		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so","is_team_leader","reports_to","external_report_to"]
 		
 
 		# Get all team leader or manager employees from Employee doctype
@@ -420,7 +466,10 @@ def get_employees_for_sync(filters=None):
 				"sales_order": emp.get("sales_order") if not emp.get("external_sales_order") == 1 else emp.get("external_so"),
 				"business_line": emp.get("business_vertical") if not emp.get("external_sales_order") == 1 else emp.get("external_business_vertical"),
 				"company": emp.get("company"),
-				"is_team_leader": emp.get("is_team_leader", 0)
+				"is_team_leader": emp.get("is_team_leader", 0),
+				"reports_to": emp.get("reports_to"),
+				"external_reports_to": emp.get("external_report_to"),
+				"leave_status": get_employee_leave_status(emp.get("name"))
 			})
 		
 		return {"success": True, "data": employee_data}
@@ -558,6 +607,9 @@ def pull_employees_from_remote(settings):
 							doc.sales_order = emp.get("sales_order")
 							doc.business_line = emp.get("business_line")
 							doc.is_team_leader = emp.get("is_team_leader", 0)
+							doc.reports_to = emp.get("reports_to")
+							doc.external_reports_to = emp.get("external_reports_to")
+							doc.leave_status = emp.get("leave_status")
 							doc.flags.ignore_sync = True
 							doc.save(ignore_permissions=True)
 						else:
@@ -569,7 +621,10 @@ def pull_employees_from_remote(settings):
 								"sales_order": emp.get("sales_order"),
 								"business_line": emp.get("business_line"),
 								"company": emp.get("company"),
-								"is_team_leader": emp.get("is_team_leader", 0)
+								"is_team_leader": emp.get("is_team_leader", 0),
+								"reports_to": emp.get("reports_to"),
+								"external_reports_to": emp.get("external_reports_to"),
+								"leave_status": emp.get("leave_status")
 							})
 							doc.flags.ignore_sync = True
 							doc.insert(ignore_permissions=True)
@@ -1022,7 +1077,10 @@ def sync_employee_to_remote(doc, method=None):
 			"sales_order": doc.get("sales_order") if not doc.get("external_sales_order") == 1 else doc.get("external_so"),
 			"business_line": doc.get("business_vertical") if not doc.get("external_sales_order") == 1 else doc.get("external_business_vertical"),
 			"company": doc.company,
-			"is_team_leader": doc.is_team_leader
+			"is_team_leader": doc.is_team_leader,
+			"reports_to": doc.get("reports_to"),
+			"external_reports_to": doc.get("external_report_to"),
+			"leave_status": get_employee_leave_status(doc.name)
 		}
 		
 		# Get all enabled ERP Sync Settings
@@ -2054,3 +2112,86 @@ def get_external_reportees(employee):
 			title="Error getting external reportees"
 		)
 		return {"success": False, "message": str(e)}
+
+
+
+# ==================== EMPLOYEE LEAVE STATUS CRON ====================
+
+def sync_employee_leave_status_to_remote():
+	"""
+	Scheduled job: Push current leave_status (from Leave Application), reports_to
+	and external_reports_to for all team leader / manager employees to every
+	enabled remote ERP via the receive_employee_pull endpoint. Keeps remote
+	Employee Pull records in sync with the source ERP.
+	"""
+	try:
+		sync_settings_list = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1, "sync_employee": 1},
+			fields=["name"]
+		)
+
+		if not sync_settings_list:
+			return
+
+		employees = frappe.db.sql("""
+			SELECT name, employee_name, company, sales_order, business_vertical,
+				external_sales_order, external_so, external_business_vertical,
+				is_team_leader, reports_to, external_report_to
+			FROM `tabEmployee`
+			WHERE status = 'Active'
+			AND (is_team_leader = 1 OR staff_type = 'Manager')
+		""", as_dict=True)
+
+		if not employees:
+			return
+
+		payloads = []
+		for emp in employees:
+			payloads.append({
+				"employee": emp.get("name"),
+				"employee_name": emp.get("employee_name"),
+				"sales_order": emp.get("sales_order") if not emp.get("external_sales_order") == 1 else emp.get("external_so"),
+				"business_line": emp.get("business_vertical") if not emp.get("external_sales_order") == 1 else emp.get("external_business_vertical"),
+				"company": emp.get("company"),
+				"is_team_leader": emp.get("is_team_leader", 0),
+				"reports_to": emp.get("reports_to"),
+				"external_reports_to": emp.get("external_report_to"),
+				"leave_status": get_employee_leave_status(emp.get("name"))
+			})
+
+		for settings_ref in sync_settings_list:
+			try:
+				settings = frappe.get_doc("ERP Sync Settings", settings_ref.name)
+				if not settings.enabled:
+					continue
+
+				api_key = settings.get_password("api_key")
+				api_secret = settings.get_password("api_secret")
+
+				for payload in payloads:
+					try:
+						send_to_remote_erp(
+							settings.erp_url,
+							api_key,
+							api_secret,
+							"Employee Pull",
+							payload,
+							"Create/Update"
+						)
+					except Exception:
+						frappe.log_error(
+							message=frappe.get_traceback(),
+							title="Leave Status Cron - employee push failed ({0})".format(payload.get("employee"))
+						)
+			except Exception:
+				frappe.log_error(
+					message=frappe.get_traceback(),
+					title="Leave Status Cron - settings push failed ({0})".format(settings_ref.name)
+				)
+
+	except Exception:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error in sync_employee_leave_status_to_remote cron"
+		)
