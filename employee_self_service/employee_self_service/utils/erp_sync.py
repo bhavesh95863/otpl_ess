@@ -1059,67 +1059,89 @@ def process_pending_sync_queue():
 
 # ==================== EMPLOYEE AND SALES ORDER SYNC HOOKS ====================
 
+def _build_employee_sync_payload(emp_doc):
+	"""Build the Employee Pull payload dict from an Employee doc."""
+	return {
+		"employee": emp_doc.name,
+		"employee_name": emp_doc.employee_name,
+		"sales_order": emp_doc.get("sales_order") if not emp_doc.get("external_sales_order") == 1 else emp_doc.get("external_so"),
+		"business_line": emp_doc.get("business_vertical") if not emp_doc.get("external_sales_order") == 1 else emp_doc.get("external_business_vertical"),
+		"company": emp_doc.company,
+		"is_team_leader": emp_doc.get("is_team_leader") or 0,
+		"reports_to": emp_doc.get("reports_to"),
+		"external_reports_to": emp_doc.get("external_report_to"),
+		"leave_status": get_employee_leave_status(emp_doc.name)
+	}
+
+
+def _queue_employee_sync(emp_doc, sync_settings_list):
+	"""Queue an Employee Pull sync job for the given employee on each enabled ERP."""
+	payload = _build_employee_sync_payload(emp_doc)
+	for settings in sync_settings_list:
+		queue_doc = frappe.get_doc({
+			"doctype": "ERP Sync Queue",
+			"erp_sync_settings": settings.name,
+			"doctype_name": "Employee",
+			"document_name": emp_doc.name,
+			"sync_action": "Create/Update",
+			"status": "Pending",
+			"retry_count": 0,
+			"sync_data": json.dumps(payload, default=str)
+		})
+		queue_doc.insert(ignore_permissions=True)
+		frappe.db.commit()
+
+		frappe.enqueue(
+			"employee_self_service.employee_self_service.utils.erp_sync.process_sync_queue_item_employee",
+			queue="default",
+			timeout=300,
+			queue_name=queue_doc.name,
+			is_async=True,
+			now=True
+		)
+
+
 def sync_employee_to_remote(doc, method=None):
 	"""
 	Hook for Employee doctype on_update
-	Only syncs if employee is team leader and relevant fields changed
+	Only syncs if employee is team leader / manager and relevant fields changed.
+	Also syncs the linked reports_to Employee so the manager record exists on
+	the remote ERP for reference.
 	"""
 	try:
-		
 		# Only sync team leaders or managers
 		if not doc.is_team_leader and doc.staff_type != "Manager":
 			return
-		
-		# Prepare employee data
-		employee_data = {
-			"employee": doc.name,
-			"employee_name": doc.employee_name,
-			"sales_order": doc.get("sales_order") if not doc.get("external_sales_order") == 1 else doc.get("external_so"),
-			"business_line": doc.get("business_vertical") if not doc.get("external_sales_order") == 1 else doc.get("external_business_vertical"),
-			"company": doc.company,
-			"is_team_leader": doc.is_team_leader,
-			"reports_to": doc.get("reports_to"),
-			"external_reports_to": doc.get("external_report_to"),
-			"leave_status": get_employee_leave_status(doc.name)
-		}
-		
+
 		# Get all enabled ERP Sync Settings
 		sync_settings = frappe.get_all(
 			"ERP Sync Settings",
 			filters={"enabled": 1, "sync_employee": 1},
 			fields=["name"]
 		)
-		
+
 		if not sync_settings:
 			frappe.log_error("No enabled ERP Sync Settings for Employee sync", "ERP Sync Debug")
 			return
-		
-		# Queue sync for each remote ERP
-		for settings in sync_settings:
-			# Create queue entry
-			queue_doc = frappe.get_doc({
-				"doctype": "ERP Sync Queue",
-				"erp_sync_settings": settings.name,
-				"doctype_name": "Employee",
-				"document_name": doc.name,
-				"sync_action": "Create/Update",
-				"status": "Pending",
-				"retry_count": 0,
-				"sync_data": json.dumps(employee_data, default=str)
-			})
-			queue_doc.insert(ignore_permissions=True)
-			frappe.db.commit()
-			
-			# Enqueue the sync job - immediate execution
-			frappe.enqueue(
-				"employee_self_service.employee_self_service.utils.erp_sync.process_sync_queue_item_employee",
-				queue="default",
-				timeout=300,
-				queue_name=queue_doc.name,
-				is_async=True,
-				now=True  # Execute immediately
-			)
-			
+
+		# Queue sync for the employee itself
+		_queue_employee_sync(doc, sync_settings)
+
+		# Also push the reports_to employee (the manager) so that the remote ERP
+		# always has the manager record available, even if the manager themselves
+		# isn't a team leader / manager (and so wouldn't otherwise be synced).
+		reports_to_id = doc.get("reports_to")
+		if reports_to_id and reports_to_id != doc.name:
+			try:
+				if frappe.db.exists("Employee", reports_to_id):
+					manager_doc = frappe.get_doc("Employee", reports_to_id)
+					_queue_employee_sync(manager_doc, sync_settings)
+			except Exception:
+				frappe.log_error(
+					message=frappe.get_traceback(),
+					title="Error syncing reports_to Employee {0}".format(reports_to_id)
+				)
+
 	except Exception as e:
 		frappe.log_error(
 			message=frappe.get_traceback(),
