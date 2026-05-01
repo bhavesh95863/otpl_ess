@@ -17,6 +17,7 @@ All formulas are taken from `salary_rules` sheet of the reference Excel
 from __future__ import unicode_literals
 
 from collections import defaultdict
+from calendar import monthrange
 from datetime import timedelta
 
 import frappe
@@ -566,20 +567,25 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	payable_days = max(payable_days, 0)
 
 	# ---- Col R: Salary Amount -------------------------------------------------
-	per_day = (gross / days_in_period) if days_in_period else 0
+	# Per spec, the salary divisor is the number of days in the calendar
+	# month of `from_date` (e.g. 30/31/28), NOT the length of the selected
+	# payroll period. This way a partial-month run (10 days, etc.) prorates
+	# correctly off the monthly gross.
+	days_in_month = monthrange(from_date.year, from_date.month)[1]
+	per_day = (gross / days_in_month) if days_in_month else 0
 	salary_amount = per_day * payable_days
 
 	# ---- Col S: OT/HRA/Petrol -------------------------------------------------
 	ot_hra_petrol = 0.0
 	if is_worker_noida_or_hwr and full_checkin_days and gross:
 		ot_hours = (checkin_seconds / 3600.0) - (full_checkin_days * STD_HOURS_PER_DAY)
-		hourly_rate = gross / (days_in_period * SALARY_HOURS_PER_DAY) if days_in_period else 0
+		hourly_rate = gross / (days_in_month * SALARY_HOURS_PER_DAY) if days_in_month else 0
 		ot_hra_petrol = ot_hours * hourly_rate
 
 	# ---- Col T: Incentive -----------------------------------------------------
 	incentive = 0.0
 	present_count = len(present_dates) + 0.5 * len(half_day_dates)
-	if is_worker_haridwar and present_count >= days_in_period:
+	if is_worker_haridwar and present_count >= days_in_month:
 		incentive = WORKER_HARIDWAR_INCENTIVE
 
 	# ---- Col U: Total Salary Due ---------------------------------------------
@@ -587,13 +593,13 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 
 	# ---- Col V: PF Employee --------------------------------------------------
 	pf_employee = 0.0
-	if emp.get("uan_no") and basic and days_in_period:
-		pf_employee = (basic / days_in_period) * payable_days * PF_EMPLOYEE_RATE
+	if emp.get("uan_no") and basic and days_in_month:
+		pf_employee = (basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
 
 	# ---- Col W: ESIC Employee ------------------------------------------------
 	esic_employee = 0.0
-	if emp.get("esic_no") and gross and gross < ESIC_GROSS_LIMIT and days_in_period:
-		esic_employee = (gross / days_in_period) * payable_days * ESIC_EMPLOYEE_RATE
+	if emp.get("esic_no") and gross and gross < ESIC_GROSS_LIMIT and days_in_month:
+		esic_employee = (gross / days_in_month) * payable_days * ESIC_EMPLOYEE_RATE
 
 	# ---- Col Y / Z: Employer shares -------------------------------------------
 	pf_employer = pf_employee * PF_EMPLOYER_FACTOR
@@ -865,14 +871,15 @@ def get_calculation_trace(doc, employee):
 	balance_cl = cl_balance - adj_cl
 
 	payable_days = max(days_worked - late_ded - absent_no_info + adj_cl + adj_al, 0)
-	per_day = (gross / days_in_period) if days_in_period else 0
+	days_in_month = monthrange(from_date.year, from_date.month)[1]
+	per_day = (gross / days_in_month) if days_in_month else 0
 	salary_amount = per_day * payable_days
 
 	ot = 0.0
 	ot_explain = "N/A (only Worker @ Noida/Haridwar)"
 	if is_worker_noida_or_hwr and full_checkin_days and gross:
 		ot_hours = (checkin_seconds / 3600.0) - (full_checkin_days * STD_HOURS_PER_DAY)
-		hourly_rate = gross / (days_in_period * SALARY_HOURS_PER_DAY)
+		hourly_rate = gross / (days_in_month * SALARY_HOURS_PER_DAY)
 		ot = ot_hours * hourly_rate
 		ot_explain = ("OT hrs = {0:.2f}h - ({1} days * {2}h) = {3:.2f}h; rate = {4:.2f}/h ⇒ {5:.2f}"
 		              .format(checkin_seconds / 3600.0, full_checkin_days,
@@ -880,18 +887,18 @@ def get_calculation_trace(doc, employee):
 
 	incentive = 0.0
 	pcount = len(present_dates) + 0.5 * len(half_day_dates)
-	if is_worker_haridwar and pcount >= days_in_period:
+	if is_worker_haridwar and pcount >= days_in_month:
 		incentive = WORKER_HARIDWAR_INCENTIVE
 
 	total_due = salary_amount + ot + incentive
 
 	pf_emp = 0.0
-	if emp.get("uan_no") and basic and days_in_period:
-		pf_emp = (basic / days_in_period) * payable_days * PF_EMPLOYEE_RATE
+	if emp.get("uan_no") and basic and days_in_month:
+		pf_emp = (basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
 
 	esic_emp = 0.0
-	if emp.get("esic_no") and gross and gross < ESIC_GROSS_LIMIT and days_in_period:
-		esic_emp = (gross / days_in_period) * payable_days * ESIC_EMPLOYEE_RATE
+	if emp.get("esic_no") and gross and gross < ESIC_GROSS_LIMIT and days_in_month:
+		esic_emp = (gross / days_in_month) * payable_days * ESIC_EMPLOYEE_RATE
 
 	pf_er = pf_emp * PF_EMPLOYER_FACTOR
 	esic_er = esic_emp * ESIC_EMPLOYER_FACTOR
@@ -910,7 +917,7 @@ def get_calculation_trace(doc, employee):
 				("Employee", "{0} ({1})".format(emp.get("employee_name"), employee)),
 				("Sales Order / Business", "{0} / {1}".format(emp.get("sales_order") or "-", emp.get("business_line") or "-")),
 				("Staff Type / Location", "{0} / {1}".format(staff_type or "-", location or "-")),
-				("Period", "{0} → {1} ({2} days)".format(from_date, to_date, days_in_period)),
+				("Period", "{0} → {1} ({2} days selected; {3} days in month)".format(from_date, to_date, days_in_period, days_in_month)),
 				("UAN No / ESIC No", "{0} / {1}".format(emp.get("uan_no") or "-", emp.get("esic_no") or "-")),
 				("Gross (Rate of Wages)", _fmt(gross)),
 				("Basic Salary", _fmt(basic)),
@@ -967,22 +974,22 @@ def get_calculation_trace(doc, employee):
 				 .format(_fmt(payable_days), _fmt(days_worked), _fmt(late_ded),
 				         absent_no_info, _fmt(adj_cl), _fmt(adj_al))),
 				("(R) Salary Amount",
-				 "{0} = (Gross {1} / {2}) × Q {3} = {4} × {3}"
-				 .format(_fmt(salary_amount), _fmt(gross), days_in_period,
+				 "{0} = (Gross {1} / {2} days-in-month) × Q {3} = {4} × {3}"
+				 .format(_fmt(salary_amount), _fmt(gross), days_in_month,
 				         _fmt(payable_days), _fmt(per_day))),
 				("(S) OT/HRA/Petrol", "{0}  —  {1}".format(_fmt(ot), ot_explain)),
 				("(T) Incentive",
 				 "{0}  —  {1}".format(_fmt(incentive),
-				                      "Worker@Haridwar present every day ⇒ ₹200"
+				                      "Worker@Haridwar present every day of the month ({0}) ⇒ ₹200".format(days_in_month)
 				                      if is_worker_haridwar else "N/A")),
 				("(U) Total Salary Due", "{0} = R + S + T".format(_fmt(total_due))),
 				("(V) PF Employee",
 				 "{0}  —  {1}".format(_fmt(pf_emp),
-				                      "(Basic {0}/{1}) × Q × 12%".format(_fmt(basic), days_in_period)
+				                      "(Basic {0}/{1}) × Q × 12%".format(_fmt(basic), days_in_month)
 				                      if emp.get("uan_no") else "0 (no UAN)")),
 				("(W) ESIC Employee",
 				 "{0}  —  {1}".format(_fmt(esic_emp),
-				                      "(Gross/{0}) × Q × 0.75%".format(days_in_period)
+				                      "(Gross/{0}) × Q × 0.75%".format(days_in_month)
 				                      if (emp.get("esic_no") and gross < ESIC_GROSS_LIMIT)
 				                      else ("0 (Gross ≥ {0})".format(ESIC_GROSS_LIMIT)
 				                            if emp.get("esic_no") else "0 (no ESIC)"))),
