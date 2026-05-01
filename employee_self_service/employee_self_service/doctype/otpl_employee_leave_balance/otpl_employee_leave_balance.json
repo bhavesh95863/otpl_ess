@@ -1,0 +1,138 @@
+{
+ "autoname": "field:employee",
+ "creation": "2026-04-29 12:00:00",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "column_break_1",
+  "as_on_date",
+  "section_break_balances",
+  "al_balance",
+  "cl_balance",
+  "column_break_2",
+  "year_opening_al",
+  "year_opening_cl",
+  "fiscal_year"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Employee",
+   "options": "Employee",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Employee Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "as_on_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Balances As On"
+  },
+  {
+   "fieldname": "section_break_balances",
+   "fieldtype": "Section Break",
+   "label": "Current Balances"
+  },
+  {
+   "default": "0",
+   "fieldname": "al_balance",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "AL Balance",
+   "precision": "2"
+  },
+  {
+   "default": "0",
+   "fieldname": "cl_balance",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "CL Balance",
+   "precision": "2"
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "year_opening_al",
+   "fieldtype": "Float",
+   "label": "Year Opening AL",
+   "precision": "2",
+   "description": "AL carried at the start of the fiscal year (Set manually)."
+  },
+  {
+   "default": "0",
+   "fieldname": "year_opening_cl",
+   "fieldtype": "Float",
+   "label": "Year Opening CL",
+   "precision": "2",
+   "description": "CL allocation at the start of the fiscal year (Set manually)."
+  },
+  {
+   "fieldname": "fiscal_year",
+   "fieldtype": "Link",
+   "label": "Fiscal Year",
+   "options": "Fiscal Year"
+  }
+ ],
+ "modified": "2026-04-29 12:00:00",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Employee Leave Balance",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR User",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
