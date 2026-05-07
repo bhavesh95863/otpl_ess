@@ -52,7 +52,7 @@ class TravelRequest(Document):
 				frappe.db.set_value("Employee", self.employee, "travelling", 1)
 		elif today > arrival:
 			# Already past arrival
-			apply_completed_travel(self.employee, self.purpose)
+			apply_completed_travel(self.name, self.employee, self.purpose)
 
 	def reverse_employee_travel_status(self):
 		"""Reverse changes made by this travel request on deletion."""
@@ -78,6 +78,8 @@ class TravelRequest(Document):
 				frappe.db.set_value("Employee", self.employee, {"employee_availability": "", "travelling": 0})
 			elif self.purpose == "Going back to work":
 				frappe.db.set_value("Employee", self.employee, "employee_availability", "On Leave")
+			# Clear the one-shot flag so it can be re-applied if a new request is created later
+			frappe.db.set_value("Travel Request", self.name, "post_arrival_processed", 0)
 
 	def validate_dates(self):
 		if self.date_of_departure and self.date_of_arrival:
@@ -160,8 +162,17 @@ class TravelRequest(Document):
 		)
 
 
-def apply_completed_travel(employee, purpose):
-	"""Apply post-arrival changes for a completed travel request."""
+def apply_completed_travel(travel_request_name, employee, purpose):
+	"""Apply post-arrival changes for a completed travel request — ONCE.
+
+	Uses the `post_arrival_processed` flag on the Travel Request to ensure
+	the transition (e.g. setting employee_availability='On Leave' for
+	'Going on Leave') runs exactly once on the day after Date of Arrival,
+	not every subsequent daily run.
+	"""
+	if frappe.db.get_value("Travel Request", travel_request_name, "post_arrival_processed"):
+		return False
+
 	if purpose == "Going on Leave":
 		frappe.db.set_value("Employee", employee, {"employee_availability": "On Leave", "travelling": 0})
 	elif purpose == "Going back to work":
@@ -169,6 +180,9 @@ def apply_completed_travel(employee, purpose):
 	else:
 		# Going for official work
 		frappe.db.set_value("Employee", employee, "travelling", 0)
+
+	frappe.db.set_value("Travel Request", travel_request_name, "post_arrival_processed", 1)
+	return True
 
 
 def process_travel_requests():
@@ -198,6 +212,38 @@ def process_travel_requests():
 		},
 		fields=["name", "employee", "purpose"]
 	)
+	active_employees = {req.employee for req in active_requests}
+
+	# Completed travel: today > arrival
+	# Process completed FIRST so active travel below can override any
+	# stale `travelling=0` reset for employees who are still travelling.
+	# Only fetch requests that have NOT been processed yet — the post-arrival
+	# transition (e.g. 'Going on Leave' -> employee_availability='On Leave')
+	# must run exactly once, the first run after Date of Arrival.
+	completed_requests = frappe.get_all(
+		"Travel Request",
+		filters={
+			"status": "Approved",
+			"date_of_arrival": ["<", today],
+			"post_arrival_processed": 0
+		},
+		fields=["name", "employee", "purpose"]
+	)
+
+	for req in completed_requests:
+		try:
+			# Skip if employee currently has an active travel — the active
+			# loop below will set the correct in-travel state. Mark this old
+			# completed request as processed so it never fires again.
+			if req.employee in active_employees:
+				frappe.db.set_value("Travel Request", req.name, "post_arrival_processed", 1)
+				continue
+			apply_completed_travel(req.name, req.employee, req.purpose)
+		except Exception:
+			frappe.log_error(
+				message=frappe.get_traceback(),
+				title="Travel Request Error: {0}".format(req.name)
+			)
 
 	for req in active_requests:
 		try:
@@ -208,27 +254,6 @@ def process_travel_requests():
 				travelling = frappe.db.get_value("Employee", req.employee, "travelling")
 				if not travelling:
 					frappe.db.set_value("Employee", req.employee, "travelling", 1)
-			frappe.db.commit()
-		except Exception:
-			frappe.log_error(
-				message=frappe.get_traceback(),
-				title="Travel Request Error: {0}".format(req.name)
-			)
-
-	# Completed travel: today > arrival
-	completed_requests = frappe.get_all(
-		"Travel Request",
-		filters={
-			"status": "Approved",
-			"date_of_arrival": ["<", today]
-		},
-		fields=["name", "employee", "purpose"]
-	)
-
-	for req in completed_requests:
-		try:
-			apply_completed_travel(req.employee, req.purpose)
-			frappe.db.commit()
 		except Exception:
 			frappe.log_error(
 				message=frappe.get_traceback(),
