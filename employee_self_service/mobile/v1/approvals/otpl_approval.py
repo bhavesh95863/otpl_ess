@@ -111,8 +111,8 @@ def approve_otpl_leave():
             )
 
         # Auto-detect if it's a Leave Pull or OTPL Leave
-        is_leave_pull = frappe.db.exists("Leave Pull", leave_name)
-        is_otpl_leave = frappe.db.exists("OTPL Leave", leave_name)
+        is_leave_pull = frappe.db.exists("Leave Pull", {"name": leave_name,"approver_user":frappe.session.user})
+        is_otpl_leave = frappe.db.exists("OTPL Leave", {"name": leave_name, "approver": frappe.session.user})
 
         if not is_leave_pull and not is_otpl_leave:
             return gen_response(500, "Leave application does not exist")
@@ -161,6 +161,7 @@ def approve_otpl_leave():
             return gen_response(200, "Leave application approved successfully")
 
     except frappe.PermissionError:
+        frappe.log_error(title=_("OTPL Leave Approval Permission Error"), message=frappe.get_traceback())
         return gen_response(500, "Not permitted to approve OTPL Leave")
     except Exception as e:
         return exception_handler(e)
