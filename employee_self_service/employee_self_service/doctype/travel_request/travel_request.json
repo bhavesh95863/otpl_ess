@@ -23,7 +23,8 @@
   "has_external_report_to",
   "external_report_to",
   "section_break_16",
-  "remarks"
+  "remarks",
+  "post_arrival_processed"
  ],
  "fields": [
   {
@@ -141,6 +142,15 @@
    "fieldname": "external_report_to",
    "fieldtype": "Data",
    "label": "External Report To"
+  },
+  {
+   "default": "0",
+   "fieldname": "post_arrival_processed",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Post Arrival Processed",
+   "no_copy": 1,
+   "read_only": 1
   }
  ],
  "modified": "2026-04-09 02:12:15.066014",
