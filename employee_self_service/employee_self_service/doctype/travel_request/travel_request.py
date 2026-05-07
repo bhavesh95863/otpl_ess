@@ -131,6 +131,8 @@ class TravelRequest(Document):
 				manager_report_to = frappe.db.get_value("Employee", report_to, "reports_to")
 				if manager_report_to:
 					self.report_to = manager_report_to
+			else:
+				self.report_to = report_to
 		else:
 			self.report_to = None
 		if business_line_doc.external_reporting_manager:
@@ -146,6 +148,7 @@ class TravelRequest(Document):
 		covering this travel request's date_of_departure."""
 		if not employee or not self.date_of_departure:
 			return False
+		today = getdate(nowdate())
 		return bool(
 			frappe.db.exists(
 				"Leave Application",
@@ -153,8 +156,8 @@ class TravelRequest(Document):
 					"employee": employee,
 					"status": "Approved",
 					"docstatus": 1,
-					"from_date": ["<=", self.date_of_departure],
-					"to_date": [">=", self.date_of_departure],
+					"from_date": ["<=", today],
+					"to_date": [">=", today],
 				},
 			)
 		)

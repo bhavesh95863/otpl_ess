@@ -162,7 +162,7 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		"Employee Checkin",
 		filters={
 			"employee": employee,
-			"time": ["between", [date, add_days(date, 1)]]
+			"time": ["between", [date,date]]
 		},
 		fields=["time", "log_type", "approval_required", "approved", "rejected"],
 		order_by="time asc"
@@ -571,7 +571,6 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 
 		attendance.insert(ignore_permissions=True)
 		attendance.submit()
-		frappe.db.commit()
 
 	except Exception as e:
 		traceback_msg = frappe.get_traceback()
