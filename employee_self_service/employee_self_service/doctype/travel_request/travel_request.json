@@ -7,6 +7,7 @@
  "field_order": [
   "employee",
   "employee_name",
+  "applicant_mobile_no",
   "department",
   "column_break_4",
   "date_of_departure",
@@ -20,6 +21,8 @@
   "status",
   "column_break_14",
   "report_to",
+  "approver_name",
+  "approver_mobile_no",
   "has_external_report_to",
   "external_report_to",
   "section_break_16",
@@ -42,6 +45,12 @@
    "fieldtype": "Read Only",
    "in_list_view": 1,
    "label": "Employee Name"
+  },
+  {
+   "fieldname": "applicant_mobile_no",
+   "fieldtype": "Data",
+   "label": "Applicant Mobile No",
+   "read_only": 1
   },
   {
    "fetch_from": "employee.department",
@@ -133,6 +142,18 @@
    "read_only": 1
   },
   {
+   "fieldname": "approver_name",
+   "fieldtype": "Data",
+   "label": "Approver Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approver_mobile_no",
+   "fieldtype": "Data",
+   "label": "Approver Mobile No",
+   "read_only": 1
+  },
+  {
    "default": "0",
    "fieldname": "has_external_report_to",
    "fieldtype": "Check",
@@ -153,7 +174,7 @@
    "read_only": 1
   }
  ],
- "modified": "2026-04-09 02:12:15.066014",
+ "modified": "2026-04-10 02:12:15.066014",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Travel Request",

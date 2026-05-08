@@ -7,7 +7,11 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
-from employee_self_service.employee_self_service.utils.leave_escalation import resolve_external_manager_pull
+from employee_self_service.employee_self_service.utils.leave_escalation import (
+	resolve_external_manager_pull,
+	get_employee_contact,
+	get_employee_pull_contact,
+)
 from erpnext.hr.doctype.leave_application.leave_application import get_leave_balance_on
 
 class OTPLLeave(Document):
@@ -45,6 +49,13 @@ class OTPLLeave(Document):
 
 		# Add any necessary validation logic here
 		employee_doc = frappe.get_doc("Employee", self.employee)
+
+		# Track approver contact details (name + mobile) as we determine the approver.
+		# Cannot use fetch_from since approver may be either an internal User
+		# or an external Employee Pull record.
+		approver_name = None
+		approver_mobile = None
+
 		if (
 			employee_doc.staff_type == "Worker"
 			and employee_doc.location == "Site"
@@ -71,6 +82,7 @@ class OTPLLeave(Document):
 					self.approver = user
 					self.is_external_manager = 0
 					self.external_manager = ""
+					approver_name, approver_mobile = get_employee_contact(report_to)
 			if business_line_doc.external_reporting_manager:
 				active_pull = resolve_external_manager_pull(business_line_doc.external_reporting_manager)
 				external_manager = active_pull.get("employee") if active_pull else business_line_doc.external_reporting_manager
@@ -78,6 +90,9 @@ class OTPLLeave(Document):
 				self.is_external_manager = 1
 				self.external_manager = external_manager
 				self.approver = ""
+				if active_pull:
+					approver_name = active_pull.get("employee_name")
+					approver_mobile = active_pull.get("mobile_no")
 		elif employee_doc.external_reporting_manager == 1:
 			active_pull = resolve_external_manager_pull(employee_doc.external_report_to)
 			report_to = active_pull.get("employee") if active_pull else None
@@ -85,6 +100,9 @@ class OTPLLeave(Document):
 			self.is_external_manager = 1
 			self.external_manager = report_to
 			self.approver = ""
+			if active_pull:
+				approver_name = active_pull.get("employee_name")
+				approver_mobile = active_pull.get("mobile_no")
 		else:
 			if employee_doc.reports_to:
 				report_to = employee_doc.reports_to
@@ -99,6 +117,16 @@ class OTPLLeave(Document):
 					self.approver = user
 					self.is_external_manager = 0
 					self.external_manager = ""
+					approver_name, approver_mobile = get_employee_contact(report_to)
+
+		# Applicant contact + Approver contact
+		applicant_name, applicant_mobile = get_employee_contact(self.employee)
+		if applicant_name and not self.employee_name:
+			self.employee_name = applicant_name
+		self.applicant_mobile_no = applicant_mobile or ""
+		self.approver_name = approver_name or ""
+		self.approver_mobile_no = approver_mobile or ""
+
 		if employee_doc.location == "Site" and employee_doc.staff_type == "Worker":
 			if self.short_leave == 1 or self.half_day == 1:
 				frappe.throw("Short Leave or Half Day not allowed")

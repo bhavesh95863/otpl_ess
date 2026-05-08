@@ -62,6 +62,7 @@ def receive_employee_pull(data, source_site=None):
 			doc = frappe.get_doc("Employee Pull", name)
 			doc.employee = data.get("employee")
 			doc.employee_name = data.get("employee_name")
+			doc.mobile_no = data.get("mobile_no")
 			doc.sales_order = data.get("sales_order")
 			doc.business_line = data.get("business_line")
 			doc.company = data.get("company")
@@ -80,6 +81,7 @@ def receive_employee_pull(data, source_site=None):
 				"doctype": "Employee Pull",
 				"employee": data.get("employee"),
 				"employee_name": data.get("employee_name"),
+				"mobile_no": data.get("mobile_no"),
 				"sales_order": data.get("sales_order"),
 				"business_line": data.get("business_line"),
 				"company": data.get("company"),
@@ -441,7 +443,7 @@ def get_employees_for_sync(filters=None):
 	Uses metadata to dynamically get all fields
 	"""
 	try:
-		field_names = ["name", "employee_name", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so","is_team_leader","reports_to","external_report_to"]
+		field_names = ["name", "employee_name", "cell_number", "company","sales_order","business_vertical","external_sales_order","external_order","external_business_vertical","external_so","is_team_leader","reports_to","external_report_to"]
 		
 
 		# Get all team leader or manager employees from Employee doctype
@@ -449,7 +451,7 @@ def get_employees_for_sync(filters=None):
 			SELECT {fields}
 			FROM `tabEmployee`
 			WHERE status = 'Active'
-			AND (is_team_leader = 1 OR staff_type = 'Manager')
+			AND (is_team_leader = 1 OR staff_type = 'Manager' OR staff_type = 'Director' OR staff_type = 'Partner')
 		""".format(fields=", ".join(field_names)), as_dict=True)
 		
 		# Transform to Employee Pull format
@@ -458,6 +460,7 @@ def get_employees_for_sync(filters=None):
 			employee_data.append({
 				"employee": emp.get("name"),
 				"employee_name": emp.get("employee_name"),
+				"mobile_no": emp.get("cell_number"),
 				"sales_order": emp.get("sales_order") if not emp.get("external_sales_order") == 1 else emp.get("external_so"),
 				"business_line": emp.get("business_vertical") if not emp.get("external_sales_order") == 1 else emp.get("external_business_vertical"),
 				"company": emp.get("company"),
@@ -599,6 +602,7 @@ def pull_employees_from_remote(settings):
 							# Update existing record
 							doc = frappe.get_doc("Employee Pull", existing)
 							doc.employee_name = emp.get("employee_name")
+							doc.mobile_no = emp.get("mobile_no")
 							doc.sales_order = emp.get("sales_order")
 							doc.business_line = emp.get("business_line")
 							doc.is_team_leader = emp.get("is_team_leader", 0)
@@ -613,6 +617,7 @@ def pull_employees_from_remote(settings):
 								"doctype": "Employee Pull",
 								"employee": emp.get("employee"),
 								"employee_name": emp.get("employee_name"),
+								"mobile_no": emp.get("mobile_no"),
 								"sales_order": emp.get("sales_order"),
 								"business_line": emp.get("business_line"),
 								"company": emp.get("company"),
@@ -791,6 +796,7 @@ def get_sync_data(doc):
 			"name": doc.name,
 			"employee": doc.get("employee"),
 			"employee_name": doc.get("employee_name"),
+			"mobile_no": doc.get("mobile_no"),
 			"sales_order": doc.get("sales_order"),
 			"business_line": doc.get("business_line"),
 			"company": doc.get("company")

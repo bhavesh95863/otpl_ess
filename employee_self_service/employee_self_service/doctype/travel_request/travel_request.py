@@ -8,7 +8,11 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import date_diff, getdate, nowdate
 from employee_self_service.employee_self_service.utils.erp_sync import push_travel_to_remote_erp
-from employee_self_service.employee_self_service.utils.leave_escalation import resolve_external_manager_pull
+from employee_self_service.employee_self_service.utils.leave_escalation import (
+	resolve_external_manager_pull,
+	get_employee_contact,
+	get_employee_pull_contact,
+)
 
 
 class TravelRequest(Document):
@@ -17,6 +21,7 @@ class TravelRequest(Document):
 		self.validate_date_conflict()
 		self.calculate_number_of_days()
 		self.set_approver()
+		self.set_contact_details()
 
 	def on_update(self):
 		"""Trigger sync to remote ERP when travel request has external report_to"""
@@ -144,6 +149,28 @@ class TravelRequest(Document):
 		else:
 			self.has_external_report_to = 0
 			self.external_report_to = None
+
+	def set_contact_details(self):
+		"""Populate applicant and approver contact details (name + mobile).
+
+		Cannot use fetch_from since approver may be either an internal Employee
+		(report_to) or an external Employee Pull record (external_report_to).
+		"""
+		# Applicant
+		applicant_name, applicant_mobile = get_employee_contact(self.employee)
+		if applicant_name and not self.employee_name:
+			self.employee_name = applicant_name
+		self.applicant_mobile_no = applicant_mobile or ""
+
+		# Approver
+		approver_name = None
+		approver_mobile = None
+		if self.has_external_report_to and self.external_report_to:
+			approver_name, approver_mobile = get_employee_pull_contact(self.external_report_to)
+		elif self.report_to:
+			approver_name, approver_mobile = get_employee_contact(self.report_to)
+		self.approver_name = approver_name or ""
+		self.approver_mobile_no = approver_mobile or ""
 
 	def _is_on_leave(self, employee):
 		"""Check whether the given employee has an approved Leave Application

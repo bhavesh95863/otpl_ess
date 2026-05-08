@@ -15,9 +15,32 @@ def get_employee_pull(pull_name):
 	return frappe.db.get_value(
 		"Employee Pull",
 		pull_name,
-		["name", "employee", "leave_status", "reports_to", "external_reports_to"],
+		["name", "employee", "employee_name", "mobile_no", "leave_status", "reports_to", "external_reports_to"],
 		as_dict=True,
 	)
+
+
+def get_employee_contact(employee):
+	"""Return (employee_name, mobile_no) for an Employee record."""
+	if not employee:
+		return None, None
+	row = frappe.db.get_value(
+		"Employee",
+		employee,
+		["employee_name", "cell_number"],
+		as_dict=True,
+	)
+	if not row:
+		return None, None
+	return row.get("employee_name"), row.get("cell_number")
+
+
+def get_employee_pull_contact(pull_name):
+	"""Return (employee_name, mobile_no) for an Employee Pull record."""
+	pull = get_employee_pull(pull_name)
+	if not pull:
+		return None, None
+	return pull.get("employee_name"), pull.get("mobile_no")
 
 
 def resolve_external_manager_pull(pull_name):
