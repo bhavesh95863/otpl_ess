@@ -14,51 +14,54 @@ from employee_self_service.employee_self_service.report.attendance_discrepancy_r
 
 @frappe.whitelist()
 def send_attendance_discrepancy_email(date=None):
-	"""Build the Attendance Discrepancy Report for the given date (default: yesterday)
-	and email it to the recipients configured in Employee Self Service Settings.
-	Designed to run daily from the scheduler.
-	"""
-	target_date = getdate(date) if date else getdate(add_days(today(), -1))
+	try:
+		"""Build the Attendance Discrepancy Report for the given date (default: yesterday)
+		and email it to the recipients configured in Employee Self Service Settings.
+		Designed to run daily from the scheduler.
+		"""
+		target_date = getdate(date) if date else getdate(add_days(today(), -1))
 
-	recipients = _get_recipients()
-	if not recipients:
+		recipients = _get_recipients()
+		if not recipients:
+			frappe.logger().info(
+				"Attendance Discrepancy Email skipped: no recipients configured."
+			)
+			return {"sent": False, "reason": "No recipients configured"}
+
+		columns, data = run_discrepancy_report({"date": str(target_date)})
+
+		subject = "Attendance Discrepancy Report - {0}".format(target_date)
+		html = _build_email_html(target_date, columns, data)
+
+		# CSV attachment for easy review
+		attachments = []
+		if data:
+			csv_content = _build_csv(columns, data)
+			attachments.append({
+				"fname": "attendance_discrepancy_{0}.csv".format(target_date),
+				"fcontent": csv_content,
+			})
+
+		frappe.sendmail(
+			recipients=recipients,
+			subject=subject,
+			message=html,
+			attachments=attachments,
+			reference_doctype="Report",
+			reference_name="Attendance Discrepancy Report",
+			now=True,
+		)
+
 		frappe.logger().info(
-			"Attendance Discrepancy Email skipped: no recipients configured."
+			"Attendance Discrepancy Email sent for {0} to {1} ({2} rows)".format(
+				target_date, ", ".join(recipients), len(data)
+			)
 		)
-		return {"sent": False, "reason": "No recipients configured"}
 
-	columns, data = run_discrepancy_report({"date": str(target_date)})
-
-	subject = "Attendance Discrepancy Report - {0}".format(target_date)
-	html = _build_email_html(target_date, columns, data)
-
-	# CSV attachment for easy review
-	attachments = []
-	if data:
-		csv_content = _build_csv(columns, data)
-		attachments.append({
-			"fname": "attendance_discrepancy_{0}.csv".format(target_date),
-			"fcontent": csv_content,
-		})
-
-	frappe.sendmail(
-		recipients=recipients,
-		subject=subject,
-		message=html,
-		attachments=attachments,
-		reference_doctype="Report",
-		reference_name="Attendance Discrepancy Report",
-		now=True,
-	)
-
-	frappe.logger().info(
-		"Attendance Discrepancy Email sent for {0} to {1} ({2} rows)".format(
-			target_date, ", ".join(recipients), len(data)
-		)
-	)
-
-	return {"sent": True, "date": str(target_date), "rows": len(data), "recipients": recipients}
-
+		return {"sent": True, "date": str(target_date), "rows": len(data), "recipients": recipients}
+	except Exception as e:
+		frappe.log_error(title="Error sending Attendance Discrepancy Email", message=frappe.get_traceback())
+		return {"sent": False, "reason": str(e)}
 
 def _get_recipients():
 	raw = frappe.db.get_single_value(
