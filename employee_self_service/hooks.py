@@ -180,6 +180,9 @@ scheduler_events = {
             "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance",
             "employee_self_service.employee_self_service.doctype.travel_request.travel_request.process_travel_requests"
         ],
+        "45 0 * * *": [
+            "employee_self_service.employee_self_service.utils.attendance_discrepancy_email.send_attendance_discrepancy_email"
+        ],
         "*/5 * * * *": [
             "employee_self_service.employee_self_service.utils.erp_sync.process_pending_sync_queue"
         ]

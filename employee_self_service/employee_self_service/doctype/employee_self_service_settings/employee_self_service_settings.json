@@ -46,7 +46,9 @@
   "skip_approval",
   "column_break_40",
   "auto_location_track_for_team_leader",
-  "location_update_time"
+  "location_update_time",
+  "attendance_discrepancy_section",
+  "attendance_discrepancy_recipients"
  ],
  "fields": [
   {
@@ -274,10 +276,21 @@
    "fieldname": "location_update_time",
    "fieldtype": "Int",
    "label": "Location Update Time"
+  },
+  {
+   "fieldname": "attendance_discrepancy_section",
+   "fieldtype": "Section Break",
+   "label": "Attendance Discrepancy Email"
+  },
+  {
+   "description": "Comma-separated list of email addresses to receive the daily Attendance Discrepancy Report. Leave blank to disable.",
+   "fieldname": "attendance_discrepancy_recipients",
+   "fieldtype": "Small Text",
+   "label": "Attendance Discrepancy Email Recipients"
   }
  ],
  "issingle": 1,
- "modified": "2026-03-21 22:03:44.987539",
+ "modified": "2026-03-22 22:03:44.987539",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",
