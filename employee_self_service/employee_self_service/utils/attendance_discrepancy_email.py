@@ -85,7 +85,6 @@ def _build_email_html(target_date, columns, data):
 		return """
 			<p>Hi,</p>
 			<p>No attendance discrepancies were found for <b>{date}</b>. All attendance records look clean.</p>
-			<p>Regards,<br>Employee Self Service</p>
 		""".format(date=target_date)
 
 	# Summary by discrepancy type
@@ -154,7 +153,6 @@ def _build_email_html(target_date, columns, data):
 			<ul>{summary}</ul>
 			{table}
 			<p style="margin-top:16px;">A CSV copy is attached for offline review.</p>
-			<p>Regards,<br>Employee Self Service</p>
 		</div>
 	""".format(date=target_date, total=len(data), summary=summary_html, table=table_html)
 
