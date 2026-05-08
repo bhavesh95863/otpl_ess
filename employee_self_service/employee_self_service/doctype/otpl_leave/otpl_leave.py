@@ -9,6 +9,7 @@ from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_d
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
 from employee_self_service.employee_self_service.utils.leave_escalation import (
 	resolve_external_manager_pull,
+	resolve_approver_chain,
 	get_employee_contact,
 	get_employee_pull_contact,
 )
@@ -69,55 +70,103 @@ class OTPLLeave(Document):
 			business_line_doc = frappe.get_doc("Business Line", business_vertical)
 			if not business_line_doc.reporting_manager and not business_line_doc.external_reporting_manager:
 				frappe.throw("Business Line does not have a Reporting Manager assigned. Please contact HR.")
+
+			# Reset before resolving — chain may transition between internal/external.
+			self.approver = ""
+			self.is_external_manager = 0
+			self.external_manager = ""
+
 			if business_line_doc.reporting_manager:
-				report_to = business_line_doc.reporting_manager
-				# If the business line reporting manager is on leave on this leave's from_date,
-				# escalate to that manager's reports_to.
-				if self._is_on_leave(report_to):
-					manager_report_to = frappe.db.get_value("Employee", report_to, "reports_to")
-					if manager_report_to:
-						report_to = manager_report_to
+				resolved = resolve_approver_chain(
+					{"type": "internal", "employee": business_line_doc.reporting_manager},
+					on_date=self.from_date,
+					strict=True,
+				)
+				if resolved:
+					if resolved.get("type") == "internal":
+						report_to = resolved.get("employee")
+						user = frappe.db.get_value("Employee", report_to, "user_id")
+						if user:
+							self.approver = user
+							approver_name, approver_mobile = get_employee_contact(report_to)
+					else:
+						pull = resolved.get("pull") or {}
+						self.is_external_manager = 1
+						self.external_manager = pull.get("employee")
+						approver_name = pull.get("employee_name")
+						approver_mobile = pull.get("mobile_no")
+
+			if business_line_doc.external_reporting_manager and not self.is_external_manager and not self.approver:
+				resolved = resolve_approver_chain(
+					{"type": "external", "pull_name": business_line_doc.external_reporting_manager},
+					on_date=self.from_date,
+					strict=True,
+				)
+				if resolved:
+					if resolved.get("type") == "external":
+						pull = resolved.get("pull") or {}
+						self.is_external_manager = 1
+						self.external_manager = pull.get("employee")
+						approver_name = pull.get("employee_name")
+						approver_mobile = pull.get("mobile_no")
+					else:
+						report_to = resolved.get("employee")
+						user = frappe.db.get_value("Employee", report_to, "user_id")
+						if user:
+							self.approver = user
+							approver_name, approver_mobile = get_employee_contact(report_to)
+		elif employee_doc.external_reporting_manager == 1:
+			resolved = resolve_approver_chain(
+				{"type": "external", "pull_name": employee_doc.external_report_to},
+				on_date=self.from_date,
+				strict=True,
+			)
+			if resolved and resolved.get("type") == "external":
+				pull = resolved.get("pull") or {}
+				self.is_external_manager = 1
+				self.external_manager = pull.get("employee")
+				self.approver = ""
+				approver_name = pull.get("employee_name")
+				approver_mobile = pull.get("mobile_no")
+			elif resolved and resolved.get("type") == "internal":
+				report_to = resolved.get("employee")
 				user = frappe.db.get_value("Employee", report_to, "user_id")
 				if user:
 					self.approver = user
 					self.is_external_manager = 0
 					self.external_manager = ""
 					approver_name, approver_mobile = get_employee_contact(report_to)
-			if business_line_doc.external_reporting_manager:
-				active_pull = resolve_external_manager_pull(business_line_doc.external_reporting_manager)
-				external_manager = active_pull.get("employee") if active_pull else business_line_doc.external_reporting_manager
-
-				self.is_external_manager = 1
-				self.external_manager = external_manager
-				self.approver = ""
-				if active_pull:
-					approver_name = active_pull.get("employee_name")
-					approver_mobile = active_pull.get("mobile_no")
-		elif employee_doc.external_reporting_manager == 1:
-			active_pull = resolve_external_manager_pull(employee_doc.external_report_to)
-			report_to = active_pull.get("employee") if active_pull else None
-
-			self.is_external_manager = 1
-			self.external_manager = report_to
-			self.approver = ""
-			if active_pull:
-				approver_name = active_pull.get("employee_name")
-				approver_mobile = active_pull.get("mobile_no")
 		else:
 			if employee_doc.reports_to:
-				report_to = employee_doc.reports_to
-				# If the reports_to manager is on leave on this leave's from_date,
-				# escalate to that manager's reports_to.
-				if self._is_on_leave(report_to):
-					manager_doc = frappe.get_doc("Employee", report_to)
-					if manager_doc.reports_to:
-						report_to = manager_doc.reports_to
-				user = frappe.db.get_value("Employee", report_to, "user_id")
-				if user:
-					self.approver = user
-					self.is_external_manager = 0
-					self.external_manager = ""
-					approver_name, approver_mobile = get_employee_contact(report_to)
+				resolved = resolve_approver_chain(
+					{"type": "internal", "employee": employee_doc.reports_to},
+					on_date=self.from_date,
+					strict=True,
+				)
+				if resolved and resolved.get("type") == "internal":
+					report_to = resolved.get("employee")
+					user = frappe.db.get_value("Employee", report_to, "user_id")
+					if user:
+						self.approver = user
+						self.is_external_manager = 0
+						self.external_manager = ""
+						approver_name, approver_mobile = get_employee_contact(report_to)
+				elif resolved and resolved.get("type") == "external":
+					pull = resolved.get("pull") or {}
+					self.is_external_manager = 1
+					self.external_manager = pull.get("employee")
+					self.approver = ""
+					approver_name = pull.get("employee_name")
+					approver_mobile = pull.get("mobile_no")
+
+		# All branches must produce an approver. If the escalation chain found
+		# no available manager (everyone on leave), block the save with a
+		# clear error so HR can fix the chain.
+		if not self.approver and not self.is_external_manager:
+			frappe.throw(
+				"No available approver found — all managers in the escalation chain are on leave. Please contact HR.",
+				title="No Approver Available",
+			)
 
 		# Applicant contact + Approver contact
 		applicant_name, applicant_mobile = get_employee_contact(self.employee)

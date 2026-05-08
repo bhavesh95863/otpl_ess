@@ -15,6 +15,9 @@ frappe.ui.form.on('Employee', {
             frm.set_df_property("business_vertical", 'read_only', 1);
             frm.set_df_property("sales_order", 'read_only', 1);
         }
+        if(frm.doc.travelling == 1) {
+            frm.set_df_property("employee_availability", 'read_only', 1);
+        }
         toggle_employee_availability(frm);
 
         if (!frm.is_new()) {

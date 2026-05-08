@@ -10,6 +10,7 @@ from frappe.utils import date_diff, getdate, nowdate
 from employee_self_service.employee_self_service.utils.erp_sync import push_travel_to_remote_erp
 from employee_self_service.employee_self_service.utils.leave_escalation import (
 	resolve_external_manager_pull,
+	resolve_approver_chain,
 	get_employee_contact,
 	get_employee_pull_contact,
 )
@@ -130,25 +131,50 @@ class TravelRequest(Document):
 			frappe.throw(_("Employee does not have a Business Vertical assigned. Please contact HR."))
 		business_vertical = employee_doc.business_vertical or employee_doc.external_business_vertical
 		business_line_doc = frappe.get_doc("Business Line", business_vertical)
+
+		# Use date_of_departure (falling back to today) for leave checks so the
+		# approver chain reflects who will be available when the request is raised.
+		on_date = getdate(self.date_of_departure) if self.date_of_departure else getdate(nowdate())
+
+		# Reset before resolving — the chain may flip between internal/external
+		# (e.g. an internal manager on leave whose own manager is external).
+		self.report_to = None
+		self.has_external_report_to = 0
+		self.external_report_to = None
+
 		if business_line_doc.reporting_manager:
-			report_to = business_line_doc.reporting_manager
-			# If the reporting manager is on leave during the travel period,
-			# fall back to the employee's `reports_to`.
-			if self._is_on_leave(report_to):
-				manager_report_to = frappe.db.get_value("Employee", report_to, "reports_to")
-				if manager_report_to:
-					self.report_to = manager_report_to
-			else:
-				self.report_to = report_to
-		else:
-			self.report_to = None
-		if business_line_doc.external_reporting_manager:
-			active_pull = resolve_external_manager_pull(business_line_doc.external_reporting_manager)
-			self.has_external_report_to = 1
-			self.external_report_to = active_pull.get("name") if active_pull else business_line_doc.external_reporting_manager
-		else:
-			self.has_external_report_to = 0
-			self.external_report_to = None
+			resolved = resolve_approver_chain(
+				{"type": "internal", "employee": business_line_doc.reporting_manager},
+				on_date=on_date,
+				strict=True,
+			)
+			if resolved:
+				if resolved.get("type") == "internal":
+					self.report_to = resolved.get("employee")
+				else:
+					self.has_external_report_to = 1
+					self.external_report_to = resolved.get("pull_name")
+
+		if business_line_doc.external_reporting_manager and not self.has_external_report_to and not self.report_to:
+			resolved = resolve_approver_chain(
+				{"type": "external", "pull_name": business_line_doc.external_reporting_manager},
+				on_date=on_date,
+				strict=True,
+			)
+			if resolved:
+				if resolved.get("type") == "external":
+					self.has_external_report_to = 1
+					self.external_report_to = resolved.get("pull_name")
+				else:
+					# Chain crossed into an internal employee; only set if not
+					# already set by the internal branch above.
+					if not self.report_to:
+						self.report_to = resolved.get("employee")
+
+		if not self.report_to and not self.has_external_report_to:
+			frappe.throw(
+				_("No available approver found — all managers in the escalation chain are on leave. Please contact HR.")
+			)
 
 	def set_contact_details(self):
 		"""Populate applicant and approver contact details (name + mobile).
