@@ -54,6 +54,7 @@ DISCREPANCY_ABSENT_WITH_BOTH = "Absent Despite Check-in & Check-out"
 DISCREPANCY_NOT_PROCESSED = "Attendance Not Processed"
 DISCREPANCY_FAILED_LOG = "Attendance Creation Failed"
 DISCREPANCY_PENDING_APPROVAL = "Pending Check-in Approval"
+DISCREPANCY_TRAVEL_NTLE = "Approved Travel - NTLE & Not Present"
 
 
 def execute(filters=None):
@@ -264,6 +265,39 @@ def get_data(filters):
 		):
 			failed_map.setdefault(f.employee, []).append(f.reason or "")
 
+	# Approved Travel Requests covering the date
+	travel_map = {}
+	if frappe.db.exists("DocType", "Travel Request"):
+		for t in frappe.db.sql(
+			"""
+			SELECT name, employee, date_of_departure, date_of_arrival, purpose
+			FROM `tabTravel Request`
+			WHERE status = 'Approved'
+			  AND date_of_departure <= %(date)s AND date_of_arrival >= %(date)s
+			  AND employee IN %(employees)s
+			""",
+			{"date": date, "employees": emp_ids},
+			as_dict=True,
+		):
+			travel_map[t.employee] = t
+
+	# No Team Leader Errors for the date
+	ntle_map = {}
+	if travel_map and frappe.db.exists("DocType", "No Team Leader Error"):
+		travel_emp_ids = list(travel_map.keys())
+		for n in frappe.db.sql(
+			"""
+			SELECT employee, MIN(datetime) as error_time, COUNT(*) as error_count
+			FROM `tabNo Team Leader Error`
+			WHERE datetime >= %(day_start)s AND datetime < %(day_end)s
+			  AND employee IN %(employees)s
+			GROUP BY employee
+			""",
+			{"day_start": day_start, "day_end": day_end, "employees": travel_emp_ids},
+			as_dict=True,
+		):
+			ntle_map[n.employee] = n
+
 	results = []
 
 	for emp in employees:
@@ -297,6 +331,32 @@ def get_data(filters):
 				why="Processor raised an error: " + "; ".join(failed_map[emp_id])[:400],
 				suggested_action="Review the Attendance Creation Failed Log entry, fix the underlying data, then re-run attendance for this employee/date.",
 			))
+
+		# (1b) Approved travel + NTLE + (Absent or no attendance) — should be Present
+		travel = travel_map.get(emp_id)
+		ntle = ntle_map.get(emp_id)
+		att_status = (att.status or "").strip() if att else ""
+		if travel and ntle and (not att or att_status == "Absent"):
+			results.append(dict(
+				base,
+				discrepancy_type=DISCREPANCY_TRAVEL_NTLE,
+				why=(
+					"Employee has an Approved Travel Request ({tr}) covering {dep} to {arr} "
+					"and received {n} No Team Leader Error(s) on this date "
+					"(first at {when}), but attendance is {state}. They were on approved "
+					"travel and should be marked Present."
+				).format(
+					tr=travel.name,
+					dep=travel.date_of_departure,
+					arr=travel.date_of_arrival,
+					n=ntle.error_count,
+					when=ntle.error_time,
+					state=("Absent" if att else "not processed"),
+				),
+				suggested_action="Mark the employee Present for this date (manual Attendance or update existing record).",
+			))
+			# Travel+NTLE supersedes other Absent/Not-Processed flags for this employee
+			continue
 
 		# (2) Pending approval and no attendance was created — skipped silently
 		if is_pending and not att:
@@ -371,11 +431,12 @@ def get_data(filters):
 	# Order: by discrepancy type, then employee name
 	type_order = {
 		DISCREPANCY_FAILED_LOG: 0,
-		DISCREPANCY_NOT_PROCESSED: 1,
-		DISCREPANCY_ABSENT_WITH_BOTH: 2,
-		DISCREPANCY_MISSING_CHECKOUT: 3,
-		DISCREPANCY_MISSING_CHECKIN: 4,
-		DISCREPANCY_PENDING_APPROVAL: 5,
+		DISCREPANCY_TRAVEL_NTLE: 1,
+		DISCREPANCY_NOT_PROCESSED: 2,
+		DISCREPANCY_ABSENT_WITH_BOTH: 3,
+		DISCREPANCY_MISSING_CHECKOUT: 4,
+		DISCREPANCY_MISSING_CHECKIN: 5,
+		DISCREPANCY_PENDING_APPROVAL: 6,
 	}
 	results.sort(key=lambda r: (type_order.get(r["discrepancy_type"], 99), r["employee_name"] or ""))
 	return results

@@ -303,7 +303,7 @@ def process_travel_requests():
 
 	for req in active_requests:
 		try:
-			if req.purpose == "Going back to work":
+			if req.purpose in ["Going back to work", "Going for official work"]:
 				frappe.db.set_value("Employee", req.employee, {"employee_availability": "", "travelling": 1})
 			else:
 				# Going on Leave / Going for official work: just mark travelling

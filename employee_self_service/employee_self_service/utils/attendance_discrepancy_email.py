@@ -104,6 +104,7 @@ def _build_email_html(target_date, columns, data):
 
 	body_rows = []
 	color_map = {
+		"Approved Travel - NTLE & Not Present": "#fdecea",
 		"Attendance Creation Failed": "#fdecea",
 		"Attendance Not Processed": "#fdecea",
 		"Absent Despite Check-in & Check-out": "#fdecea",

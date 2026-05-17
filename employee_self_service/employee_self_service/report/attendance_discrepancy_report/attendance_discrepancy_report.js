@@ -16,6 +16,7 @@ frappe.query_reports["Attendance Discrepancy Report"] = {
 			fieldtype: "Select",
 			options: [
 				"",
+				"Approved Travel - NTLE & Not Present",
 				"Absent - Missing Check-out",
 				"Absent - Missing Check-in",
 				"Absent Despite Check-in & Check-out",
@@ -40,6 +41,7 @@ frappe.query_reports["Attendance Discrepancy Report"] = {
 		value = default_formatter(value, row, column, data);
 		if (column.fieldname === "discrepancy_type" && data && data.discrepancy_type) {
 			let color_map = {
+				"Approved Travel - NTLE & Not Present": "#dc2626",
 				"Absent - Missing Check-out": "#d97706",
 				"Absent - Missing Check-in": "#d97706",
 				"Absent Despite Check-in & Check-out": "#dc2626",
