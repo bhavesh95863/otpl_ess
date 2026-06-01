@@ -409,7 +409,22 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 		early_exit_threshold = None
 		half_day_arrival = None
 		half_day_departure = None
-		treat_late_as_half_day_after = location_rules.get('treat_late_as_half_day_after') or 5
+		# Cycle thresholds: late count positions within each cycle that become Half Day.
+		# e.g. half=3, full=5 → Half Day fires at late counts 3 and 5.
+		# After the full-day threshold (5), EVERY subsequent late mark is Half Day.
+		late_for_half = int(location_rules.get('late_count_for_half_day') or 3)
+		late_for_full = int(location_rules.get('late_count_for_full_day') or 5)
+
+		def _is_half_day_for_late_count(new_count):
+			"""Return True if this late mark (1-based count incl. today) should
+			be treated as Half Day."""
+			if late_for_full > 0 and new_count > late_for_full:
+				return True
+			if late_for_full > 0 and new_count == late_for_full:
+				return True
+			if late_for_half > 0 and new_count == late_for_half:
+				return True
+			return False
 
 		if location_rules.late_arrival_threshold:
 			late_threshold = datetime.strptime(
@@ -453,48 +468,46 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 				status = "Half Day"
 				remarks_list.append("Left at/before {0}".format(half_day_departure))
 
-		# Check for late arrival (if not already half day)
-		if checkin_time and late_threshold and status != "Half Day":
+		# Check for late arrival (always flag late_entry; may also escalate to Half Day)
+		if checkin_time and late_threshold:
 			checkin_only_time = get_datetime(checkin_time).time()
 			if checkin_only_time > late_threshold:
-				current_month_late_count = get_month_late_count(employee, date)
-				if current_month_late_count >= treat_late_as_half_day_after:
-					status = "Half Day"
-					remarks_list.append(
-						"Late arrival treated as Half Day (exceeded {0} late marks)".format(
-							treat_late_as_half_day_after
+				late_entry = True
+				remarks_list.append("Late arrival after {0}".format(late_threshold))
+				if status != "Half Day":
+					new_late_count = get_month_late_count(employee, date) + 1
+					if _is_half_day_for_late_count(new_late_count):
+						status = "Half Day"
+						remarks_list.append(
+							"Late arrival treated as Half Day (late mark #{0} in cycle of {1})".format(
+								new_late_count, late_for_full
+							)
 						)
-					)
-				else:
-					late_entry = True
-					remarks_list.append("Late arrival after {0}".format(late_threshold))
 
-		# Check for early exit (if not already half day)
-		if checkout_time and early_exit_threshold and status != "Half Day":
+		# Check for early exit (always flag early_exit; may also escalate to Half Day)
+		if checkout_time and early_exit_threshold:
 			checkout_only_time = get_datetime(checkout_time).time()
 			if checkout_only_time < early_exit_threshold:
-				current_month_late_count = get_month_late_count(employee, date)
-				if current_month_late_count >= treat_late_as_half_day_after:
-					status = "Half Day"
-					remarks_list.append(
-						"Early exit treated as Half Day (exceeded {0} late marks)".format(
-							treat_late_as_half_day_after
+				early_exit = True
+				remarks_list.append("Early exit before {0}".format(early_exit_threshold))
+				if status != "Half Day":
+					new_late_count = get_month_late_count(employee, date) + 1
+					if _is_half_day_for_late_count(new_late_count):
+						status = "Half Day"
+						remarks_list.append(
+							"Early exit treated as Half Day (late mark #{0} in cycle of {1})".format(
+								new_late_count, late_for_full
+							)
 						)
-					)
-				else:
-					early_exit = True
-					remarks_list.append("Early exit before {0}".format(early_exit_threshold))
 
-		# Check if missing logs should be treated as half day
+		# Check if missing logs should be treated as half day (keep late_entry/early_exit flags)
 		if (late_entry or early_exit) and status == "Present":
-			current_month_late_count = get_month_late_count(employee, date)
-			if current_month_late_count >= treat_late_as_half_day_after:
+			new_late_count = get_month_late_count(employee, date) + 1
+			if _is_half_day_for_late_count(new_late_count):
 				status = "Half Day"
-				late_entry = False
-				early_exit = False
 				remarks_list.append(
-					"Missing log treated as Half Day (exceeded {0} late marks)".format(
-						treat_late_as_half_day_after
+					"Missing log treated as Half Day (late mark #{0} in cycle of {1})".format(
+						new_late_count, late_for_full
 					)
 				)
 

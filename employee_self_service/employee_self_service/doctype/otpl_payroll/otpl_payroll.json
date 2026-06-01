@@ -39,6 +39,7 @@
   "total_pf_employer",
   "total_esic_employer",
   "total_advance_adjustment",
+  "total_extra_allowance",
   "total_net_payable",
   "total_net_to_pay",
   "section_break_log",
@@ -82,6 +83,7 @@
   {"fieldname": "total_pf_employer", "fieldtype": "Currency", "label": "Total PF (Employer)", "read_only": 1},
   {"fieldname": "total_esic_employer", "fieldtype": "Currency", "label": "Total ESIC (Employer)", "read_only": 1},
   {"fieldname": "total_advance_adjustment", "fieldtype": "Currency", "label": "Total Advance Adjustment", "read_only": 1},
+  {"fieldname": "total_extra_allowance", "fieldtype": "Currency", "label": "Total Extra Allowance", "read_only": 1},
   {"fieldname": "total_net_payable", "fieldtype": "Currency", "label": "Total Net Payable", "read_only": 1},
   {"fieldname": "total_net_to_pay", "fieldtype": "Currency", "label": "Total Net To Pay", "read_only": 1},
 

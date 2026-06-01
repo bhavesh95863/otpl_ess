@@ -23,7 +23,7 @@ from datetime import timedelta
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import cint, cstr, flt, getdate
+from frappe.utils import cint, cstr, flt, getdate, get_last_day
 
 
 # Constants from the salary spec
@@ -33,7 +33,9 @@ ESIC_EMPLOYER_FACTOR = 3.25 / 0.75
 PF_EMPLOYEE_RATE = 0.12
 PF_EMPLOYER_FACTOR = 13.0 / 12.0
 WORKER_HARIDWAR_INCENTIVE = 200.0
-STD_HOURS_PER_DAY = 8.5
+# Per-present-day hours treated as standard (anything above counts as OT).
+STD_HOURS_PER_DAY = 8.0
+# Salary hours used to compute the per-hour rate for OT.
 SALARY_HOURS_PER_DAY = 8.0
 
 
@@ -88,13 +90,29 @@ def get_employees(doc):
 			e.esi_number                        AS esic_no,
 			e.advance_to_be_deducted            AS gross_salary,
 			e.basic_salary                      AS basic_salary,
+			COALESCE(e.no_validation, 0)        AS no_validation,
+			COALESCE(esl.min_wages, 0)          AS min_wages,
+			COALESCE(esl.max_wages, 0)          AS max_wages,
+			COALESCE(e.no_validation_base_salary, 0) AS no_validation_base_salary,
+			{tada_expr}                         AS daily_tada,
+			{hra_expr}                          AS hra_amount,
+			{conv_expr}                         AS conveyance_amount,
+			{tel_expr}                          AS telephone_amount,
 			so.business_line                    AS business_line
 		FROM `tabEmployee` e
 		LEFT JOIN `tabSales Order` so
 			ON so.name = e.sales_order
+		LEFT JOIN `tabESS Location` esl
+			ON esl.name = e.custom_ess_location
 		WHERE {where}
 		ORDER BY e.employee_name ASC
-		""".format(where=filters["sql"]),
+		""".format(
+			where=filters["sql"],
+			tada_expr="COALESCE(e.daily_tada, 0)" if frappe.db.has_column("Employee", "daily_tada") else "0",
+			hra_expr="COALESCE(e.hra_amount, 0)" if frappe.db.has_column("Employee", "hra_amount") else "0",
+			conv_expr="COALESCE(e.conveyance_amount, 0)" if frappe.db.has_column("Employee", "conveyance_amount") else "0",
+			tel_expr="COALESCE(e.telephone_amount, 0)" if frappe.db.has_column("Employee", "telephone_amount") else "0",
+		),
 		filters["values"],
 		as_dict=True,
 	)
@@ -130,8 +148,12 @@ def calculate_payroll(doc):
 	leave_map = _fetch_approved_leaves(emp_ids, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(employees, from_date, to_date)
 	balance_map = _fetch_leave_balances(emp_ids)
+	cl_balance_map = _fetch_cl_balances(emp_ids, from_date)
 	tds_map = _fetch_tds(emp_ids, from_date)
-	advance_map = _fetch_advance_balances(emp_ids, to_date)
+	advance_map = _fetch_advance_balances(emp_ids, from_date, to_date)
+	payable_balance_map = _fetch_payroll_payable_balance(emp_ids, to_date)
+	al_eligible_emps = _fetch_al_eligible_employees(emp_ids)
+	al_eligible_bls = _fetch_al_eligible_business_lines()
 
 	rows = []
 	log_lines = []
@@ -144,11 +166,14 @@ def calculate_payroll(doc):
 				to_date=to_date,
 				days_in_period=days_in_period,
 				att=att_map.get(emp["employee"], {}),
-				approved_leave_dates=leave_map.get(emp["employee"], set()),
+				leaves=leave_map.get(emp["employee"], {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 				holiday_dates=holidays_by_emp.get(emp["employee"], set()),
 				balance=balance_map.get(emp["employee"], {}),
+				cl_balance=cl_balance_map.get(emp["employee"], 0.0),
 				tds=tds_map.get(emp["employee"], 0.0),
 				advance=advance_map.get(emp["employee"], {"full": 0.0, "part": 0.0}),
+				payable_balance=payable_balance_map.get(emp["employee"], 0.0),
+				al_eligible=(emp["employee"] in al_eligible_emps and (emp.get("business_line") in al_eligible_bls)),
 			)
 			rows.append(row)
 		except Exception:
@@ -194,15 +219,13 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 	"""Per-employee aggregates for the period.
 
 	Returns a dict keyed by employee with:
+		processed_dates       set[date]   - any submitted att (excluding false)
 		present_dates         set[date]   - submitted Present (excluding false)
 		half_day_dates        set[date]   - submitted Half Day (excluding false)
-		all_marked_dates      set[date]   - any submitted att (excluding false)
-		late_count            int         - sum of custom_late_mark
+		absent_dates          set[date]   - submitted Absent (excluding false)
 		extra_late_half_days  int         - count of Half Day status w/ late_entry
-		absent_no_info_count  int         - both checkin & checkout NULL on a marked
-		                                    day with no leave
-		checkin_seconds       int         - sum of (checkout - checkin) seconds
-		full_checkin_days     int         - days where both checkin & checkout set
+		late_count            int         - sum of custom_late_mark
+		working_hours         float       - sum of Attendance.working_hours
 	"""
 	if not emp_ids:
 		return {}
@@ -211,6 +234,8 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 	# on every site (e.g. winamore). Fall back to literal 0 when absent.
 	has_late_mark = frappe.db.has_column("Attendance", "custom_late_mark")
 	late_mark_expr = "COALESCE(a.custom_late_mark, 0)" if has_late_mark else "0"
+	has_working_hours = frappe.db.has_column("Attendance", "working_hours")
+	working_hours_expr = "COALESCE(a.working_hours, 0)" if has_working_hours else "0"
 
 	rows = frappe.db.sql(
 		"""
@@ -218,77 +243,77 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 			a.employee,
 			a.attendance_date,
 			a.status,
-			a.checkin_time,
-			a.checkout_time,
 			{late_mark_expr}                  AS late_mark,
 			COALESCE(a.late_entry, 0)         AS late_entry,
+			COALESCE(a.early_exit, 0)         AS early_exit,
+			{working_hours_expr}              AS working_hours,
 			COALESCE(a.false_attendance, 0)   AS false_attendance
 		FROM `tabAttendance` a
 		WHERE a.employee IN %(emp_ids)s
 		  AND a.attendance_date BETWEEN %(from_date)s AND %(to_date)s
 		  AND a.docstatus = 1
-		""".format(late_mark_expr=late_mark_expr),
+		""".format(late_mark_expr=late_mark_expr, working_hours_expr=working_hours_expr),
 		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
 		as_dict=True,
 	)
 
 	out = defaultdict(lambda: {
+		"processed_dates": set(),
 		"present_dates": set(),
 		"half_day_dates": set(),
-		"all_marked_dates": set(),
+		"absent_dates": set(),
 		"late_count": 0,
 		"extra_late_half_days": 0,
-		"checkin_seconds": 0,
-		"full_checkin_days": 0,
+		"working_hours": 0.0,
 		"false_attendance_count": 0,
-		"_rows": [],   # for absent-no-info pass below (needs leave info)
 	})
 
 	for r in rows:
 		if cint(r.false_attendance):
-			# Per spec: each false attendance deducts 2 days from days worked.
 			out[r.employee]["false_attendance_count"] += 1
 			continue
 		bucket = out[r.employee]
 		d = getdate(r.attendance_date)
-		bucket["all_marked_dates"].add(d)
+		bucket["processed_dates"].add(d)
 		if r.status == "Present":
 			bucket["present_dates"].add(d)
 		elif r.status == "Half Day":
 			bucket["half_day_dates"].add(d)
-			if cint(r.late_entry):
+			if cint(r.late_entry) or cint(r.early_exit):
 				bucket["extra_late_half_days"] += 1
-		bucket["late_count"] += cint(r.late_mark)
-
-		if r.checkin_time and r.checkout_time:
-			delta = (r.checkout_time - r.checkin_time).total_seconds()
-			if delta > 0:
-				bucket["checkin_seconds"] += delta
-				bucket["full_checkin_days"] += 1
-
-		bucket["_rows"].append({
-			"date": d,
-			"status": r.status,
-			"checkin_time": r.checkin_time,
-			"checkout_time": r.checkout_time,
-		})
+		elif r.status == "Absent":
+			bucket["absent_dates"].add(d)
+		# Late count = any attendance record in the period flagged as late
+		# entry or early exit (one count per day, regardless of which flag).
+		if cint(r.late_entry) or cint(r.early_exit):
+			bucket["late_count"] += 1
+		bucket["working_hours"] += flt(r.working_hours)
 
 	return out
 
 
 def _fetch_approved_leaves(emp_ids, from_date, to_date):
-	"""Set of approved leave dates per employee.
+	"""Per-employee approved leave breakdown for the period.
 
-	Uses OTPL Leave (status Approved) and expands the approved range into
-	individual dates, intersecting with the payroll period.
+	Returns dict employee -> {
+		"full_leave_dates":  set[date]   # full-day approved leaves only
+		"half_leave_dates":  set[date]   # half-day approved leaves
+		"short_leave_count": int         # # of approved short leaves
+	}
+
+	Per observation #7 "approved leaves" used in CL/AL adjustment must not
+	include half days or short leaves; they are surfaced separately.
 	"""
+	empty = lambda: {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}
+	out = defaultdict(empty)
 	if not emp_ids:
-		return {}
+		return out
 
 	rows = frappe.db.sql(
 		"""
 		SELECT employee, approved_from_date, approved_to_date,
-		       half_day, half_day_date
+		       COALESCE(half_day, 0) AS half_day, half_day_date,
+		       COALESCE(short_leave, 0) AS short_leave
 		FROM `tabOTPL Leave`
 		WHERE employee IN %(emp_ids)s
 		  AND status = 'Approved'
@@ -301,13 +326,40 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 		as_dict=True,
 	)
 
-	out = defaultdict(set)
 	for r in rows:
+		bucket = out[r.employee]
+
+		# Per observation #7: half-day and short-leave records must NEVER
+		# contribute to the full-day approved-leave count. They are surfaced
+		# separately (half_leave_dates / short_leave_count) and consumed by
+		# the Late Deduction column instead of the CL/AL adjustment.
+		if cint(r.short_leave):
+			bucket["short_leave_count"] += 1
+			continue
+
+		if cint(r.half_day):
+			hd = getdate(r.half_day_date) if r.half_day_date else None
+			if hd and from_date <= hd <= to_date:
+				bucket["half_leave_dates"].add(hd)
+			# A half-day leave application can still cover a multi-day range;
+			# treat all OTHER dates of the range as full-day leaves. If
+			# half_day_date is missing, the whole range collapses to a single
+			# half-day (still excluded from full leaves) — never inflated.
+			if hd:
+				start = max(getdate(r.approved_from_date), from_date)
+				end = min(getdate(r.approved_to_date), to_date)
+				d = start
+				while d <= end:
+					if d != hd:
+						bucket["full_leave_dates"].add(d)
+					d += timedelta(days=1)
+			continue
+
 		start = max(getdate(r.approved_from_date), from_date)
 		end = min(getdate(r.approved_to_date), to_date)
 		d = start
 		while d <= end:
-			out[r.employee].add(d)
+			bucket["full_leave_dates"].add(d)
 			d += timedelta(days=1)
 	return out
 
@@ -366,11 +418,18 @@ def _fetch_holidays_per_employee(employees, from_date, to_date):
 
 
 def _fetch_leave_balances(emp_ids):
+	"""AL balance per employee (from OTPL Employee Leave Balance).
+
+	This doctype tracks only Annual Leave (AL) for AL-eligible employees
+	(Worker @ Site with an opening row). Casual Leave (CL) is sourced
+	separately from Frappe's standard leave allocation - see
+	``_fetch_cl_balances``.
+	"""
 	if not emp_ids:
 		return {}
 	rows = frappe.db.sql(
 		"""
-		SELECT employee, al_balance, cl_balance, year_opening_al, year_opening_cl
+		SELECT employee, al_balance, year_opening_al
 		FROM `tabOTPL Employee Leave Balance`
 		WHERE employee IN %(emp_ids)s
 		""",
@@ -378,6 +437,43 @@ def _fetch_leave_balances(emp_ids):
 		as_dict=True,
 	)
 	return {r.employee: dict(r) for r in rows}
+
+
+def _fetch_cl_balances(emp_ids, as_on_date):
+	"""Casual Leave balance per employee, as of ``as_on_date``.
+
+	Uses Frappe's standard ``get_leave_balance_on`` against leave type
+	``Casual Leave`` - the same source OTPL Leave uses when splitting
+	an application into CL + LWP.  Available for ALL employees regardless
+	of AL eligibility.
+	"""
+	out = {e: 0.0 for e in emp_ids}
+	if not emp_ids:
+		return out
+	try:
+		from erpnext.hr.doctype.leave_application.leave_application import (
+			get_leave_balance_on,
+		)
+	except Exception:
+		return out
+	for emp in emp_ids:
+		try:
+			# Match the standard "Leave Balance" report: balance as of the
+			# given date, i.e. allocation − leaves taken strictly before
+			# ``as_on_date``. Do NOT pass
+			# ``consider_all_leaves_in_the_allocation_period=True`` — that
+			# would also subtract leaves applied AFTER the payroll period
+			# within the same allocation, which is not what payroll wants.
+			bal = get_leave_balance_on(
+				employee=emp,
+				leave_type="Casual Leave",
+				date=as_on_date,
+			) or 0
+			frappe.msgprint("CL balance for {emp} as of {as_on_date}: {bal}".format(emp=emp, as_on_date=as_on_date, bal=bal))
+			out[emp] = flt(bal)
+		except Exception:
+			out[emp] = 0.0
+	return out
 
 
 def _fetch_tds(emp_ids, from_date):
@@ -411,148 +507,242 @@ def _fetch_tds(emp_ids, from_date):
 	return {r.employee: flt(r.tds_amount) for r in rows}
 
 
-def _fetch_advance_balances(emp_ids, to_date):
-	"""Per-employee Full / Part advance ledger balances.
+def _fetch_advance_balances(emp_ids, from_date, to_date):
+	"""Per-employee Full / Part advance ledger figures.
 
-	Uses the same ledger accounts that ``Salary Payable Request`` uses,
-	configured in ``OTPL Accounting Settings``:
+	**Col AA (Full Advance)** = GL balance on the configured full-advance
+	account (``OTPL Accounting Settings.full_advance_salary_adjustment``)
+	as on ``to_date``.
 
-	  * ``full_advance_salary_adjustment`` -> Full Advance Salary Adj. (AA)
-	  * ``part_advance_salary_adjustment`` -> Part Advance Salary Adj. (AB)
-
-	Balance is computed as ``SUM(debit - credit)`` on tabGL Entry up to and
-	including ``to_date`` for ``party_type='Employee'`` per account. Only
-	positive balances (employee owes the company) become an adjustment;
-	negative balances yield 0 so we never inflate the salary payable.
+	**Col AB (Part Advance)** = sum, per employee, of submitted Journal
+	Entry rows posted on the LAST DAY of the period's month where:
+	  * Journal Entry ``purpose`` = "Part Advance Salary Adjustment"
+	  * Journal Entry Account row has ``party_type`` = "Employee" and
+	    ``party`` = the employee id
+	The row-level amount taken is ``debit_in_account_currency +
+	credit_in_account_currency`` (typically only one side is non-zero on
+	the employee row).
 	"""
 	out = {e: {"full": 0.0, "part": 0.0} for e in emp_ids}
 	if not emp_ids:
 		return out
 
-	settings = frappe.db.get_value(
-		"OTPL Accounting Settings", "OTPL Accounting Settings",
-		["full_advance_salary_adjustment", "part_advance_salary_adjustment"],
-		as_dict=True,
-	) or {}
+	# Part-advance JVs are posted on the last calendar day of the selected
+	# payroll month (driven by from_date).
+	month_end = get_last_day(from_date)
 
-	def _bulk_balance(account):
-		if not account:
-			return {}
+	settings = frappe.get_cached_doc("OTPL Accounting Settings", "OTPL Accounting Settings")
+	full_acc = settings.get("full_advance_salary_adjustment")
+	part_acc = settings.get("part_advance_salary_adjustment")
+
+	# --- AA: party balance on full-advance account as of to_date
+	if full_acc:
+		from erpnext.accounts.utils import get_balance_on
+		for emp in emp_ids:
+			bal = get_balance_on(
+				account=full_acc,
+				date=to_date,
+				party_type="Employee",
+				party=emp,
+			)
+			out[emp]["full"] = max(flt(bal), 0.0)
+
+	# --- AB: Part Advance Salary Adjustment JVs posted on the month-end
+	if part_acc:
 		rows = frappe.db.sql(
 			"""
-			SELECT party AS employee, SUM(debit - credit) AS bal
-			FROM `tabGL Entry`
-			WHERE party_type = 'Employee'
-			  AND party IN %(emps)s
-			  AND account = %(acc)s
-			  AND posting_date <= %(d)s
-			GROUP BY party
+			SELECT jea.party AS employee,
+			       SUM(ABS(COALESCE(jea.debit_in_account_currency, 0)
+			             - COALESCE(jea.credit_in_account_currency, 0))) AS amt
+			FROM `tabJournal Entry Account` jea
+			JOIN `tabJournal Entry` je ON je.name = jea.parent
+			WHERE je.docstatus = 1
+			  AND je.posting_date = %(d)s
+			  AND je.purpose = 'Part Advance Salary Adjustment'
+			  AND jea.account = %(acc)s
+			  AND jea.party_type = 'Employee'
+			  AND jea.party IN %(emps)s
+			GROUP BY jea.party
 			""",
-			{"emps": tuple(emp_ids), "acc": account, "d": to_date},
+			{"emps": tuple(emp_ids), "acc": part_acc, "d": month_end},
 			as_dict=True,
 		)
-		return {r.employee: max(flt(r.bal), 0.0) for r in rows}
+		for r in rows:
+			out[r.employee]["part"] = max(flt(r.amt), 0.0)
 
-	full_map = _bulk_balance(settings.get("full_advance_salary_adjustment"))
-	part_map = _bulk_balance(settings.get("part_advance_salary_adjustment"))
-
-	for e in emp_ids:
-		out[e]["full"] = full_map.get(e, 0.0)
-		out[e]["part"] = part_map.get(e, 0.0)
 	return out
+
+
+def _fetch_payroll_payable_balance(emp_ids, to_date):
+	"""Party balance on the configured Payroll Payable account per employee as
+	of ``to_date``. Used for Col AD (expenses).
+
+	Payroll Payable is a credit (liability) account, so we negate the
+	``get_balance_on`` debit-minus-credit result to express it as a positive
+	outstanding balance.
+	"""
+	out = {e: 0.0 for e in emp_ids}
+	if not emp_ids:
+		return out
+
+	acc = frappe.db.get_value(
+		"OTPL Accounting Settings", "OTPL Accounting Settings", "payroll_payable"
+	)
+	if not acc:
+		return out
+
+	from erpnext.accounts.utils import get_balance_on
+	for emp in emp_ids:
+		bal = get_balance_on(
+			account=acc,
+			date=to_date,
+			party_type="Employee",
+			party=emp,
+		)
+		out[emp] = flt(bal)
+	return out
+
+
+def _fetch_al_eligible_employees(emp_ids):
+	"""Return the subset of ``emp_ids`` that have an opening row in
+	``OTPL Employee Leave Balance``. Per observation #10, AL Generated/
+	Adjustment/Closing AL are only computed for employees seeded there.
+	"""
+	if not emp_ids:
+		return set()
+	rows = frappe.db.sql(
+		"""
+		SELECT employee FROM `tabOTPL Employee Leave Balance`
+		WHERE employee IN %(emps)s
+		""",
+		{"emps": tuple(emp_ids)},
+	)
+	return {r[0] for r in rows}
+
+
+def _fetch_al_eligible_business_lines():
+	"""Return the set of Business Line names that have the
+	``al_eligible`` custom field checked. Per observation #12.
+	"""
+	if not frappe.db.has_column("Business Line", "al_eligible"):
+		return set()
+	rows = frappe.db.sql(
+		"""SELECT name FROM `tabBusiness Line` WHERE COALESCE(al_eligible, 0) = 1"""
+	)
+	return {r[0] for r in rows}
 
 
 # -----------------------------------------------------------------------------
 # Per-employee calculation
 # -----------------------------------------------------------------------------
 def _calculate_employee(emp, from_date, to_date, days_in_period,
-                        att, approved_leave_dates, holiday_dates,
-                        balance, tds, advance):
+                        att, leaves, holiday_dates,
+                        balance, tds, advance,
+                        cl_balance=0.0,
+                        payable_balance=0.0, al_eligible=False):
 	gross = flt(emp.get("gross_salary"))
 	basic = flt(emp.get("basic_salary"))
 	staff_type = emp.get("staff_type")
 	location = emp.get("location")
 
 	is_worker_site = (staff_type == "Worker" and location == "Site")
+	is_worker_field_site = (staff_type in ("Worker", "Field") and location == "Site")
 	is_worker_haridwar = (staff_type == "Worker" and location == "Haridwar")
 	is_worker_noida_or_hwr = (staff_type == "Worker" and location in ("Noida", "Haridwar"))
 	# Late tracking is N/A for Worker/Field at Site (per business rule).
-	skip_late_metrics = (staff_type in ("Worker", "Field") and location == "Site")
+	skip_late_metrics = is_worker_field_site
 
+	# AL is gated by BOTH: employee has a row in OTPL Employee Leave Balance
+	# AND the employee's Business Line has al_eligible=1 (observation #12).
+	al_enabled = bool(is_worker_site and al_eligible)
+
+	# Attendance aggregates -----------------------------------------------------
 	present_dates = att.get("present_dates", set())
 	half_day_dates = att.get("half_day_dates", set())
+	absent_dates = att.get("absent_dates", set())
+	processed_dates = att.get("processed_dates", set())
 	late_count = 0 if skip_late_metrics else att.get("late_count", 0)
 	extra_late_half_days = 0 if skip_late_metrics else att.get("extra_late_half_days", 0)
-	full_checkin_days = att.get("full_checkin_days", 0)
-	checkin_seconds = att.get("checkin_seconds", 0)
+	working_hours = flt(att.get("working_hours", 0.0))
+	false_attendance_count = att.get("false_attendance_count", 0)
+
+	# Approved leaves (per observation #7 separated) ----------------------------
+	full_leave_dates = leaves.get("full_leave_dates", set())
+	half_leave_dates = leaves.get("half_leave_dates", set())
+	short_leave_count = leaves.get("short_leave_count", 0)
+	approved_leaves_count = len(full_leave_dates)  # full-day only
+
+	# "Present-ish" set for holiday qualification per observation #5
+	# (half day counts as present, both from attendance and approved half leave)
+	presentish_dates = (
+		present_dates
+		| half_day_dates
+		| half_leave_dates
+	)
+
+	# ---- Qualified holidays (shared rule, observation #6) --------------------
+	# A holiday "qualifies" if the employee is present (incl. Half Day, obs #5)
+	# in ANY of the 3 days preceding OR ANY of the 3 days following the holiday.
+	# This same rule is used for both AL Generated (Worker@Site) and the
+	# Days-Worked holiday count (everyone else).
+	qualified_holidays = 0
+	for h in holiday_dates:
+		before = any((h - timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
+		after = any((h + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
+		if before or after:
+			qualified_holidays += 1
 
 	# ---- Col G: AL Generated --------------------------------------------------
-	al_generated = 0
-	if is_worker_site:
-		# Holidays where employee was present on the day before AND day after
-		for h in holiday_dates:
-			if (h - timedelta(days=1)) in present_dates and (h + timedelta(days=1)) in present_dates:
-				al_generated += 1
+	# AL is generated for each qualified holiday. Only counted when AL is
+	# enabled for this employee/business line.
+	al_generated = qualified_holidays if al_enabled else 0
 
-	# ---- Col H: Days Worked ---------------------------------------------------
-	# Present (& half) on non-holiday days
+	# ---- Col H: Days Worked (Worked / Holidays / Leave Adjustment) -----------
+	# Half days count as a full present day here (obs #5); the 0.5-day salary
+	# impact is taken out separately via the Late Deduction column (Col K), so
+	# counting half days as 1 here prevents a 1.5-day net loss for the employee.
 	non_holiday_present = sum(
-		1 for d in present_dates if d not in holiday_dates
-	) + 0.5 * sum(1 for d in half_day_dates if d not in holiday_dates)
+		1 for d in (present_dates | half_day_dates | half_leave_dates)
+		if d not in holiday_dates
+	)
 
+	days_worked = non_holiday_present + qualified_holidays
 	if is_worker_site:
-		days_worked = non_holiday_present + al_generated
+		dw_explain = "Worker@Site: non-holiday present + qualifying holidays (OR rule)"
 	else:
-		# Holidays where present at least once in the 3 preceding & 3 following days
-		holiday_count = 0
-		for h in holiday_dates:
-			before = any(
-				(h - timedelta(days=k)) in present_dates for k in (1, 2, 3)
-			)
-			after = any(
-				(h + timedelta(days=k)) in present_dates for k in (1, 2, 3)
-			)
-			if before and after:
-				holiday_count += 1
-		days_worked = non_holiday_present + holiday_count
+		dw_explain = "Non-(Worker@Site): non-holiday present + qualifying holidays (OR rule)"
 
-	# Spec row 15: each false attendance deducts 2 days from days worked.
-	false_attendance_count = att.get("false_attendance_count", 0)
+	# Each false attendance still deducts 2 days from days worked.
 	days_worked -= 2 * false_attendance_count
 	days_worked = max(days_worked, 0)
 
-	# ---- Col K: Late deduction days ------------------------------------------
-	if late_count >= 5:
-		late_deduction = 1 + (late_count - 5) * 0.5
-	elif late_count >= 3:
-		late_deduction = 0.5
-	else:
-		late_deduction = 0
-	late_deduction += extra_late_half_days * 0.5
+	# ---- Col K: Late deduction days (observation #9) -------------------------
+	# K = (approved-half-days + extra-late-half-days) / 2
+	# Approved half days here are those marked via OTPL Leave (half_day=1).
+	approved_half_days = len(half_leave_dates)
+	late_deduction = (approved_half_days + extra_late_half_days) / 2.0
 
-	# ---- Col L: Absent w/o info (counts twice) -------------------------------
-	absent_no_info = 0
-	for r in att.get("_rows", []):
-		if r["date"] in approved_leave_dates:
-			continue
-		if not r["checkin_time"] and not r["checkout_time"]:
-			absent_no_info += 2
+	# ---- Col L: Absent (observation #4) --------------------------------------
+	# Just count Attendance.status='Absent' (excluding false attendance).
+	absent_count = len(absent_dates)
 
 	# ---- Col M / N: Adjusted from CL / AL ------------------------------------
-	cl_balance = flt(balance.get("cl_balance") or balance.get("year_opening_cl") or 0)
-	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
-	approved_leave_in_period = len(approved_leave_dates)
+	# CL comes from the standard "Casual Leave" allocation (passed in by the
+	# caller). AL comes from OTPL Employee Leave Balance.
+	cl_balance = flt(cl_balance)
 
-	if approved_leave_in_period >= 2:
+	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
+
+	if approved_leaves_count >= 2:
 		adj_cl = min(2, cl_balance)
 	elif cl_balance > 0:
-		adj_cl = min(approved_leave_in_period, cl_balance)
+		adj_cl = min(approved_leaves_count, cl_balance)
 	else:
 		adj_cl = 0
 
-	# AL bank is only maintained for Worker @ Site (spec note in row 3).
-	if is_worker_site:
-		remaining_leave = max(0, approved_leave_in_period - adj_cl)
+	# Adjusted from AL: only for AL-enabled employees on AL-eligible business lines
+	if al_enabled:
+		remaining_leave = max(0, approved_leaves_count - adj_cl)
 		adj_al = min(remaining_leave, al_balance)
 		closing_al = al_balance + al_generated - adj_al
 	else:
@@ -562,39 +752,57 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# ---- Col O / P: Balances --------------------------------------------------
 	balance_cl = cl_balance - adj_cl
 
-	# ---- Col Q: Payable Days --------------------------------------------------
-	payable_days = days_worked - late_deduction - absent_no_info + adj_cl + adj_al
-	payable_days = max(payable_days, 0)
+	# ---- Col Q: Payable Days -------------------------------------------------
+	# Per observation #23 do NOT clamp negative values.
+	payable_days = days_worked - late_deduction - absent_count + adj_cl + adj_al
 
 	# ---- Col R: Salary Amount -------------------------------------------------
-	# Per spec, the salary divisor is the number of days in the calendar
-	# month of `from_date` (e.g. 30/31/28), NOT the length of the selected
-	# payroll period. This way a partial-month run (10 days, etc.) prorates
-	# correctly off the monthly gross.
 	days_in_month = monthrange(from_date.year, from_date.month)[1]
 	per_day = (gross / days_in_month) if days_in_month else 0
 	salary_amount = per_day * payable_days
 
-	# ---- Col S: OT/HRA/Petrol -------------------------------------------------
+	# ---- Col S: OT/HRA/Petrol (observations #17, #18) ------------------------
+	# OT hours = sum(working_hours) - (days_worked * 8)
+	# OT amount = OT hours * (gross / (days_in_month * 8))
 	ot_hra_petrol = 0.0
-	if is_worker_noida_or_hwr and full_checkin_days and gross:
-		ot_hours = (checkin_seconds / 3600.0) - (full_checkin_days * STD_HOURS_PER_DAY)
-		hourly_rate = gross / (days_in_month * SALARY_HOURS_PER_DAY) if days_in_month else 0
+	ot_hours = 0.0
+	if is_worker_noida_or_hwr and gross and days_in_month:
+		ot_hours = working_hours - (days_worked * SALARY_HOURS_PER_DAY)
+		hourly_rate = gross / (days_in_month * SALARY_HOURS_PER_DAY)
 		ot_hra_petrol = ot_hours * hourly_rate
 
-	# ---- Col T: Incentive -----------------------------------------------------
+	# ---- Col T: Incentive (observation #11) ----------------------------------
+	# If present_days + qualified_holidays = days_in_month => Rs 200; Worker@HWR only.
 	incentive = 0.0
 	present_count = len(present_dates) + 0.5 * len(half_day_dates)
-	if is_worker_haridwar and present_count >= days_in_month:
+	if is_worker_haridwar and (present_count + qualified_holidays) >= days_in_month:
 		incentive = WORKER_HARIDWAR_INCENTIVE
 
 	# ---- Col U: Total Salary Due ---------------------------------------------
 	total_salary_due = salary_amount + ot_hra_petrol + incentive
 
 	# ---- Col V: PF Employee --------------------------------------------------
+	# Basic is constrained by the employee's ESS Location min/max wages:
+	#   * if basic < min_wages -> use min_wages as the PF basic (floor it up)
+	#   * if basic > max_wages -> treat basic as 0 for PF (out of band)
+	# Bypassed entirely when Employee.no_validation = 1.
+	no_validation = cint(emp.get("no_validation"))
+	min_wages = flt(emp.get("min_wages"))
+	max_wages = flt(emp.get("max_wages"))
+	pf_basic = basic
+	if not no_validation:
+		if max_wages and basic > max_wages:
+			pf_basic = 0.0
+		elif min_wages and basic < min_wages:
+			pf_basic = min_wages
+	else:
+		pf_basic = flt(emp.get("no_validation_base_salary"))
+
+
+
 	pf_employee = 0.0
-	if emp.get("uan_no") and basic and days_in_month:
-		pf_employee = (basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
+	if emp.get("uan_no") and pf_basic and days_in_month:
+		pf_employee = (pf_basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
 
 	# ---- Col W: ESIC Employee ------------------------------------------------
 	esic_employee = 0.0
@@ -604,6 +812,40 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# ---- Col Y / Z: Employer shares -------------------------------------------
 	pf_employer = pf_employee * PF_EMPLOYER_FACTOR
 	esic_employer = esic_employee * ESIC_EMPLOYER_FACTOR
+
+	# ---- Col AA / AB ---------------------------------------------------------
+	full_adv = flt(advance.get("full", 0.0))
+	part_adv = flt(advance.get("part", 0.0))
+
+	# ---- Col AC: Net Amount Payable ------------------------------------------
+	net_payable = (
+		total_salary_due - pf_employee - esic_employee - tds - full_adv - part_adv
+	)
+
+	# ---- Col AD: Expenses balance (observation #16) --------------------------
+	# Payroll Payable ledger balance as of period end minus AB (part-advance
+	# transfers within the period are already captured in AB).
+	expenses_balance = flt(payable_balance) - part_adv
+
+	# ---- Col AE: Extra Allowance (observations #19, #20) ---------------------
+	# TADA  -> only Worker/Site or Field/Site, per present day * daily_tada
+	# HRA/Conveyance/Telephone -> everyone EXCEPT Worker/Site & Field/Site
+	tada_amount = 0.0
+	if is_worker_field_site:
+		tada_days = flt(payable_days) - flt(adj_cl) - flt(adj_al)
+		if tada_days < 0:
+			tada_days = 0.0
+		tada_amount = flt(emp.get("daily_tada")) * tada_days
+	hra = conv = tel = 0.0
+	if not is_worker_field_site:
+		hra = flt(emp.get("hra_amount"))
+		conv = flt(emp.get("conveyance_amount"))
+		tel = flt(emp.get("telephone_amount"))
+	extra_allowance = tada_amount + hra + conv + tel
+
+	# ---- Col AF: Net amount to pay (observation #21) -------------------------
+	# AF = AC - AD + AE
+	net_to_pay = net_payable - expenses_balance + extra_allowance
 
 	row = {
 		"employee": emp["employee"],
@@ -617,43 +859,40 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"al_generated": al_generated,
 		"days_worked": flt(days_worked, 2),
 		"late_count": late_count,
+		"approved_half_days": approved_half_days,
 		"extra_late_half_days": extra_late_half_days,
+		"short_leaves_count": short_leave_count,
 		"late_deduction_days": flt(late_deduction, 2),
-		"absent_no_info_days": absent_no_info,
+		"absent_no_info_days": absent_count,
 		"adjusted_from_cl": flt(adj_cl, 2),
 		"adjusted_from_al": flt(adj_al, 2),
 		"balance_cl": flt(balance_cl, 2),
 		"closing_al": flt(closing_al, 2),
 		"payable_days": flt(payable_days, 2),
 		"salary_amount": flt(salary_amount, 2),
+		"working_hours": flt(working_hours, 2),
 		"ot_hra_petrol": flt(ot_hra_petrol, 2),
 		"incentive": flt(incentive, 2),
+		"tada_amount": flt(tada_amount, 2),
+		"hra_amount": flt(hra, 2),
+		"conveyance_amount": flt(conv, 2),
+		"telephone_amount": flt(tel, 2),
+		"extra_allowance": flt(extra_allowance, 2),
 		"total_salary_due": flt(total_salary_due, 2),
 		"pf_employee_share": flt(pf_employee, 2),
 		"esic_employee_share": flt(esic_employee, 2),
 		"tds": flt(tds, 2),
 		"pf_employer_share": flt(pf_employer, 2),
 		"esic_employer_share": flt(esic_employer, 2),
-		"full_advance_adjustment": flt(advance.get("full", 0.0), 2),
-		"part_advance_adjustment": flt(advance.get("part", 0.0), 2),
-		"expenses_balance": 0.0,
+		"full_advance_adjustment": flt(full_adv, 2),
+		"part_advance_adjustment": flt(part_adv, 2),
+		"net_amount_payable": flt(net_payable, 2),
+		"expenses_balance": flt(expenses_balance, 2),
+		"net_amount_to_pay": flt(net_to_pay, 2),
 		"staff_type": staff_type,
 		"location": location,
 		"department": emp.get("department"),
 	}
-	# Net columns from the spec
-	row["net_amount_payable"] = flt(
-		row["total_salary_due"]
-		- row["pf_employee_share"]
-		- row["esic_employee_share"]
-		- row["tds"]
-		- row["full_advance_adjustment"]
-		- row["part_advance_adjustment"],
-		2,
-	)
-	row["net_amount_to_pay"] = flt(
-		row["net_amount_payable"] - row["expenses_balance"], 2
-	)
 	return row
 
 
@@ -670,8 +909,12 @@ def _recompute_row_nets(row):
 		- flt(row.part_advance_adjustment),
 		2,
 	)
+	# Col AF = AC - AD + AE (observation #21)
 	row.net_amount_to_pay = flt(
-		flt(row.net_amount_payable) - flt(row.expenses_balance), 2
+		flt(row.net_amount_payable)
+		- flt(row.expenses_balance)
+		+ flt(getattr(row, "extra_allowance", 0) or 0),
+		2,
 	)
 
 
@@ -690,6 +933,7 @@ def _set_totals(doc):
 		t["pfemp"] += flt(r.pf_employer_share)
 		t["esicemp"] += flt(r.esic_employer_share)
 		t["adv"] += flt(r.full_advance_adjustment) + flt(r.part_advance_adjustment)
+		t["extra"] += flt(getattr(r, "extra_allowance", 0) or 0)
 		t["net_pay"] += flt(r.net_amount_payable)
 		t["net_to_pay"] += flt(r.net_amount_to_pay)
 
@@ -705,35 +949,34 @@ def _set_totals(doc):
 	doc.total_pf_employer = t["pfemp"]
 	doc.total_esic_employer = t["esicemp"]
 	doc.total_advance_adjustment = t["adv"]
+	if hasattr(doc, "total_extra_allowance"):
+		doc.total_extra_allowance = t["extra"]
 	doc.total_net_payable = t["net_pay"]
 	doc.total_net_to_pay = t["net_to_pay"]
 
 
 def _persist_leave_balances(doc):
-	"""Roll the row's closing AL/CL into OTPL Employee Leave Balance."""
+	"""Roll the row's closing AL into OTPL Employee Leave Balance.
+
+	Only AL-eligible employees (i.e. those that already have an entry in
+	OTPL Employee Leave Balance) get updated; CL is tracked by Frappe's
+	standard Leave Allocation system and is not written here.
+	"""
 	for r in doc.employees:
 		bal_name = frappe.db.get_value(
 			"OTPL Employee Leave Balance", {"employee": r.employee}, "name"
 		)
-		if bal_name:
-			frappe.db.set_value(
-				"OTPL Employee Leave Balance",
-				bal_name,
-				{
-					"al_balance": flt(r.closing_al),
-					"cl_balance": flt(r.balance_cl),
-					"as_on_date": doc.to_date,
-				},
-				update_modified=True,
-			)
-		else:
-			bal = frappe.new_doc("OTPL Employee Leave Balance")
-			bal.employee = r.employee
-			bal.al_balance = flt(r.closing_al)
-			bal.cl_balance = flt(r.balance_cl)
-			bal.as_on_date = doc.to_date
-			bal.flags.ignore_permissions = True
-			bal.insert()
+		if not bal_name:
+			continue
+		frappe.db.set_value(
+			"OTPL Employee Leave Balance",
+			bal_name,
+			{
+				"al_balance": flt(r.closing_al),
+				"as_on_date": doc.to_date,
+			},
+			update_modified=True,
+		)
 	frappe.db.commit()
 
 
@@ -743,8 +986,10 @@ def _persist_leave_balances(doc):
 @frappe.whitelist()
 def get_calculation_trace(doc, employee):
 	"""Return a human-readable, step-by-step breakdown of how each column
-	was computed for a single employee, using the same data sources as the
-	main calculation.
+	was computed for a single employee.
+
+	This is intentionally a thin wrapper around the same code path used by
+	``calculate_payroll`` so the dialog always reflects the live formulas.
 	"""
 	doc = frappe.parse_json(doc) if isinstance(doc, str) else doc
 	from_date = getdate(doc.get("from_date"))
@@ -752,6 +997,7 @@ def get_calculation_trace(doc, employee):
 	if not from_date or not to_date:
 		frappe.throw(_("From Date and To Date are required"))
 	days_in_period = (to_date - from_date).days + 1
+	days_in_month = monthrange(from_date.year, from_date.month)[1]
 
 	emp = frappe.db.sql(
 		"""
@@ -759,11 +1005,22 @@ def get_calculation_trace(doc, employee):
 			e.name AS employee, e.employee_name, e.department, e.staff_type,
 			e.location, e.sales_order, e.uan_no, e.esi_number AS esic_no,
 			e.advance_to_be_deducted AS gross_salary, e.basic_salary,
-			e.holiday_list, so.business_line
+			COALESCE(e.no_validation, 0) AS no_validation,
+			COALESCE(esl.min_wages, 0) AS min_wages,
+			COALESCE(esl.max_wages, 0) AS max_wages,
+			e.holiday_list, so.business_line,
+			{tada_expr} AS daily_tada, {hra_expr} AS hra_amount,
+			{conv_expr} AS conveyance_amount, {tel_expr} AS telephone_amount
 		FROM `tabEmployee` e
 		LEFT JOIN `tabSales Order` so ON so.name = e.sales_order
+		LEFT JOIN `tabESS Location` esl ON esl.name = e.custom_ess_location
 		WHERE e.name = %(emp)s
-		""",
+		""".format(
+			tada_expr="COALESCE(e.daily_tada, 0)" if frappe.db.has_column("Employee", "daily_tada") else "0",
+			hra_expr="COALESCE(e.hra_amount, 0)" if frappe.db.has_column("Employee", "hra_amount") else "0",
+			conv_expr="COALESCE(e.conveyance_amount, 0)" if frappe.db.has_column("Employee", "conveyance_amount") else "0",
+			tel_expr="COALESCE(e.telephone_amount, 0)" if frappe.db.has_column("Employee", "telephone_amount") else "0",
+		),
 		{"emp": employee},
 		as_dict=True,
 	)
@@ -775,140 +1032,65 @@ def get_calculation_trace(doc, employee):
 	leave_map = _fetch_approved_leaves([employee], from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee([emp], from_date, to_date)
 	balance_map = _fetch_leave_balances([employee])
+	cl_balance_map = _fetch_cl_balances([employee], from_date)
 	tds_map = _fetch_tds([employee], from_date)
-	advance_map = _fetch_advance_balances([employee], to_date)
+	advance_map = _fetch_advance_balances([employee], from_date, to_date)
+	payable_balance_map = _fetch_payroll_payable_balance([employee], to_date)
+	al_eligible_emps = _fetch_al_eligible_employees([employee])
+	al_eligible_bls = _fetch_al_eligible_business_lines()
 
 	att = att_map.get(employee, {})
-	approved_leaves = leave_map.get(employee, set())
+	leaves = leave_map.get(employee, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0})
 	holiday_dates = holidays_by_emp.get(employee, set())
 	balance = balance_map.get(employee, {})
+	cl_bal = cl_balance_map.get(employee, 0.0)
 	tds = tds_map.get(employee, 0.0)
 	advance = advance_map.get(employee, {"full": 0.0, "part": 0.0})
+	payable_balance = payable_balance_map.get(employee, 0.0)
+	al_eligible = (employee in al_eligible_emps) and (emp.get("business_line") in al_eligible_bls)
 
-	gross = flt(emp.get("gross_salary"))
-	basic = flt(emp.get("basic_salary"))
+	row = _calculate_employee(
+		emp, from_date=from_date, to_date=to_date,
+		days_in_period=days_in_period, att=att, leaves=leaves,
+		holiday_dates=holiday_dates, balance=balance, tds=tds,
+		advance=advance, cl_balance=cl_bal,
+		payable_balance=payable_balance,
+		al_eligible=al_eligible,
+	)
+
+	# --- Pretty-print helpers -------------------------------------------------
+	def _f(v):
+		return "{0:.2f}".format(flt(v))
+
 	staff_type = emp.get("staff_type")
 	location = emp.get("location")
 	is_worker_site = (staff_type == "Worker" and location == "Site")
+	is_worker_field_site = (staff_type in ("Worker", "Field") and location == "Site")
 	is_worker_haridwar = (staff_type == "Worker" and location == "Haridwar")
 	is_worker_noida_or_hwr = (staff_type == "Worker" and location in ("Noida", "Haridwar"))
-	skip_late_metrics = (staff_type in ("Worker", "Field") and location == "Site")
 
 	present_dates = att.get("present_dates", set())
 	half_day_dates = att.get("half_day_dates", set())
-	all_marked = att.get("all_marked_dates", set())
-	late_count = 0 if skip_late_metrics else att.get("late_count", 0)
-	extra_late_half_days = 0 if skip_late_metrics else att.get("extra_late_half_days", 0)
-	full_checkin_days = att.get("full_checkin_days", 0)
-	checkin_seconds = att.get("checkin_seconds", 0)
+	absent_dates = att.get("absent_dates", set())
+	processed_dates = att.get("processed_dates", set())
+	working_hours = flt(att.get("working_hours", 0.0))
 	false_count = att.get("false_attendance_count", 0)
+	approved_full = len(leaves.get("full_leave_dates", set()))
+	approved_half = len(leaves.get("half_leave_dates", set()))
+	short_n = leaves.get("short_leave_count", 0)
 
-	non_holiday_present = sum(
-		1 for d in present_dates if d not in holiday_dates
-	) + 0.5 * sum(1 for d in half_day_dates if d not in holiday_dates)
-
-	# AL Generated
-	al_generated = 0
-	if is_worker_site:
-		for h in holiday_dates:
-			if (h - timedelta(days=1)) in present_dates and (h + timedelta(days=1)) in present_dates:
-				al_generated += 1
-
-	# Days Worked
-	if is_worker_site:
-		days_worked_pre = non_holiday_present + al_generated
-		dw_explain = ("Worker @ Site: non-holiday present ({0}) + AL Generated ({1}) = {2}"
-		              .format(non_holiday_present, al_generated, days_worked_pre))
-	else:
-		hc = 0
-		for h in holiday_dates:
-			if any((h - timedelta(days=k)) in present_dates for k in (1, 2, 3)) \
-			   and any((h + timedelta(days=k)) in present_dates for k in (1, 2, 3)):
-				hc += 1
-		days_worked_pre = non_holiday_present + hc
-		dw_explain = ("Non-(Worker@Site): non-holiday present ({0}) + qualifying holidays ({1}) = {2}"
-		              .format(non_holiday_present, hc, days_worked_pre))
-	days_worked = max(days_worked_pre - 2 * false_count, 0)
-
-	# Late deduction
-	if late_count >= 5:
-		late_ded = 1 + (late_count - 5) * 0.5
-		k_explain = "L>=5 ⇒ 1 + (L-5)*0.5 = 1 + ({0}-5)*0.5 = {1}".format(late_count, late_ded)
-	elif late_count >= 3:
-		late_ded = 0.5
-		k_explain = "3 ≤ L < 5 ⇒ 0.5"
-	else:
-		late_ded = 0
-		k_explain = "L < 3 ⇒ 0"
-	late_ded += extra_late_half_days * 0.5
-
-	# Absent w/o info
-	absent_no_info = 0
-	for r in att.get("_rows", []):
-		if r["date"] in approved_leaves:
-			continue
-		if not r["checkin_time"] and not r["checkout_time"]:
-			absent_no_info += 2
-
-	# Leaves
-	cl_balance = flt(balance.get("cl_balance") or balance.get("year_opening_cl") or 0)
+	cl_balance = flt(cl_bal)
 	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
-	approved_n = len(approved_leaves)
-	if approved_n >= 2:
-		adj_cl = min(2, cl_balance)
-	elif cl_balance > 0:
-		adj_cl = min(approved_n, cl_balance)
-	else:
-		adj_cl = 0
-	remaining = max(0, approved_n - adj_cl)
-	if is_worker_site:
-		adj_al = min(remaining, al_balance)
-		closing_al = al_balance + al_generated - adj_al
-	else:
-		adj_al = 0
-		closing_al = 0
-
-	balance_cl = cl_balance - adj_cl
-
-	payable_days = max(days_worked - late_ded - absent_no_info + adj_cl + adj_al, 0)
-	days_in_month = monthrange(from_date.year, from_date.month)[1]
-	per_day = (gross / days_in_month) if days_in_month else 0
-	salary_amount = per_day * payable_days
-
-	ot = 0.0
-	ot_explain = "N/A (only Worker @ Noida/Haridwar)"
-	if is_worker_noida_or_hwr and full_checkin_days and gross:
-		ot_hours = (checkin_seconds / 3600.0) - (full_checkin_days * STD_HOURS_PER_DAY)
-		hourly_rate = gross / (days_in_month * SALARY_HOURS_PER_DAY)
-		ot = ot_hours * hourly_rate
-		ot_explain = ("OT hrs = {0:.2f}h - ({1} days * {2}h) = {3:.2f}h; rate = {4:.2f}/h ⇒ {5:.2f}"
-		              .format(checkin_seconds / 3600.0, full_checkin_days,
-		                      STD_HOURS_PER_DAY, ot_hours, hourly_rate, ot))
-
-	incentive = 0.0
-	pcount = len(present_dates) + 0.5 * len(half_day_dates)
-	if is_worker_haridwar and pcount >= days_in_month:
-		incentive = WORKER_HARIDWAR_INCENTIVE
-
-	total_due = salary_amount + ot + incentive
-
-	pf_emp = 0.0
-	if emp.get("uan_no") and basic and days_in_month:
-		pf_emp = (basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
-
-	esic_emp = 0.0
-	if emp.get("esic_no") and gross and gross < ESIC_GROSS_LIMIT and days_in_month:
-		esic_emp = (gross / days_in_month) * payable_days * ESIC_EMPLOYEE_RATE
-
-	pf_er = pf_emp * PF_EMPLOYER_FACTOR
-	esic_er = esic_emp * ESIC_EMPLOYER_FACTOR
-
 	full_adv = flt(advance.get("full", 0.0))
 	part_adv = flt(advance.get("part", 0.0))
-	net_payable = total_due - pf_emp - esic_emp - tds - full_adv - part_adv
 
-	def _fmt(v):
-		return "{0:.2f}".format(flt(v))
+	al_reason = []
+	if not is_worker_site:
+		al_reason.append("not Worker@Site")
+	if employee not in al_eligible_emps:
+		al_reason.append("no OTPL Employee Leave Balance row")
+	if emp.get("business_line") not in al_eligible_bls:
+		al_reason.append("Business Line not AL-eligible")
 
 	steps = [
 		{
@@ -919,88 +1101,111 @@ def get_calculation_trace(doc, employee):
 				("Staff Type / Location", "{0} / {1}".format(staff_type or "-", location or "-")),
 				("Period", "{0} → {1} ({2} days selected; {3} days in month)".format(from_date, to_date, days_in_period, days_in_month)),
 				("UAN No / ESIC No", "{0} / {1}".format(emp.get("uan_no") or "-", emp.get("esic_no") or "-")),
-				("Gross (Rate of Wages)", _fmt(gross)),
-				("Basic Salary", _fmt(basic)),
+				("Gross (Rate of Wages)", _f(emp.get("gross_salary"))),
+				("Basic Salary", _f(emp.get("basic_salary"))),
 				("Holiday list dates in period", str(len(holiday_dates))),
+				("AL Calculation", "ENABLED" if al_eligible else ("DISABLED — " + ", ".join(al_reason))),
 			],
 		},
 		{
 			"section": "Attendance",
 			"items": [
-				("Attendances submitted (excl. false)", str(len(all_marked))),
+				("Attendance Processed (excl. false)", str(len(processed_dates))),
 				("Present days", str(len(present_dates))),
-				("Half days", str(len(half_day_dates))),
-				("Late marks (custom_late_mark)", str(late_count)),
-				("Half days with late_entry", str(extra_late_half_days)),
-				("Days w/ both check-in & check-out", str(full_checkin_days)),
-				("Total checked-in hours", "{0:.2f}".format(checkin_seconds / 3600.0)),
+				("Half-day attendance due to Late Entry / Early Exit", str(row.get("extra_late_half_days", 0))),
+				("Absent days", str(len(absent_dates))),
+				("Late Entry/Early Exit", str(row.get("late_count", 0))),
+				("Total working hours (Attendance.working_hours)", "{0:.2f}".format(working_hours)),
 				("False attendances", str(false_count) + " (deducts 2 days each)"),
-				("Approved leave dates", str(approved_n)),
+			],
+		},
+		{
+			"section": "Approved Leaves (OTPL Leave)",
+			"items": [
+				("Approved full-day leaves (used for CL/AL adj.)", str(approved_full)),
+				("Approved half-day leaves (from OTPL Leave, half_day=1)", str(approved_half)),
+				("Approved short leaves", str(short_n)),
 			],
 		},
 		{
 			"section": "Computed Columns",
 			"items": [
 				("(G) AL Generated",
-				 "{0}  —  {1}".format(al_generated,
-				                      "Worker@Site only: holidays where present on day before AND after"
-				                      if is_worker_site else "N/A (only Worker@Site)")),
+				 "{0}  —  {1}".format(row["al_generated"],
+				                      "qualifying holidays (present incl. half day in any of 3 days before OR after)"
+				                      if al_eligible else "0 (AL disabled)")),
 				("(H) Days Worked",
-				 "{0}  —  {1}; minus 2×{2} false = {3}"
-				 .format(_fmt(days_worked), dw_explain, false_count, _fmt(days_worked))),
-				("(I) Late count (L)",
-				 "{0}  \u2014  {1}".format(late_count,
-				                          "N/A for Worker/Field @ Site" if skip_late_metrics else "from custom_late_mark")),
-				("(J) Extra-late half days",
-				 "{0}  \u2014  {1}".format(extra_late_half_days,
-				                          "N/A for Worker/Field @ Site" if skip_late_metrics else "Half Day with late_entry")),
+				 "{0}  —  non-holiday present + qualifying holidays (OR rule); minus 2×{1} false attendance"
+				 .format(_f(row["days_worked"]), false_count)),
+				("(I) Late Marked", str(row["late_count"])),
+				("(J) Half days marked due to extra late", str(row["extra_late_half_days"])),
 				("(K) Late deduction days",
-				 "{0}  —  {1}; + J*0.5 = {2}*0.5".format(_fmt(late_ded), k_explain, extra_late_half_days)),
-				("(L) Absent w/o info (×2)",
-				 "{0}  —  marked days w/o leave & both check-in/out NULL, counted ×2".format(absent_no_info)),
+				 "{0} = (approved half-days {1} + extra-late half-days {2}) / 2"
+				 .format(_f(row["late_deduction_days"]), approved_half, row["extra_late_half_days"])),
+				("(L) Absent w/o info",
+				 "{0}  —  count of Attendance.status='Absent' (excl. false)".format(row["absent_no_info_days"])),
 				("(M) Adjusted from CL",
-				 "{0}  —  approved={1}, CL bal={2}".format(_fmt(adj_cl), approved_n, _fmt(cl_balance))),
+				 "{0}  —  approved full leaves={1}, CL bal={2}".format(_f(row["adjusted_from_cl"]), approved_full, _f(cl_balance))),
 				("(N) Adjusted from AL",
-				 "{0}  \u2014  {1}".format(_fmt(adj_al),
-				                          "remaining leaves={0}, AL bal={1}".format(remaining, _fmt(al_balance))
-				                          if is_worker_site else "N/A (only Worker@Site)")),
-				("(O) Balance CL", "{0} = {1} \u2212 {2}".format(_fmt(balance_cl), _fmt(cl_balance), _fmt(adj_cl))),
+				 "{0}  —  {1}".format(_f(row["adjusted_from_al"]),
+				                      "remaining full leaves after CL, capped by AL bal={0}".format(_f(al_balance))
+				                      if al_eligible else "0 (AL disabled)")),
+				("(O) Balance CL", "{0} = {1} − {2}".format(_f(row["balance_cl"]), _f(cl_balance), _f(row["adjusted_from_cl"]))),
 				("(P) Closing AL",
-				 "{0}  \u2014  {1}".format(_fmt(closing_al),
-				                          "{0} + {1} \u2212 {2}".format(_fmt(al_balance), al_generated, _fmt(adj_al))
-				                          if is_worker_site else "N/A (only Worker@Site)")),
+				 "{0}  —  {1}".format(_f(row["closing_al"]),
+				                      "{0} + {1} − {2}".format(_f(al_balance), row["al_generated"], _f(row["adjusted_from_al"]))
+				                      if al_eligible else "0 (AL disabled)")),
 				("(Q) Payable Days",
-				 "{0} = H({1}) − K({2}) − L({3}) + M({4}) + N({5})"
-				 .format(_fmt(payable_days), _fmt(days_worked), _fmt(late_ded),
-				         absent_no_info, _fmt(adj_cl), _fmt(adj_al))),
+				 "{0} = H({1}) − K({2}) − L({3}) + M({4}) + N({5})   (can be negative)"
+				 .format(_f(row["payable_days"]), _f(row["days_worked"]),
+				         _f(row["late_deduction_days"]), row["absent_no_info_days"],
+				         _f(row["adjusted_from_cl"]), _f(row["adjusted_from_al"]))),
 				("(R) Salary Amount",
-				 "{0} = (Gross {1} / {2} days-in-month) × Q {3} = {4} × {3}"
-				 .format(_fmt(salary_amount), _fmt(gross), days_in_month,
-				         _fmt(payable_days), _fmt(per_day))),
-				("(S) OT/HRA/Petrol", "{0}  —  {1}".format(_fmt(ot), ot_explain)),
+				 "{0} = (Gross {1} / {2} days-in-month) × Q {3}"
+				 .format(_f(row["salary_amount"]), _f(emp.get("gross_salary")),
+				         days_in_month, _f(row["payable_days"]))),
+				("(S) OT/HRA/Petrol",
+				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
+				                      "OT hours = working_hours({0:.2f}) − (H({1}) × 8) ; amount = OT × Gross/({2}×8)"
+				                      .format(working_hours, _f(row["days_worked"]), days_in_month)
+				                      if is_worker_noida_or_hwr else "N/A (only Worker@Noida/Haridwar)")),
 				("(T) Incentive",
-				 "{0}  —  {1}".format(_fmt(incentive),
-				                      "Worker@Haridwar present every day of the month ({0}) ⇒ ₹200".format(days_in_month)
+				 "{0}  —  {1}".format(_f(row["incentive"]),
+				                      "Worker@Haridwar: present + qualified holidays ≥ {0} ⇒ ₹200".format(days_in_month)
 				                      if is_worker_haridwar else "N/A")),
-				("(U) Total Salary Due", "{0} = R + S + T".format(_fmt(total_due))),
+				("(U) Total Salary Due", "{0} = R + S + T".format(_f(row["total_salary_due"]))),
 				("(V) PF Employee",
-				 "{0}  —  {1}".format(_fmt(pf_emp),
-				                      "(Basic {0}/{1}) × Q × 12%".format(_fmt(basic), days_in_month)
+				 "{0}  —  {1}".format(_f(row["pf_employee_share"]),
+				                      ("(Basic {0}/{1}) × Q × 12%  [wage-band {2}–{3}; no_validation={4}]"
+				                       .format(_f(emp.get("basic_salary")), days_in_month,
+				                               _f(emp.get("min_wages")), _f(emp.get("max_wages")),
+				                               cint(emp.get("no_validation"))))
 				                      if emp.get("uan_no") else "0 (no UAN)")),
 				("(W) ESIC Employee",
-				 "{0}  —  {1}".format(_fmt(esic_emp),
+				 "{0}  —  {1}".format(_f(row["esic_employee_share"]),
 				                      "(Gross/{0}) × Q × 0.75%".format(days_in_month)
-				                      if (emp.get("esic_no") and gross < ESIC_GROSS_LIMIT)
-				                      else ("0 (Gross ≥ {0})".format(ESIC_GROSS_LIMIT)
-				                            if emp.get("esic_no") else "0 (no ESIC)"))),
-				("(X) TDS", "{0}  —  from OTPL Employee Investment".format(_fmt(tds))),
-				("(Y) PF Employer", "{0} = V × 13/12".format(_fmt(pf_er))),
-				("(Z) ESIC Employer", "{0} = W × 3.25/0.75".format(_fmt(esic_er))),
+				                      if (emp.get("esic_no") and flt(emp.get("gross_salary")) < ESIC_GROSS_LIMIT)
+				                      else ("0 (Gross ≥ {0})".format(ESIC_GROSS_LIMIT) if emp.get("esic_no") else "0 (no ESIC)"))),
+				("(X) TDS", "{0}  —  from OTPL Employee Investment".format(_f(row["tds"]))),
+				("(Y) PF Employer", "{0} = V × 13/12".format(_f(row["pf_employer_share"]))),
+				("(Z) ESIC Employer", "{0} = W × 3.25/0.75".format(_f(row["esic_employer_share"]))),
 				("(AA) Full Advance Salary Adjustment",
-				 "{0}  —  GL balance on 'full_advance_salary_adjustment' account (per OTPL Accounting Settings) as on {1}".format(_fmt(full_adv), to_date)),
+				 "{0}  —  GL balance on full-advance account as on {1}".format(_f(full_adv), to_date)),
 				("(AB) Part Advance Salary Adjustment",
-				 "{0}  —  GL balance on 'part_advance_salary_adjustment' account (per OTPL Accounting Settings) as on {1}".format(_fmt(part_adv), to_date)),
-				("(AC) Net Payable", "{0} = U − V − W − X − AA − AB".format(_fmt(net_payable))),
+				 "{0}  —  sum of submitted Journal Entries (purpose='Part Advance Salary Adjustment', account=part-advance-account) posted on last day of selected month ({1}) where employee is the party"
+				 .format(_f(part_adv), get_last_day(from_date))),
+				("(AC) Net Payable", "{0} = U − V − W − X − AA − AB".format(_f(row["net_amount_payable"]))),
+				("(AD) Expenses (Payroll Payable balance)",
+				 "{0} = payroll-payable balance as on {1} − AB"
+				 .format(_f(row["expenses_balance"]), to_date)),
+				("(AE) Extra Allowance",
+				 "{0} = TADA {1} + HRA {2} + Conv {3} + Tel {4}"
+				 .format(_f(row.get("extra_allowance", 0)),
+				         _f(row.get("tada_amount", 0)),
+				         _f(row.get("hra_amount", 0)),
+				         _f(row.get("conveyance_amount", 0)),
+				         _f(row.get("telephone_amount", 0)))),
+				("(AF) Net Amount to Pay", "{0} = AC − AD + AE".format(_f(row["net_amount_to_pay"]))),
 			],
 		},
 	]
