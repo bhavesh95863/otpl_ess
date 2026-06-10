@@ -39,6 +39,29 @@ STD_HOURS_PER_DAY = 8.0
 SALARY_HOURS_PER_DAY = 8.0
 
 
+def _ess_location_max_wage_pf_expr():
+	"""SQL expression for ESS Location.max_wage_pf with legacy fallback to
+	the older `max_wages` column (renamed in v3 patch)."""
+	has_new = frappe.db.has_column("ESS Location", "max_wage_pf")
+	has_old = frappe.db.has_column("ESS Location", "max_wages")
+	if has_new and has_old:
+		return "COALESCE(NULLIF(esl.max_wage_pf, 0), esl.max_wages, 0)"
+	if has_new:
+		return "COALESCE(esl.max_wage_pf, 0)"
+	if has_old:
+		return "COALESCE(esl.max_wages, 0)"
+	return "0"
+
+
+def _ess_location_max_wage_esic_expr():
+	"""SQL expression for ESS Location.max_wage_esic, falling back to the
+	statutory ceiling when not yet configured (so behaviour is unchanged
+	until the field is populated)."""
+	if frappe.db.has_column("ESS Location", "max_wage_esic"):
+		return "COALESCE(esl.max_wage_esic, 0)"
+	return "0"
+
+
 # -----------------------------------------------------------------------------
 # DocType
 # -----------------------------------------------------------------------------
@@ -92,7 +115,8 @@ def get_employees(doc):
 			e.basic_salary                      AS basic_salary,
 			COALESCE(e.no_validation, 0)        AS no_validation,
 			COALESCE(esl.min_wages, 0)          AS min_wages,
-			COALESCE(esl.max_wages, 0)          AS max_wages,
+			{max_wage_pf_expr}                  AS max_wage_pf,
+			{max_wage_esic_expr}                AS max_wage_esic,
 			COALESCE(e.no_validation_base_salary, 0) AS no_validation_base_salary,
 			{tada_expr}                         AS daily_tada,
 			{hra_expr}                          AS hra_amount,
@@ -108,6 +132,8 @@ def get_employees(doc):
 		ORDER BY e.employee_name ASC
 		""".format(
 			where=filters["sql"],
+			max_wage_pf_expr=_ess_location_max_wage_pf_expr(),
+			max_wage_esic_expr=_ess_location_max_wage_esic_expr(),
 			tada_expr="COALESCE(e.daily_tada, 0)" if frappe.db.has_column("Employee", "daily_tada") else "0",
 			hra_expr="COALESCE(e.hra_amount, 0)" if frappe.db.has_column("Employee", "hra_amount") else "0",
 			conv_expr="COALESCE(e.conveyance_amount, 0)" if frappe.db.has_column("Employee", "conveyance_amount") else "0",
@@ -649,6 +675,9 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	is_worker_field_site = (staff_type in ("Worker", "Field") and location == "Site")
 	is_worker_haridwar = (staff_type == "Worker" and location == "Haridwar")
 	is_worker_noida_or_hwr = (staff_type == "Worker" and location in ("Noida", "Haridwar"))
+	is_driver = (staff_type == "Driver")
+	# OT applies to Worker@Noida/Haridwar and to all Drivers (any location).
+	ot_eligible = is_worker_noida_or_hwr or is_driver
 	# Late tracking is N/A for Worker/Field at Site (per business rule).
 	skip_late_metrics = is_worker_field_site
 
@@ -762,12 +791,16 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	salary_amount = per_day * payable_days
 
 	# ---- Col S: OT/HRA/Petrol (observations #17, #18) ------------------------
-	# OT hours = sum(working_hours) - (days_worked * 8)
+	# OT hours = [working_hours + (holiday-list dates in period * 8)] - (days_worked * 8)
 	# OT amount = OT hours * (gross / (days_in_month * 8))
 	ot_hra_petrol = 0.0
 	ot_hours = 0.0
-	if is_worker_noida_or_hwr and gross and days_in_month:
-		ot_hours = working_hours - (days_worked * SALARY_HOURS_PER_DAY)
+	if ot_eligible and gross and days_in_month:
+		ot_hours = (
+			working_hours
+			+ (len(holiday_dates) * STD_HOURS_PER_DAY)
+			- (days_worked * SALARY_HOURS_PER_DAY)
+		)
 		hourly_rate = gross / (days_in_month * SALARY_HOURS_PER_DAY)
 		ot_hra_petrol = ot_hours * hourly_rate
 
@@ -782,36 +815,62 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	total_salary_due = salary_amount + ot_hra_petrol + incentive
 
 	# ---- Col V: PF Employee --------------------------------------------------
-	# Basic is constrained by the employee's ESS Location min/max wages:
-	#   * if basic < min_wages -> use min_wages as the PF basic (floor it up)
-	#   * if basic > max_wages -> treat basic as 0 for PF (out of band)
-	# Bypassed entirely when Employee.no_validation = 1.
+	# PF basic wage band:
+	#   * basic < min_wages              -> use min_wages
+	#   * min_wages <= basic <= max_wage_pf -> use basic
+	#   * basic > max_wage_pf            -> use max_wage_pf
+	# When Employee.no_validation = 1, override with no_validation_base_salary
+	# (band check bypassed entirely).
+	# Computed only if UAN is populated.
 	no_validation = cint(emp.get("no_validation"))
 	min_wages = flt(emp.get("min_wages"))
-	max_wages = flt(emp.get("max_wages"))
-	pf_basic = basic
-	if not no_validation:
-		if max_wages and basic > max_wages:
-			pf_basic = 0.0
-		elif min_wages and basic < min_wages:
-			pf_basic = min_wages
-	else:
+	max_wage_pf = flt(emp.get("max_wage_pf"))
+	max_wage_esic = flt(emp.get("max_wage_esic"))
+
+	if no_validation:
 		pf_basic = flt(emp.get("no_validation_base_salary"))
-
-
+	else:
+		pf_basic = basic
+		if min_wages and pf_basic < min_wages:
+			pf_basic = min_wages
+		if max_wage_pf and pf_basic > max_wage_pf:
+			pf_basic = max_wage_pf
 
 	pf_employee = 0.0
 	if emp.get("uan_no") and pf_basic and days_in_month:
 		pf_employee = (pf_basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
 
 	# ---- Col W: ESIC Employee ------------------------------------------------
+	# ESIC gross wage band:
+	#   * gross < min_wages                 -> use min_wages
+	#   * min_wages <= gross <= max_wage_esic -> use gross
+	#   * gross > max_wage_esic             -> use max_wage_esic
+	# Computed only if ESIC No is populated.
 	esic_employee = 0.0
-	if emp.get("esic_no") and gross and gross < ESIC_GROSS_LIMIT and days_in_month:
-		esic_employee = (gross / days_in_month) * payable_days * ESIC_EMPLOYEE_RATE
+	if emp.get("esic_no") and days_in_month:
+		esic_gross = gross
+		if min_wages and esic_gross < min_wages:
+			esic_gross = min_wages
+		if max_wage_esic and esic_gross > max_wage_esic:
+			esic_gross = max_wage_esic
+		if esic_gross:
+			esic_employee = (esic_gross / days_in_month) * payable_days * ESIC_EMPLOYEE_RATE
 
 	# ---- Col Y / Z: Employer shares -------------------------------------------
 	pf_employer = pf_employee * PF_EMPLOYER_FACTOR
 	esic_employer = esic_employee * ESIC_EMPLOYER_FACTOR
+
+	# ---- TDS -----------------------------------------------------------------
+	tds_amount = flt(tds)
+
+	# If total salary due is negative, zero out V/W/X/Y/Z (no statutory deductions
+	# / TDS on a negative wage).
+	if total_salary_due < 0:
+		pf_employee = 0.0
+		esic_employee = 0.0
+		tds_amount = 0.0
+		pf_employer = 0.0
+		esic_employer = 0.0
 
 	# ---- Col AA / AB ---------------------------------------------------------
 	full_adv = flt(advance.get("full", 0.0))
@@ -819,13 +878,19 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 
 	# ---- Col AC: Net Amount Payable ------------------------------------------
 	net_payable = (
-		total_salary_due - pf_employee - esic_employee - tds - full_adv - part_adv
+		total_salary_due - pf_employee - esic_employee - tds_amount - full_adv - part_adv
 	)
 
 	# ---- Col AD: Expenses balance (observation #16) --------------------------
-	# Payroll Payable ledger balance as of period end minus AB (part-advance
-	# transfers within the period are already captured in AB).
-	expenses_balance = flt(payable_balance) - part_adv
+	# Payroll Payable ledger balance as of period end, netted against AB
+	# (part-advance transfers within the period are already captured in AB).
+	#   * balance >= 0  ->  AD = balance - AB
+	#   * balance <  0  ->  AD = balance + AB
+	pp_balance = flt(payable_balance)
+	if pp_balance >= 0:
+		expenses_balance = pp_balance - part_adv
+	else:
+		expenses_balance = pp_balance + part_adv
 
 	# ---- Col AE: Extra Allowance (observations #19, #20) ---------------------
 	# TADA  -> only Worker/Site or Field/Site, per present day * daily_tada
@@ -881,7 +946,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"total_salary_due": flt(total_salary_due, 2),
 		"pf_employee_share": flt(pf_employee, 2),
 		"esic_employee_share": flt(esic_employee, 2),
-		"tds": flt(tds, 2),
+		"tds": flt(tds_amount, 2),
 		"pf_employer_share": flt(pf_employer, 2),
 		"esic_employer_share": flt(esic_employer, 2),
 		"full_advance_adjustment": flt(full_adv, 2),
@@ -900,6 +965,15 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 # Helpers (called from validate)
 # -----------------------------------------------------------------------------
 def _recompute_row_nets(row):
+	# If Total Salary Due (U) is negative, zero out V/W/X/Y/Z so they match the
+	# Calculate Salary output even after manual edits.
+	if flt(row.total_salary_due) < 0:
+		row.pf_employee_share = 0
+		row.esic_employee_share = 0
+		row.tds = 0
+		row.pf_employer_share = 0
+		row.esic_employer_share = 0
+
 	row.net_amount_payable = flt(
 		flt(row.total_salary_due)
 		- flt(row.pf_employee_share)
@@ -1007,7 +1081,8 @@ def get_calculation_trace(doc, employee):
 			e.advance_to_be_deducted AS gross_salary, e.basic_salary,
 			COALESCE(e.no_validation, 0) AS no_validation,
 			COALESCE(esl.min_wages, 0) AS min_wages,
-			COALESCE(esl.max_wages, 0) AS max_wages,
+			{max_wage_pf_expr} AS max_wage_pf,
+			{max_wage_esic_expr} AS max_wage_esic,
 			e.holiday_list, so.business_line,
 			{tada_expr} AS daily_tada, {hra_expr} AS hra_amount,
 			{conv_expr} AS conveyance_amount, {tel_expr} AS telephone_amount
@@ -1016,6 +1091,8 @@ def get_calculation_trace(doc, employee):
 		LEFT JOIN `tabESS Location` esl ON esl.name = e.custom_ess_location
 		WHERE e.name = %(emp)s
 		""".format(
+			max_wage_pf_expr=_ess_location_max_wage_pf_expr(),
+			max_wage_esic_expr=_ess_location_max_wage_esic_expr(),
 			tada_expr="COALESCE(e.daily_tada, 0)" if frappe.db.has_column("Employee", "daily_tada") else "0",
 			hra_expr="COALESCE(e.hra_amount, 0)" if frappe.db.has_column("Employee", "hra_amount") else "0",
 			conv_expr="COALESCE(e.conveyance_amount, 0)" if frappe.db.has_column("Employee", "conveyance_amount") else "0",
@@ -1103,6 +1180,16 @@ def get_calculation_trace(doc, employee):
 				("UAN No / ESIC No", "{0} / {1}".format(emp.get("uan_no") or "-", emp.get("esic_no") or "-")),
 				("Gross (Rate of Wages)", _f(emp.get("gross_salary"))),
 				("Basic Salary", _f(emp.get("basic_salary"))),
+				("Wage Bands (ESS Location)",
+				 "Min Wages {0} | Max Wage PF {1} | Max Wage ESIC {2}"
+				 .format(_f(emp.get("min_wages")), _f(emp.get("max_wage_pf")), _f(emp.get("max_wage_esic")))),
+				("No Validation / Override Basic",
+				 "{0} / {1}".format(cint(emp.get("no_validation")), _f(emp.get("no_validation_base_salary")))),
+				("Opening AL (from OTPL Employee Leave Balance)",
+				 "al_balance={0} | year_opening_al={1} | effective opening={2}"
+				 .format(_f(balance.get("al_balance") or 0),
+				         _f(balance.get("year_opening_al") or 0),
+				         _f(al_balance))),
 				("Holiday list dates in period", str(len(holiday_dates))),
 				("AL Calculation", "ENABLED" if al_eligible else ("DISABLED — " + ", ".join(al_reason))),
 			],
@@ -1166,26 +1253,29 @@ def get_calculation_trace(doc, employee):
 				         days_in_month, _f(row["payable_days"]))),
 				("(S) OT/HRA/Petrol",
 				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
-				                      "OT hours = working_hours({0:.2f}) − (H({1}) × 8) ; amount = OT × Gross/({2}×8)"
-				                      .format(working_hours, _f(row["days_worked"]), days_in_month)
-				                      if is_worker_noida_or_hwr else "N/A (only Worker@Noida/Haridwar)")),
+				                      "OT hours = [working_hours({0:.2f}) + holiday-dates({1}) × 8] − (H({2}) × 8) ; amount = OT × Gross/({3}×8)"
+				                      .format(working_hours, len(holiday_dates), _f(row["days_worked"]), days_in_month)
+				                      if ot_eligible else "N/A (only Worker@Noida/Haridwar or Driver)")),
 				("(T) Incentive",
 				 "{0}  —  {1}".format(_f(row["incentive"]),
 				                      "Worker@Haridwar: present + qualified holidays ≥ {0} ⇒ ₹200".format(days_in_month)
 				                      if is_worker_haridwar else "N/A")),
-				("(U) Total Salary Due", "{0} = R + S + T".format(_f(row["total_salary_due"]))),
+				("(U) Total Salary Due", "{0} = R + S + T{1}".format(
+					_f(row["total_salary_due"]),
+					"  (negative ⇒ V–Z forced to 0)" if flt(row["total_salary_due"]) < 0 else "")),
 				("(V) PF Employee",
 				 "{0}  —  {1}".format(_f(row["pf_employee_share"]),
-				                      ("(Basic {0}/{1}) × Q × 12%  [wage-band {2}–{3}; no_validation={4}]"
-				                       .format(_f(emp.get("basic_salary")), days_in_month,
-				                               _f(emp.get("min_wages")), _f(emp.get("max_wages")),
-				                               cint(emp.get("no_validation"))))
+				                      ("(PF basic / {0}) × Q × 12%  [basic={1}, band {2}–{3}; no_validation={4}, override_basic={5}]"
+				                       .format(days_in_month, _f(emp.get("basic_salary")),
+				                               _f(emp.get("min_wages")), _f(emp.get("max_wage_pf")),
+				                               cint(emp.get("no_validation")), _f(emp.get("no_validation_base_salary"))))
 				                      if emp.get("uan_no") else "0 (no UAN)")),
 				("(W) ESIC Employee",
 				 "{0}  —  {1}".format(_f(row["esic_employee_share"]),
-				                      "(Gross/{0}) × Q × 0.75%".format(days_in_month)
-				                      if (emp.get("esic_no") and flt(emp.get("gross_salary")) < ESIC_GROSS_LIMIT)
-				                      else ("0 (Gross ≥ {0})".format(ESIC_GROSS_LIMIT) if emp.get("esic_no") else "0 (no ESIC)"))),
+				                      ("(ESIC gross / {0}) × Q × 0.75%  [gross={1}, band {2}–{3}]"
+				                       .format(days_in_month, _f(emp.get("gross_salary")),
+				                               _f(emp.get("min_wages")), _f(emp.get("max_wage_esic"))))
+				                      if emp.get("esic_no") else "0 (no ESIC)")),
 				("(X) TDS", "{0}  —  from OTPL Employee Investment".format(_f(row["tds"]))),
 				("(Y) PF Employer", "{0} = V × 13/12".format(_f(row["pf_employer_share"]))),
 				("(Z) ESIC Employer", "{0} = W × 3.25/0.75".format(_f(row["esic_employer_share"]))),
@@ -1196,8 +1286,9 @@ def get_calculation_trace(doc, employee):
 				 .format(_f(part_adv), get_last_day(from_date))),
 				("(AC) Net Payable", "{0} = U − V − W − X − AA − AB".format(_f(row["net_amount_payable"]))),
 				("(AD) Expenses (Payroll Payable balance)",
-				 "{0} = payroll-payable balance as on {1} − AB"
-				 .format(_f(row["expenses_balance"]), to_date)),
+				 "{0} = payroll-payable balance as on {1} {2} AB (balance ≥ 0 ⇒ − AB; balance < 0 ⇒ + AB)"
+				 .format(_f(row["expenses_balance"]), to_date,
+				         "−" if flt(payable_balance) >= 0 else "+")),
 				("(AE) Extra Allowance",
 				 "{0} = TADA {1} + HRA {2} + Conv {3} + Tel {4}"
 				 .format(_f(row.get("extra_allowance", 0)),

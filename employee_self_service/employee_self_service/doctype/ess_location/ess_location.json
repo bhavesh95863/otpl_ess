@@ -31,8 +31,9 @@
   "reporting_manager",
   "section_break_25",
   "min_wages",
+  "max_wage_pf",
   "column_break_27",
-  "max_wages"
+  "max_wage_esic"
  ],
  "fields": [
   {
@@ -187,13 +188,20 @@
    "label": "Min Wages"
   },
   {
+   "fieldname": "max_wage_pf",
+   "fieldtype": "Float",
+   "label": "Max Wage PF",
+   "description": "Upper cap for PF basic. If Employee.basic_salary exceeds this, PF is calculated on this value."
+  },
+  {
    "fieldname": "column_break_27",
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "max_wages",
+   "fieldname": "max_wage_esic",
    "fieldtype": "Float",
-   "label": "Max Wages"
+   "label": "Max Wage ESIC",
+   "description": "Upper cap for ESIC gross. If Employee gross exceeds this, ESIC is calculated on this value."
   }
  ],
  "modified": "2026-05-27 18:13:28.193655",
