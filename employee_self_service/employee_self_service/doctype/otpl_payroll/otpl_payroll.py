@@ -863,9 +863,9 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# ---- TDS -----------------------------------------------------------------
 	tds_amount = flt(tds)
 
-	# If total salary due is negative, zero out V/W/X/Y/Z (no statutory deductions
-	# / TDS on a negative wage).
-	if total_salary_due < 0:
+	# If salary amount (R) is negative, zero out V/W/X/Y/Z (no statutory
+	# deductions / TDS on a negative wage).
+	if salary_amount < 0:
 		pf_employee = 0.0
 		esic_employee = 0.0
 		tds_amount = 0.0
@@ -965,9 +965,9 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 # Helpers (called from validate)
 # -----------------------------------------------------------------------------
 def _recompute_row_nets(row):
-	# If Total Salary Due (U) is negative, zero out V/W/X/Y/Z so they match the
+	# If Salary Amount (R) is negative, zero out V/W/X/Y/Z so they match the
 	# Calculate Salary output even after manual edits.
-	if flt(row.total_salary_due) < 0:
+	if flt(row.salary_amount) < 0:
 		row.pf_employee_share = 0
 		row.esic_employee_share = 0
 		row.tds = 0
@@ -1145,6 +1145,8 @@ def get_calculation_trace(doc, employee):
 	is_worker_field_site = (staff_type in ("Worker", "Field") and location == "Site")
 	is_worker_haridwar = (staff_type == "Worker" and location == "Haridwar")
 	is_worker_noida_or_hwr = (staff_type == "Worker" and location in ("Noida", "Haridwar"))
+	is_driver = (staff_type == "Driver")
+	ot_eligible = is_worker_noida_or_hwr or is_driver
 
 	present_dates = att.get("present_dates", set())
 	half_day_dates = att.get("half_day_dates", set())
@@ -1262,7 +1264,7 @@ def get_calculation_trace(doc, employee):
 				                      if is_worker_haridwar else "N/A")),
 				("(U) Total Salary Due", "{0} = R + S + T{1}".format(
 					_f(row["total_salary_due"]),
-					"  (negative ⇒ V–Z forced to 0)" if flt(row["total_salary_due"]) < 0 else "")),
+					"  (R negative ⇒ V–Z forced to 0)" if flt(row["salary_amount"]) < 0 else "")),
 				("(V) PF Employee",
 				 "{0}  —  {1}".format(_f(row["pf_employee_share"]),
 				                      ("(PF basic / {0}) × Q × 12%  [basic={1}, band {2}–{3}; no_validation={4}, override_basic={5}]"
