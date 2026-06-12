@@ -39,29 +39,6 @@ STD_HOURS_PER_DAY = 8.0
 SALARY_HOURS_PER_DAY = 8.0
 
 
-def _ess_location_max_wage_pf_expr():
-	"""SQL expression for ESS Location.max_wage_pf with legacy fallback to
-	the older `max_wages` column (renamed in v3 patch)."""
-	has_new = frappe.db.has_column("ESS Location", "max_wage_pf")
-	has_old = frappe.db.has_column("ESS Location", "max_wages")
-	if has_new and has_old:
-		return "COALESCE(NULLIF(esl.max_wage_pf, 0), esl.max_wages, 0)"
-	if has_new:
-		return "COALESCE(esl.max_wage_pf, 0)"
-	if has_old:
-		return "COALESCE(esl.max_wages, 0)"
-	return "0"
-
-
-def _ess_location_max_wage_esic_expr():
-	"""SQL expression for ESS Location.max_wage_esic, falling back to the
-	statutory ceiling when not yet configured (so behaviour is unchanged
-	until the field is populated)."""
-	if frappe.db.has_column("ESS Location", "max_wage_esic"):
-		return "COALESCE(esl.max_wage_esic, 0)"
-	return "0"
-
-
 # -----------------------------------------------------------------------------
 # DocType
 # -----------------------------------------------------------------------------
@@ -99,8 +76,17 @@ def get_employees(doc):
 	"""
 	doc = frappe.parse_json(doc) if isinstance(doc, str) else doc
 	filters = _build_employee_filter(doc)
+	return _select_employees(filters["sql"], filters["values"])
 
-	rows = frappe.db.sql(
+
+def _select_employees(where_sql, where_values):
+	"""Internal helper: run the canonical employee SELECT used by payroll
+	calculation. ``where_sql`` is appended after ``e.status='Active'``-style
+	conditions already enforced by ``_build_employee_filter`` (or a raw
+	predicate when fetching by explicit IDs).
+	"""
+	dummy_expr = "e.dummy_employee" if frappe.db.has_column("Employee", "dummy_employee") else "NULL"
+	return frappe.db.sql(
 		"""
 		SELECT
 			e.name                              AS employee,
@@ -115,34 +101,42 @@ def get_employees(doc):
 			e.basic_salary                      AS basic_salary,
 			COALESCE(e.no_validation, 0)        AS no_validation,
 			COALESCE(esl.min_wages, 0)          AS min_wages,
-			{max_wage_pf_expr}                  AS max_wage_pf,
-			{max_wage_esic_expr}                AS max_wage_esic,
+			COALESCE(esl.max_wage_pf, 0)        AS max_wage_pf,
+			COALESCE(esl.max_wage_esic, 0)      AS max_wage_esic,
 			COALESCE(e.no_validation_base_salary, 0) AS no_validation_base_salary,
 			{tada_expr}                         AS daily_tada,
 			{hra_expr}                          AS hra_amount,
 			{conv_expr}                         AS conveyance_amount,
 			{tel_expr}                          AS telephone_amount,
+			{dummy_expr}                        AS dummy_employee,
 			so.business_line                    AS business_line
 		FROM `tabEmployee` e
 		LEFT JOIN `tabSales Order` so
 			ON so.name = e.sales_order
 		LEFT JOIN `tabESS Location` esl
-			ON esl.name = e.custom_ess_location
+			ON esl.name = e.location
 		WHERE {where}
 		ORDER BY e.employee_name ASC
 		""".format(
-			where=filters["sql"],
-			max_wage_pf_expr=_ess_location_max_wage_pf_expr(),
-			max_wage_esic_expr=_ess_location_max_wage_esic_expr(),
+			where=where_sql,
 			tada_expr="COALESCE(e.daily_tada, 0)" if frappe.db.has_column("Employee", "daily_tada") else "0",
 			hra_expr="COALESCE(e.hra_amount, 0)" if frappe.db.has_column("Employee", "hra_amount") else "0",
 			conv_expr="COALESCE(e.conveyance_amount, 0)" if frappe.db.has_column("Employee", "conveyance_amount") else "0",
 			tel_expr="COALESCE(e.telephone_amount, 0)" if frappe.db.has_column("Employee", "telephone_amount") else "0",
+			dummy_expr=dummy_expr,
 		),
-		filters["values"],
+		where_values,
 		as_dict=True,
 	)
-	return rows
+
+
+def _fetch_employees_by_ids(emp_ids):
+	"""Fetch full employee data dicts for an explicit list of employee IDs,
+	bypassing the doc-filter (used for dummy-employee parents that may not
+	match the user's payroll filters)."""
+	if not emp_ids:
+		return []
+	return _select_employees("e.name IN %(ids)s", {"ids": tuple(emp_ids)})
 
 
 @frappe.whitelist()
@@ -169,37 +163,86 @@ def calculate_payroll(doc):
 
 	emp_ids = [e["employee"] for e in employees]
 
+	# Dummy-employee parent mapping ----------------------------------------
+	# If Employee X has dummy_employee = Y, then when payroll is run for Y,
+	# Y's Col Q (payable_days) is taken from X's calculation (parent). All
+	# other columns of Y are computed normally from Y's own basic/gross/etc.
+	parent_of = _fetch_dummy_parents(emp_ids)
+
+	# Include any out-of-batch parent employees so their payable_days can
+	# be computed (their rows are NOT emitted unless already in the batch).
+	extra_parent_ids = [p for p in set(parent_of.values()) if p not in set(emp_ids)]
+	extra_emp_data = _fetch_employees_by_ids(extra_parent_ids) if extra_parent_ids else []
+	all_emps = list(employees) + extra_emp_data
+	all_ids = [e["employee"] for e in all_emps]
+	employee_by_id = {e["employee"]: e for e in all_emps}
+
 	# Pull every dependency once, in O(N) grouped queries
-	att_map = _fetch_attendance_aggregates(emp_ids, from_date, to_date)
-	leave_map = _fetch_approved_leaves(emp_ids, from_date, to_date)
-	holidays_by_emp = _fetch_holidays_per_employee(employees, from_date, to_date)
-	balance_map = _fetch_leave_balances(emp_ids)
-	cl_balance_map = _fetch_cl_balances(emp_ids, from_date)
-	tds_map = _fetch_tds(emp_ids, from_date)
-	advance_map = _fetch_advance_balances(emp_ids, from_date, to_date)
-	payable_balance_map = _fetch_payroll_payable_balance(emp_ids, to_date)
-	al_eligible_emps = _fetch_al_eligible_employees(emp_ids)
+	att_map = _fetch_attendance_aggregates(all_ids, from_date, to_date)
+	leave_map = _fetch_approved_leaves(all_ids, from_date, to_date)
+	holidays_by_emp = _fetch_holidays_per_employee(all_emps, from_date, to_date)
+	balance_map = _fetch_leave_balances(all_ids)
+	cl_balance_map = _fetch_cl_balances(all_ids, from_date)
+	tds_map = _fetch_tds(all_ids, from_date)
+	advance_map = _fetch_advance_balances(all_ids, from_date, to_date)
+	payable_balance_map = _fetch_payroll_payable_balance(all_ids, to_date)
+	al_eligible_emps = _fetch_al_eligible_employees(all_ids)
 	al_eligible_bls = _fetch_al_eligible_business_lines()
+
+	# Memoize payable_days when an out-of-batch parent (or any parent) is
+	# referenced via dummy_employee, so we never recompute it.
+	payable_days_cache = {}
+
+	def _payable_days_for(emp_id):
+		if emp_id in payable_days_cache:
+			return payable_days_cache[emp_id]
+		emp_data = employee_by_id.get(emp_id)
+		if not emp_data:
+			return None
+		parent_row = _calculate_employee(
+			emp_data,
+			from_date=from_date,
+			to_date=to_date,
+			days_in_period=days_in_period,
+			att=att_map.get(emp_id, {}),
+			leaves=leave_map.get(emp_id, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
+			holiday_dates=holidays_by_emp.get(emp_id, set()),
+			balance=balance_map.get(emp_id, {}),
+			cl_balance=cl_balance_map.get(emp_id, 0.0),
+			tds=tds_map.get(emp_id, 0.0),
+			advance=advance_map.get(emp_id, {"full": 0.0, "part": 0.0}),
+			payable_balance=payable_balance_map.get(emp_id, 0.0),
+			al_eligible=(emp_id in al_eligible_emps and emp_data.get("business_line") in al_eligible_bls),
+		)
+		payable_days_cache[emp_id] = parent_row["payable_days"]
+		return parent_row["payable_days"]
 
 	rows = []
 	log_lines = []
 
 	for emp in employees:
 		try:
+			eid = emp["employee"]
+			override = None
+			if eid in parent_of:
+				override = _payable_days_for(parent_of[eid])
+
 			row = _calculate_employee(
 				emp,
 				from_date=from_date,
 				to_date=to_date,
 				days_in_period=days_in_period,
-				att=att_map.get(emp["employee"], {}),
-				leaves=leave_map.get(emp["employee"], {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
-				holiday_dates=holidays_by_emp.get(emp["employee"], set()),
-				balance=balance_map.get(emp["employee"], {}),
-				cl_balance=cl_balance_map.get(emp["employee"], 0.0),
-				tds=tds_map.get(emp["employee"], 0.0),
-				advance=advance_map.get(emp["employee"], {"full": 0.0, "part": 0.0}),
-				payable_balance=payable_balance_map.get(emp["employee"], 0.0),
-				al_eligible=(emp["employee"] in al_eligible_emps and (emp.get("business_line") in al_eligible_bls)),
+				att=att_map.get(eid, {}),
+				leaves=leave_map.get(eid, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
+				holiday_dates=holidays_by_emp.get(eid, set()),
+				balance=balance_map.get(eid, {}),
+				cl_balance=cl_balance_map.get(eid, 0.0),
+				tds=tds_map.get(eid, 0.0),
+				advance=advance_map.get(eid, {"full": 0.0, "part": 0.0}),
+				payable_balance=payable_balance_map.get(eid, 0.0),
+				al_eligible=(eid in al_eligible_emps and (emp.get("business_line") in al_eligible_bls)),
+				payable_days_override=override,
+				payable_days_source=parent_of.get(eid),
 			)
 			rows.append(row)
 		except Exception:
@@ -210,6 +253,24 @@ def calculate_payroll(doc):
 			log_lines.append("{0}: ERROR (see Error Log)".format(emp["employee"]))
 
 	return {"rows": rows, "log": log_lines}
+
+
+def _fetch_dummy_parents(emp_ids):
+	"""Return {child_emp: parent_emp} for any child in ``emp_ids`` that
+	appears as another employee's ``dummy_employee``. Empty when the
+	column doesn't exist."""
+	if not emp_ids or not frappe.db.has_column("Employee", "dummy_employee"):
+		return {}
+	rows = frappe.db.sql(
+		"""SELECT name AS parent, dummy_employee
+		   FROM `tabEmployee`
+		   WHERE dummy_employee IN %(ids)s
+		     AND dummy_employee IS NOT NULL
+		     AND dummy_employee != ''""",
+		{"ids": tuple(emp_ids)},
+		as_dict=True,
+	)
+	return {r.dummy_employee: r.parent for r in rows}
 
 
 # -----------------------------------------------------------------------------
@@ -665,7 +726,9 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
                         att, leaves, holiday_dates,
                         balance, tds, advance,
                         cl_balance=0.0,
-                        payable_balance=0.0, al_eligible=False):
+                        payable_balance=0.0, al_eligible=False,
+                        payable_days_override=None,
+                        payable_days_source=None):
 	gross = flt(emp.get("gross_salary"))
 	basic = flt(emp.get("basic_salary"))
 	staff_type = emp.get("staff_type")
@@ -709,22 +772,29 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		| half_leave_dates
 	)
 
-	# ---- Qualified holidays (shared rule, observation #6) --------------------
-	# A holiday "qualifies" if the employee is present (incl. Half Day, obs #5)
-	# in ANY of the 3 days preceding OR ANY of the 3 days following the holiday.
-	# This same rule is used for both AL Generated (Worker@Site) and the
-	# Days-Worked holiday count (everyone else).
-	qualified_holidays = 0
+	# ---- Qualified holidays --------------------------------------------------
+	# Two rules:
+	#   * OR rule  (Days Worked, Col H): holiday qualifies if the employee is
+	#     "present-ish" in ANY of the 3 days preceding OR following.
+	#   * AND rule (AL Generated, Col G): holiday qualifies only if the
+	#     employee is "present-ish" in ANY of the 3 days preceding AND ANY
+	#     of the 3 days following. A holiday sandwiched inside a leave
+	#     block (e.g. employee on full leave both sides) therefore does
+	#     NOT generate AL.
+	qualified_holidays = 0          # OR rule, used for Col H
+	qualified_holidays_strict = 0   # AND rule, used for Col G
 	for h in holiday_dates:
 		before = any((h - timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
 		after = any((h + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
 		if before or after:
 			qualified_holidays += 1
+		if before and after:
+			qualified_holidays_strict += 1
 
 	# ---- Col G: AL Generated --------------------------------------------------
-	# AL is generated for each qualified holiday. Only counted when AL is
-	# enabled for this employee/business line.
-	al_generated = qualified_holidays if al_enabled else 0
+	# AL is generated for each holiday that has a present-ish day on BOTH
+	# sides. Only counted when AL is enabled for this employee/business line.
+	al_generated = qualified_holidays_strict if al_enabled else 0
 
 	# ---- Col H: Days Worked (Worked / Holidays / Leave Adjustment) -----------
 	# Half days count as a full present day here (obs #5); the 0.5-day salary
@@ -758,25 +828,40 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# ---- Col M / N: Adjusted from CL / AL ------------------------------------
 	# CL comes from the standard "Casual Leave" allocation (passed in by the
 	# caller). AL comes from OTPL Employee Leave Balance.
+	#
+	# AL Bal is only available when AL is enabled (Worker@Site + opening row +
+	# AL-eligible business line); otherwise it's treated as 0 for the M
+	# formula.
+	#
+	# N = If(AL Bal >= (approved - L), (approved - L), AL Bal)
+	# M = If((approved - L) > AL Bal,
+	#        If((approved - L - AL Bal) >= 2,
+	#           If(CL Bal >= 2, 2, CL Bal),
+	#           If(CL Bal > 0, approved - L - AL Bal, 0)),
+	#        0)
 	cl_balance = flt(cl_balance)
-
 	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
 
-	if approved_leaves_count >= 2:
-		adj_cl = min(2, cl_balance)
-	elif cl_balance > 0:
-		adj_cl = min(approved_leaves_count, cl_balance)
-	else:
-		adj_cl = 0
+	effective_al = al_balance if al_enabled else 0
+	adjusted_leaves = max(0, approved_leaves_count - absent_count)
 
-	# Adjusted from AL: only for AL-enabled employees on AL-eligible business lines
+	# Col N: Adjusted from AL
 	if al_enabled:
-		remaining_leave = max(0, approved_leaves_count - adj_cl)
-		adj_al = min(remaining_leave, al_balance)
+		adj_al = adjusted_leaves if effective_al >= adjusted_leaves else effective_al
 		closing_al = al_balance + al_generated - adj_al
 	else:
 		adj_al = 0
 		closing_al = 0
+
+	# Col M: Adjusted from CL
+	if adjusted_leaves > effective_al:
+		uncovered = adjusted_leaves - effective_al
+		if uncovered >= 2:
+			adj_cl = 2 if cl_balance >= 2 else max(cl_balance, 0)
+		else:
+			adj_cl = uncovered if cl_balance > 0 else 0
+	else:
+		adj_cl = 0
 
 	# ---- Col O / P: Balances --------------------------------------------------
 	balance_cl = cl_balance - adj_cl
@@ -784,6 +869,13 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# ---- Col Q: Payable Days -------------------------------------------------
 	# Per observation #23 do NOT clamp negative values.
 	payable_days = days_worked - late_deduction - absent_count + adj_cl + adj_al
+
+	# Dummy-employee override: when this employee is set as another
+	# Employee's ``dummy_employee``, Col Q is taken from the parent.
+	# Everything downstream of Q (R, S, T, U, V, W) is then computed using
+	# the overridden value with the dummy's own basic/gross.
+	if payable_days_override is not None:
+		payable_days = flt(payable_days_override)
 
 	# ---- Col R: Salary Amount -------------------------------------------------
 	days_in_month = monthrange(from_date.year, from_date.month)[1]
@@ -1073,47 +1165,32 @@ def get_calculation_trace(doc, employee):
 	days_in_period = (to_date - from_date).days + 1
 	days_in_month = monthrange(from_date.year, from_date.month)[1]
 
-	emp = frappe.db.sql(
-		"""
-		SELECT
-			e.name AS employee, e.employee_name, e.department, e.staff_type,
-			e.location, e.sales_order, e.uan_no, e.esi_number AS esic_no,
-			e.advance_to_be_deducted AS gross_salary, e.basic_salary,
-			COALESCE(e.no_validation, 0) AS no_validation,
-			COALESCE(esl.min_wages, 0) AS min_wages,
-			{max_wage_pf_expr} AS max_wage_pf,
-			{max_wage_esic_expr} AS max_wage_esic,
-			e.holiday_list, so.business_line,
-			{tada_expr} AS daily_tada, {hra_expr} AS hra_amount,
-			{conv_expr} AS conveyance_amount, {tel_expr} AS telephone_amount
-		FROM `tabEmployee` e
-		LEFT JOIN `tabSales Order` so ON so.name = e.sales_order
-		LEFT JOIN `tabESS Location` esl ON esl.name = e.custom_ess_location
-		WHERE e.name = %(emp)s
-		""".format(
-			max_wage_pf_expr=_ess_location_max_wage_pf_expr(),
-			max_wage_esic_expr=_ess_location_max_wage_esic_expr(),
-			tada_expr="COALESCE(e.daily_tada, 0)" if frappe.db.has_column("Employee", "daily_tada") else "0",
-			hra_expr="COALESCE(e.hra_amount, 0)" if frappe.db.has_column("Employee", "hra_amount") else "0",
-			conv_expr="COALESCE(e.conveyance_amount, 0)" if frappe.db.has_column("Employee", "conveyance_amount") else "0",
-			tel_expr="COALESCE(e.telephone_amount, 0)" if frappe.db.has_column("Employee", "telephone_amount") else "0",
-		),
-		{"emp": employee},
-		as_dict=True,
-	)
-	if not emp:
+	emp_rows = _fetch_employees_by_ids([employee])
+	if not emp_rows:
 		frappe.throw(_("Employee {0} not found").format(employee))
-	emp = emp[0]
+	emp = emp_rows[0]
 
-	att_map = _fetch_attendance_aggregates([employee], from_date, to_date)
-	leave_map = _fetch_approved_leaves([employee], from_date, to_date)
-	holidays_by_emp = _fetch_holidays_per_employee([emp], from_date, to_date)
-	balance_map = _fetch_leave_balances([employee])
-	cl_balance_map = _fetch_cl_balances([employee], from_date)
-	tds_map = _fetch_tds([employee], from_date)
-	advance_map = _fetch_advance_balances([employee], from_date, to_date)
-	payable_balance_map = _fetch_payroll_payable_balance([employee], to_date)
-	al_eligible_emps = _fetch_al_eligible_employees([employee])
+	# Dummy-employee parent: if another Employee has dummy_employee=this,
+	# we need that parent's data too so we can override Q.
+	parent_map = _fetch_dummy_parents([employee])
+	parent_id = parent_map.get(employee)
+	parent_emp = None
+	if parent_id:
+		parent_rows = _fetch_employees_by_ids([parent_id])
+		parent_emp = parent_rows[0] if parent_rows else None
+
+	ids_for_fetch = [employee] + ([parent_id] if parent_id else [])
+	emps_for_fetch = [emp] + ([parent_emp] if parent_emp else [])
+
+	att_map = _fetch_attendance_aggregates(ids_for_fetch, from_date, to_date)
+	leave_map = _fetch_approved_leaves(ids_for_fetch, from_date, to_date)
+	holidays_by_emp = _fetch_holidays_per_employee(emps_for_fetch, from_date, to_date)
+	balance_map = _fetch_leave_balances(ids_for_fetch)
+	cl_balance_map = _fetch_cl_balances(ids_for_fetch, from_date)
+	tds_map = _fetch_tds(ids_for_fetch, from_date)
+	advance_map = _fetch_advance_balances(ids_for_fetch, from_date, to_date)
+	payable_balance_map = _fetch_payroll_payable_balance(ids_for_fetch, to_date)
+	al_eligible_emps = _fetch_al_eligible_employees(ids_for_fetch)
 	al_eligible_bls = _fetch_al_eligible_business_lines()
 
 	att = att_map.get(employee, {})
@@ -1126,6 +1203,25 @@ def get_calculation_trace(doc, employee):
 	payable_balance = payable_balance_map.get(employee, 0.0)
 	al_eligible = (employee in al_eligible_emps) and (emp.get("business_line") in al_eligible_bls)
 
+	# If this employee is a dummy of another, compute parent's payable_days
+	# and override Q for the dummy.
+	payable_days_override = None
+	if parent_emp:
+		parent_row = _calculate_employee(
+			parent_emp, from_date=from_date, to_date=to_date,
+			days_in_period=days_in_period,
+			att=att_map.get(parent_id, {}),
+			leaves=leave_map.get(parent_id, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
+			holiday_dates=holidays_by_emp.get(parent_id, set()),
+			balance=balance_map.get(parent_id, {}),
+			cl_balance=cl_balance_map.get(parent_id, 0.0),
+			tds=tds_map.get(parent_id, 0.0),
+			advance=advance_map.get(parent_id, {"full": 0.0, "part": 0.0}),
+			payable_balance=payable_balance_map.get(parent_id, 0.0),
+			al_eligible=(parent_id in al_eligible_emps and parent_emp.get("business_line") in al_eligible_bls),
+		)
+		payable_days_override = parent_row["payable_days"]
+
 	row = _calculate_employee(
 		emp, from_date=from_date, to_date=to_date,
 		days_in_period=days_in_period, att=att, leaves=leaves,
@@ -1133,6 +1229,8 @@ def get_calculation_trace(doc, employee):
 		advance=advance, cl_balance=cl_bal,
 		payable_balance=payable_balance,
 		al_eligible=al_eligible,
+		payable_days_override=payable_days_override,
+		payable_days_source=parent_id,
 	)
 
 	# --- Pretty-print helpers -------------------------------------------------
@@ -1221,10 +1319,10 @@ def get_calculation_trace(doc, employee):
 			"items": [
 				("(G) AL Generated",
 				 "{0}  —  {1}".format(row["al_generated"],
-				                      "qualifying holidays (present incl. half day in any of 3 days before OR after)"
+				                      "holidays with a present-ish day in BOTH the 3 days before AND the 3 days after"
 				                      if al_eligible else "0 (AL disabled)")),
 				("(H) Days Worked",
-				 "{0}  —  non-holiday present + qualifying holidays (OR rule); minus 2×{1} false attendance"
+				 "{0}  —  non-holiday present + holidays qualifying by OR rule (present-ish before OR after); minus 2×{1} false attendance"
 				 .format(_f(row["days_worked"]), false_count)),
 				("(I) Late Marked", str(row["late_count"])),
 				("(J) Half days marked due to extra late", str(row["extra_late_half_days"])),
@@ -1234,10 +1332,12 @@ def get_calculation_trace(doc, employee):
 				("(L) Absent w/o info",
 				 "{0}  —  count of Attendance.status='Absent' (excl. false)".format(row["absent_no_info_days"])),
 				("(M) Adjusted from CL",
-				 "{0}  —  approved full leaves={1}, CL bal={2}".format(_f(row["adjusted_from_cl"]), approved_full, _f(cl_balance))),
+				 "{0}  —  approved={1}, L={2}, AL Bal={3}, CL Bal={4}; CL covers up to 2 of (approved−L−AL Bal)"
+				 .format(_f(row["adjusted_from_cl"]), approved_full, row["absent_no_info_days"],
+				         _f(al_balance if al_eligible else 0), _f(cl_balance))),
 				("(N) Adjusted from AL",
 				 "{0}  —  {1}".format(_f(row["adjusted_from_al"]),
-				                      "remaining full leaves after CL, capped by AL bal={0}".format(_f(al_balance))
+				                      "min(AL Bal {0}, approved {1} − L {2})".format(_f(al_balance), approved_full, row["absent_no_info_days"])
 				                      if al_eligible else "0 (AL disabled)")),
 				("(O) Balance CL", "{0} = {1} − {2}".format(_f(row["balance_cl"]), _f(cl_balance), _f(row["adjusted_from_cl"]))),
 				("(P) Closing AL",
@@ -1245,10 +1345,13 @@ def get_calculation_trace(doc, employee):
 				                      "{0} + {1} − {2}".format(_f(al_balance), row["al_generated"], _f(row["adjusted_from_al"]))
 				                      if al_eligible else "0 (AL disabled)")),
 				("(Q) Payable Days",
-				 "{0} = H({1}) − K({2}) − L({3}) + M({4}) + N({5})   (can be negative)"
-				 .format(_f(row["payable_days"]), _f(row["days_worked"]),
-				         _f(row["late_deduction_days"]), row["absent_no_info_days"],
-				         _f(row["adjusted_from_cl"]), _f(row["adjusted_from_al"]))),
+				 "{0}  —  {1}".format(_f(row["payable_days"]),
+				                       "TAKEN FROM PARENT employee {0} (this employee is set as that employee's dummy_employee)".format(parent_id)
+				                       if parent_id else
+				                       "H({0}) − K({1}) − L({2}) + M({3}) + N({4})   (can be negative)"
+				                       .format(_f(row["days_worked"]),
+				                               _f(row["late_deduction_days"]), row["absent_no_info_days"],
+				                               _f(row["adjusted_from_cl"]), _f(row["adjusted_from_al"])))),
 				("(R) Salary Amount",
 				 "{0} = (Gross {1} / {2} days-in-month) × Q {3}"
 				 .format(_f(row["salary_amount"]), _f(emp.get("gross_salary")),
