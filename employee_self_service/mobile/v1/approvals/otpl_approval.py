@@ -8,6 +8,37 @@ from employee_self_service.mobile.v1.api_utils import (
 )
 
 
+def _get_marked_attendance_message(employee, employee_name, from_date, to_date):
+    """
+    Return a user-friendly error message if the employee already has submitted
+    'Present' attendance in the given date range, else None.
+
+    Mirrors ERPNext's Leave Application.validate_attendance() so the OTPL Leave
+    approval can fail fast with a clear message instead of bubbling up an
+    AttendanceAlreadyMarkedError when the Leave Application is auto-created.
+    """
+    marked_dates = frappe.db.sql(
+        """
+        SELECT attendance_date FROM `tabAttendance`
+        WHERE employee = %s
+            AND status = 'Present'
+            AND docstatus = 1
+            AND attendance_date BETWEEN %s AND %s
+        ORDER BY attendance_date
+        """,
+        (employee, from_date, to_date),
+    )
+    if not marked_dates:
+        return None
+
+    dates_str = ", ".join(frappe.utils.formatdate(row[0]) for row in marked_dates)
+    return (
+        f"Attendance is already marked as Present for "
+        f"{employee_name or employee} on: {dates_str}. "
+        f"Please cancel the attendance before approving this leave."
+    )
+
+
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_otpl_leave_approval_list(start=0, page_length=10):
@@ -152,11 +183,46 @@ def approve_otpl_leave():
             if leave_doc.status != "Pending":
                 return gen_response(500, f"Leave application is already {leave_doc.status}")
 
-            # Update leave document
-            leave_doc.status = "Approved"
-            leave_doc.approved_from_date = approved_from_date
-            leave_doc.approved_to_date = approved_to_date
-            leave_doc.save(ignore_permissions=True)
+            # Pre-flight: for regular (non-short) leave, ensure attendance isn't
+            # already marked for the approved date range. Approving triggers
+            # create_leave_applications() in on_update, where ERPNext's
+            # Leave Application.validate_attendance() raises
+            # AttendanceAlreadyMarkedError deep in the stack. Check it up front so
+            # the approver gets a clear message and the leave is not left
+            # half-processed.
+            #
+            # Short Leave intentionally does NOT create a Leave Application (the
+            # employee stays present for the day), so existing attendance is
+            # expected and must not block approval.
+            if not leave_doc.short_leave:
+                conflict = _get_marked_attendance_message(
+                    leave_doc.employee,
+                    leave_doc.employee_name,
+                    approved_from_date,
+                    approved_to_date,
+                )
+                if conflict:
+                    return gen_response(500, conflict)
+
+            # Update leave document. The save triggers create_leave_applications()
+            # in on_update; if that fails (overlap, attendance, balance, etc.) we
+            # MUST roll back so the OTPL Leave is not left marked Approved without
+            # its Leave Applications. We cannot rely on Frappe's automatic
+            # request-level rollback here: the broad `except` below catches the
+            # error and returns a normal response, so Frappe would otherwise treat
+            # the request as successful and commit the partial transaction.
+            try:
+                leave_doc.status = "Approved"
+                leave_doc.approved_from_date = approved_from_date
+                leave_doc.approved_to_date = approved_to_date
+                leave_doc.save(ignore_permissions=True)
+            except Exception as save_error:
+                frappe.db.rollback()
+                frappe.log_error(
+                    title="OTPL Leave Approval Failed",
+                    message=frappe.get_traceback(),
+                )
+                return gen_response(500, str(save_error))
 
             return gen_response(200, "Leave application approved successfully")
 
@@ -164,7 +230,7 @@ def approve_otpl_leave():
         frappe.log_error(title=_("OTPL Leave Approval Permission Error"), message=frappe.get_traceback())
         return gen_response(500, "Not permitted to approve OTPL Leave")
     except Exception as e:
-        return exception_handler(e)
+        return gen_response(500, "An error occurred while approving the leave application. Please try again.")
 
 
 @frappe.whitelist()

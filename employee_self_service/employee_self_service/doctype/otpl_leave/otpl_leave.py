@@ -258,23 +258,15 @@ class OTPLLeave(Document):
 				and doc_before_save.status != "Approved"
 				and self.status == "Approved"
 			):
+				# Short Leave is a within-day absence: the employee is still
+				# present for the day, so it must NOT create a Leave Application
+				# (which would generate "On Leave"/"Half Day" attendance and
+				# overwrite the actual Present attendance). Short Leave is tracked
+				# on the OTPL Leave only — daily attendance adjusts its thresholds
+				# (get_approved_short_leave_period) and payroll counts it directly.
 				if self.short_leave:
-					self._create_short_leave_application()
-				else:
-					self._create_regular_leave_applications()
-
-	def _create_short_leave_application(self):
-		"""Create a Short Leave application - does not consume CL or LWP"""
-		from_date = self.approved_from_date or self.from_date
-		short_leave_type = "Short Leave"
-
-		self.make_leave_application(
-			leave_type=short_leave_type,
-			from_date=from_date,
-			to_date=from_date,
-			total_days=1,
-			half_day=0
-		)
+					return
+				self._create_regular_leave_applications()
 
 	def _create_regular_leave_applications(self):
 		from_date = self.approved_from_date
