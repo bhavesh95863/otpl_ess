@@ -958,11 +958,10 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		pf_employee = (pf_basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
 
 	# ---- Col W: ESIC Employee ------------------------------------------------
-	# ESIC gross wage band:
-	#   * gross < min_wages                 -> use min_wages
+	# ESIC gross wage band (computed only if ESIC No is populated):
+	#   * gross < min_wages                   -> use min_wages
 	#   * min_wages <= gross <= max_wage_esic -> use gross
-	#   * gross > max_wage_esic             -> use max_wage_esic
-	# Computed only if ESIC No is populated.
+	#   * gross > max_wage_esic               -> use max_wage_esic (capped)
 	esic_employee = 0.0
 	if emp.get("esic_no") and days_in_month:
 		esic_gross = gross
@@ -1421,7 +1420,7 @@ def get_calculation_trace(doc, employee):
 				                      if emp.get("uan_no") else "0 (no UAN)")),
 				("(W) ESIC Employee",
 				 "{0}  —  {1}".format(_f(row["esic_employee_share"]),
-				                      ("(ESIC gross / {0}) × Q × 0.75%  [gross={1}, band {2}–{3}]"
+				                      ("(ESIC gross / {0}) × Q × 0.75%  [gross={1}, band {2}–{3}; capped at max_wage_esic when gross exceeds it]"
 				                       .format(days_in_month, _f(emp.get("gross_salary")),
 				                               _f(emp.get("min_wages")), _f(emp.get("max_wage_esic"))))
 				                      if emp.get("esic_no") else "0 (no ESIC)")),
