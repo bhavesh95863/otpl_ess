@@ -232,9 +232,17 @@ class OTPLLeave(Document):
 		"""
 		Trigger sync to remote ERP when leave is saved with external manager
 		"""
+		# Create Leave Applications FIRST, before anything commits.
+		# This must run before push_leave_to_remote_erp(), which calls
+		# frappe.db.commit() internally: if creation were done after that commit
+		# and then failed, the OTPL Leave would already be persisted as "Approved"
+		# with no Leave Application. By creating first, any failure here raises
+		# before a commit happens, so Frappe rolls back the whole save (including
+		# the status change) and the leave is not left approved without an application.
+		self.create_leave_applications()
+
 		# Push to remote ERP if external manager is set
 		push_leave_to_remote_erp(self)
-		self.create_leave_applications()
 
 		# Handle status change to Cancelled
 		if not self.get("__islocal"):

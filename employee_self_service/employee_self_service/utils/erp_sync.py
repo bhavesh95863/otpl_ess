@@ -1369,23 +1369,23 @@ def push_leave_to_remote_erp(leave_doc):
 				"retry_count": 0
 			})
 			queue_doc.insert(ignore_permissions=True)
-			
-			# Enqueue the sync job
+
+			# Enqueue the sync job. enqueue_after_commit=True defers the actual
+			# enqueue until the surrounding transaction commits naturally at the
+			# end of the request, so the worker never races ahead of the queue
+			# row being visible. We intentionally do NOT call frappe.db.commit()
+			# here: doing so would commit the caller's transaction mid-save (e.g.
+			# the OTPL Leave status change) before the rest of on_update has run.
 			frappe.enqueue(
 				"employee_self_service.employee_self_service.utils.erp_sync.process_leave_sync_queue",
 				queue="default",
 				timeout=300,
 				queue_name=queue_doc.name,
 				is_async=True,
-				now=False
+				now=False,
+				enqueue_after_commit=True
 			)
-		
-		frappe.db.commit()
-		frappe.log_error(
-			message="Queued Leave sync for {0} to {1} ERP(s)".format(leave_doc.name, len(sync_settings_list)),
-			title="Leave Sync Queue Success"
-		)
-		
+
 	except Exception as e:
 		frappe.log_error(
 			message=frappe.get_traceback(),
