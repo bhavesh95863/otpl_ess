@@ -143,7 +143,8 @@
    "fieldname": "leave_type_for_deduction",
    "fieldtype": "Link",
    "label": "Leave Type for Deduction",
-   "options": "Leave Type"
+   "options": "Leave Type",
+   "hidden": 1
   },
   {
    "default": "5",

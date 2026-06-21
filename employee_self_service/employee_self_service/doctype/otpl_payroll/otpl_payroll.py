@@ -103,6 +103,9 @@ def _select_employees(where_sql, where_values):
 			COALESCE(esl.min_wages, 0)          AS min_wages,
 			COALESCE(esl.max_wage_pf, 0)        AS max_wage_pf,
 			COALESCE(esl.max_wage_esic, 0)      AS max_wage_esic,
+			COALESCE(esl.late_count_for_half_day, 3) AS late_count_for_half_day,
+			COALESCE(esl.late_count_for_full_day, 5) AS late_count_for_full_day,
+			COALESCE(esl.treat_late_as_half_day_after, 5) AS treat_late_as_half_day_after,
 			COALESCE(e.no_validation_base_salary, 0) AS no_validation_base_salary,
 			{tada_expr}                         AS daily_tada,
 			{hra_expr}                          AS hra_amount,
@@ -816,10 +819,32 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	days_worked = max(days_worked, 0)
 
 	# ---- Col K: Late deduction days (observation #9) -------------------------
-	# K = (approved-half-days + extra-late-half-days) / 2
-	# Approved half days here are those marked via OTPL Leave (half_day=1).
+	# K = "Deduction in days due to Late and Extra Late" =
+	#       (approved-half-days + extra-late-half-days) / 2   (half-day leave part)
+	#     + late-mark deduction derived from the No. of Late Marked (Col I).
+	#
+	# The late-mark deduction is a pure function of the late count, using the
+	# three ESS Location "Leave Deduction Rules" fields (defaults 3 / 5 / 5):
+	#   * late_count >= late_count_for_full_day      -> 1 day (full day)
+	#   * late_count >= late_count_for_half_day      -> 0.5 day (half day)
+	#   * else                                       -> 0
+	#   * additionally, for every late beyond treat_late_as_half_day_after,
+	#     add 0.5 (that late is treated as an extra half day).
+	# So with 3 / 5 / 5:  3->0.5, 4->0.5, 5->1.0, 6->1.5, 7->2.0, ...
 	approved_half_days = len(half_leave_dates)
-	late_deduction = (approved_half_days + extra_late_half_days) / 2.0
+
+	late_count_for_half_day = cint(emp.get("late_count_for_half_day")) or 3
+	late_count_for_full_day = cint(emp.get("late_count_for_full_day")) or 5
+	treat_late_as_half_day_after = cint(emp.get("treat_late_as_half_day_after")) or 5
+	late_mark_deduction = 0.0
+	if late_count >= late_count_for_full_day:
+		late_mark_deduction = 1.0
+		if late_count > treat_late_as_half_day_after:
+			late_mark_deduction += (late_count - treat_late_as_half_day_after) * 0.5
+	elif late_count >= late_count_for_half_day:
+		late_mark_deduction = 0.5
+
+	late_deduction = (approved_half_days + extra_late_half_days) / 2.0 + late_mark_deduction
 
 	# ---- Col L: Absent (observation #4) --------------------------------------
 	# Just count Attendance.status='Absent' (excluding false attendance).
@@ -1261,6 +1286,18 @@ def get_calculation_trace(doc, employee):
 	full_adv = flt(advance.get("full", 0.0))
 	part_adv = flt(advance.get("part", 0.0))
 
+	# Late-mark portion of Col K (mirrors _calculate_employee).
+	_lc_half = cint(emp.get("late_count_for_half_day")) or 3
+	_lc_full = cint(emp.get("late_count_for_full_day")) or 5
+	_lc_treat = cint(emp.get("treat_late_as_half_day_after")) or 5
+	_late_mark_deduction = 0.0
+	if row["late_count"] >= _lc_full:
+		_late_mark_deduction = 1.0
+		if row["late_count"] > _lc_treat:
+			_late_mark_deduction += (row["late_count"] - _lc_treat) * 0.5
+	elif row["late_count"] >= _lc_half:
+		_late_mark_deduction = 0.5
+
 	al_reason = []
 	if not is_worker_site:
 		al_reason.append("not Worker@Site")
@@ -1327,8 +1364,15 @@ def get_calculation_trace(doc, employee):
 				("(I) Late Marked", str(row["late_count"])),
 				("(J) Half days marked due to extra late", str(row["extra_late_half_days"])),
 				("(K) Late deduction days",
-				 "{0} = (approved half-days {1} + extra-late half-days {2}) / 2"
-				 .format(_f(row["late_deduction_days"]), approved_half, row["extra_late_half_days"])),
+				 "{total} = approved half-day leaves ({ah}×0.5={ahv}) + extra-late half-days ({eh}×0.5={ehv}) "
+				 "+ late-mark deduction ({lmv})  [Late Marked {lc}; thresholds: half@{h}, full@{f}, treat-as-half-after@{t}]"
+				 .format(total=_f(row["late_deduction_days"]),
+				         ah=approved_half, ahv=_f(approved_half * 0.5),
+				         eh=row["extra_late_half_days"], ehv=_f(row["extra_late_half_days"] * 0.5),
+				         lmv=_f(_late_mark_deduction), lc=row["late_count"],
+				         h=cint(emp.get("late_count_for_half_day")) or 3,
+				         f=cint(emp.get("late_count_for_full_day")) or 5,
+				         t=cint(emp.get("treat_late_as_half_day_after")) or 5)),
 				("(L) Absent w/o info",
 				 "{0}  —  count of Attendance.status='Absent' (excl. false)".format(row["absent_no_info_days"])),
 				("(M) Adjusted from CL",

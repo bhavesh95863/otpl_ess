@@ -465,95 +465,110 @@ def process_monthly_late_deductions():
 			frappe.log_error(title="Monthly Late Deduction Error: {0}".format(employee), message=frappe.get_traceback())
 
 def process_employee_monthly_deduction(employee, from_date, to_date):
-	"""Process late deductions for a single employee for the month"""
-	
-	# Get employee location settings
-	emp_doc = frappe.get_doc("Employee", employee)
-	location = get_employee_location(emp_doc)
-	
-	if not location:
-		return
-	
-	location_settings = frappe.get_doc("ESS Location", location)
-	
-	if not location_settings.leave_type_for_deduction:
-		return
-	
-	late_count_half = location_settings.late_count_for_half_day or 3
-	late_count_full = location_settings.late_count_for_full_day or 5
-	
-	# Count late marks for the month
-	attendance_records = frappe.get_all(
-		"Attendance",
-		filters={
-			"employee": employee,
-			"attendance_date": ["between", [from_date, to_date]],
-			"docstatus": 1
-		},
-		fields=["name", "attendance_date", "status"]
-	)
-	
-	late_count = 0
-	for att in attendance_records:
-		att_doc = frappe.get_doc("Attendance", att.name)
-		# Count if either late_entry or early_exit is marked
-		if (hasattr(att_doc, 'late_entry') and att_doc.late_entry) or (hasattr(att_doc, 'early_exit') and att_doc.early_exit):
-			late_count += 1
-	
-	# Calculate leave deduction
-	leave_days = 0
-	if late_count >= late_count_full:
-		# 5 L = 1 full day, then every additional L = 0.5 day
-		leave_days = 1
-		extra_lates = late_count - late_count_full
-		leave_days += extra_lates * 0.5
-	elif late_count >= late_count_half:
-		# 3 L = 0.5 day
-		leave_days = 0.5
-	
-	if leave_days > 0:
-		# Create leave application for deduction
-		create_leave_application_for_deduction(
-			employee, 
-			to_date, 
-			leave_days, 
-			location_settings.leave_type_for_deduction,
-			"Auto-deducted for {0} late marks in {1}".format(late_count, to_date.strftime("%B %Y"))
-		)
+	"""Process late deductions for a single employee for the month.
+
+	DISABLED: the auto-leave-application based late deduction is a separate
+	mechanism from the OTPL Payroll "Late deduction days" (Col K) and is no
+	longer used. The ``leave_type_for_deduction`` field is hidden on ESS
+	Location. Kept as a no-op so existing callers/endpoints don't break.
+	"""
+	return
+
+	# --- Disabled: leave-type-based auto deduction -----------------------------
+	# # Get employee location settings
+	# emp_doc = frappe.get_doc("Employee", employee)
+	# location = get_employee_location(emp_doc)
+	#
+	# if not location:
+	# 	return
+	#
+	# location_settings = frappe.get_doc("ESS Location", location)
+	#
+	# if not location_settings.leave_type_for_deduction:
+	# 	return
+	#
+	# late_count_half = location_settings.late_count_for_half_day or 3
+	# late_count_full = location_settings.late_count_for_full_day or 5
+	#
+	# # Count late marks for the month
+	# attendance_records = frappe.get_all(
+	# 	"Attendance",
+	# 	filters={
+	# 		"employee": employee,
+	# 		"attendance_date": ["between", [from_date, to_date]],
+	# 		"docstatus": 1
+	# 	},
+	# 	fields=["name", "attendance_date", "status"]
+	# )
+	#
+	# late_count = 0
+	# for att in attendance_records:
+	# 	att_doc = frappe.get_doc("Attendance", att.name)
+	# 	# Count if either late_entry or early_exit is marked
+	# 	if (hasattr(att_doc, 'late_entry') and att_doc.late_entry) or (hasattr(att_doc, 'early_exit') and att_doc.early_exit):
+	# 		late_count += 1
+	#
+	# # Calculate leave deduction
+	# leave_days = 0
+	# if late_count >= late_count_full:
+	# 	# 5 L = 1 full day, then every additional L = 0.5 day
+	# 	leave_days = 1
+	# 	extra_lates = late_count - late_count_full
+	# 	leave_days += extra_lates * 0.5
+	# elif late_count >= late_count_half:
+	# 	# 3 L = 0.5 day
+	# 	leave_days = 0.5
+	#
+	# if leave_days > 0:
+	# 	# Create leave application for deduction
+	# 	create_leave_application_for_deduction(
+	# 		employee,
+	# 		to_date,
+	# 		leave_days,
+	# 		location_settings.leave_type_for_deduction,
+	# 		"Auto-deducted for {0} late marks in {1}".format(late_count, to_date.strftime("%B %Y"))
+	# 	)
 
 def create_leave_application_for_deduction(employee, date, leave_days, leave_type, description):
-	"""Create leave application for late deduction"""
-	try:
-		# Check if already exists
-		existing = frappe.db.exists("Leave Application", {
-			"employee": employee,
-			"from_date": date,
-			"to_date": date,
-			"leave_type": leave_type,
-			"description": ["like", "%Auto-deducted%"],
-			"docstatus": ["<", 2]
-		})
-		
-		if existing:
-			return
-		
-		leave_app = frappe.get_doc({
-			"doctype": "Leave Application",
-			"employee": employee,
-			"leave_type": leave_type,
-			"from_date": date,
-			"to_date": date,
-			"half_day": 1 if leave_days == 0.5 else 0,
-			"description": description,
-			"status": "Approved"
-		})
-		
-		leave_app.insert(ignore_permissions=True)
-		leave_app.submit()
-		frappe.db.commit()
-		
-	except Exception as e:
-		frappe.log_error(title="Create Leave Deduction: {0} - {1}".format(employee, date), message=frappe.get_traceback())
+	"""Create leave application for late deduction.
+
+	DISABLED: see ``process_employee_monthly_deduction``. No-op retained for
+	backwards compatibility.
+	"""
+	return
+
+	# --- Disabled: leave-type-based auto deduction -----------------------------
+	# try:
+	# 	# Check if already exists
+	# 	existing = frappe.db.exists("Leave Application", {
+	# 		"employee": employee,
+	# 		"from_date": date,
+	# 		"to_date": date,
+	# 		"leave_type": leave_type,
+	# 		"description": ["like", "%Auto-deducted%"],
+	# 		"docstatus": ["<", 2]
+	# 	})
+	#
+	# 	if existing:
+	# 		return
+	#
+	# 	leave_app = frappe.get_doc({
+	# 		"doctype": "Leave Application",
+	# 		"employee": employee,
+	# 		"leave_type": leave_type,
+	# 		"from_date": date,
+	# 		"to_date": date,
+	# 		"half_day": 1 if leave_days == 0.5 else 0,
+	# 		"description": description,
+	# 		"status": "Approved"
+	# 	})
+	#
+	# 	leave_app.insert(ignore_permissions=True)
+	# 	leave_app.submit()
+	# 	frappe.db.commit()
+	#
+	# except Exception as e:
+	# 	frappe.log_error(title="Create Leave Deduction: {0} - {1}".format(employee, date), message=frappe.get_traceback())
 
 @frappe.whitelist()
 def process_previous_day_attendance():
