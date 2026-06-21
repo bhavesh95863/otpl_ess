@@ -784,6 +784,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	#     of the 3 days following. A holiday sandwiched inside a leave
 	#     block (e.g. employee on full leave both sides) therefore does
 	#     NOT generate AL.
+	#
+	# Period-boundary relaxation: attendance/leave are only known within
+	# [from_date, to_date]. For a holiday on the first/last day of the
+	# period, one side of the window has no observable data, so that side
+	# cannot be checked — the AND rule then falls back to the side that IS
+	# observable. Example: a Sunday on the last day of the month (e.g.
+	# 31-May) qualifies on the "before" side alone, since there are no
+	# in-period days after it to evaluate.
 	qualified_holidays = 0          # OR rule, used for Col H
 	qualified_holidays_strict = 0   # AND rule, used for Col G
 	for h in holiday_dates:
@@ -791,7 +799,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		after = any((h + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
 		if before or after:
 			qualified_holidays += 1
-		if before and after:
+		# If the day immediately before/after the holiday lies outside the
+		# payroll period, that side is unobservable -> treat it as satisfied
+		# so a boundary holiday is not unfairly disqualified.
+		has_before_in_period = (h - timedelta(days=1)) >= from_date
+		has_after_in_period = (h + timedelta(days=1)) <= to_date
+		strict_before = before or not has_before_in_period
+		strict_after = after or not has_after_in_period
+		if strict_before and strict_after:
 			qualified_holidays_strict += 1
 
 	# ---- Col G: AL Generated --------------------------------------------------
