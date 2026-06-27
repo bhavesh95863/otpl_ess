@@ -11,7 +11,7 @@ from datetime import datetime
 @frappe.whitelist()
 def rerun_attendance_for_period(from_date=None, to_date=None):
 	from_date = "2026-05-01"
-	to_date = "2026-05-20"
+	to_date = "2026-05-31"
 	"""
 	Re-run attendance processing for all active employees for a given date range.
 	For each day in the period:

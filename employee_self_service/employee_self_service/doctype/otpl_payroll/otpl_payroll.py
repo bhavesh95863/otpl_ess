@@ -182,6 +182,7 @@ def calculate_payroll(doc):
 
 	# Pull every dependency once, in O(N) grouped queries
 	att_map = _fetch_attendance_aggregates(all_ids, from_date, to_date)
+	lookahead_map = _fetch_lookahead_presentish(all_ids, to_date)
 	leave_map = _fetch_approved_leaves(all_ids, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(all_emps, from_date, to_date)
 	balance_map = _fetch_leave_balances(all_ids)
@@ -208,6 +209,7 @@ def calculate_payroll(doc):
 			to_date=to_date,
 			days_in_period=days_in_period,
 			att=att_map.get(emp_id, {}),
+			lookahead_presentish=lookahead_map.get(emp_id, set()),
 			leaves=leave_map.get(emp_id, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 			holiday_dates=holidays_by_emp.get(emp_id, set()),
 			balance=balance_map.get(emp_id, {}),
@@ -236,6 +238,7 @@ def calculate_payroll(doc):
 				to_date=to_date,
 				days_in_period=days_in_period,
 				att=att_map.get(eid, {}),
+				lookahead_presentish=lookahead_map.get(eid, set()),
 				leaves=leave_map.get(eid, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 				holiday_dates=holidays_by_emp.get(eid, set()),
 				balance=balance_map.get(eid, {}),
@@ -378,6 +381,65 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 		if cint(r.late_entry) or cint(r.early_exit):
 			bucket["late_count"] += 1
 		bucket["working_hours"] += flt(r.working_hours)
+
+	return out
+
+
+def _fetch_lookahead_presentish(emp_ids, to_date):
+	"""Present-ish dates in the 3 calendar days AFTER ``to_date``.
+
+	Used only to qualify holidays that fall at (or near) the end of the
+	payroll period: their "3 days following" window spills into the next
+	month, so the attendance for those next-month days is needed to decide
+	whether the holiday qualifies (Col G / Col H).
+
+	Mirrors the ``presentish_dates`` composition in the main calc
+	(Present + Half Day attendance + approved half-day leaves); full-day
+	leaves are intentionally excluded so a holiday sandwiched in leave does
+	not qualify.
+
+	Returns dict employee -> set[date] (dates strictly after ``to_date``).
+	"""
+	out = defaultdict(set)
+	if not emp_ids:
+		return out
+
+	window_start = to_date + timedelta(days=1)
+	window_end = to_date + timedelta(days=3)
+
+	# Present / Half Day attendance (excluding false attendance)
+	rows = frappe.db.sql(
+		"""
+		SELECT employee, attendance_date
+		FROM `tabAttendance`
+		WHERE employee IN %(emp_ids)s
+		  AND attendance_date BETWEEN %(start)s AND %(end)s
+		  AND docstatus = 1
+		  AND status IN ('Present', 'Half Day')
+		  AND COALESCE(false_attendance, 0) = 0
+		""",
+		{"emp_ids": tuple(emp_ids), "start": window_start, "end": window_end},
+		as_dict=True,
+	)
+	for r in rows:
+		out[r.employee].add(getdate(r.attendance_date))
+
+	# Approved half-day leaves in the window
+	lrows = frappe.db.sql(
+		"""
+		SELECT employee, half_day_date
+		FROM `tabOTPL Leave`
+		WHERE employee IN %(emp_ids)s
+		  AND status = 'Approved'
+		  AND COALESCE(half_day, 0) = 1
+		  AND half_day_date BETWEEN %(start)s AND %(end)s
+		""",
+		{"emp_ids": tuple(emp_ids), "start": window_start, "end": window_end},
+		as_dict=True,
+	)
+	for r in lrows:
+		if r.half_day_date:
+			out[r.employee].add(getdate(r.half_day_date))
 
 	return out
 
@@ -731,7 +793,8 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
                         cl_balance=0.0,
                         payable_balance=0.0, al_eligible=False,
                         payable_days_override=None,
-                        payable_days_source=None):
+                        payable_days_source=None,
+                        lookahead_presentish=None):
 	gross = flt(emp.get("gross_salary"))
 	basic = flt(emp.get("basic_salary"))
 	staff_type = emp.get("staff_type")
@@ -768,11 +831,15 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	approved_leaves_count = len(full_leave_dates)  # full-day only
 
 	# "Present-ish" set for holiday qualification per observation #5
-	# (half day counts as present, both from attendance and approved half leave)
+	# (half day counts as present, both from attendance and approved half leave).
+	# Dates from the first few days of the NEXT month are folded in via
+	# ``lookahead_presentish`` so that a holiday at (or near) the end of the
+	# period can still qualify off attendance that lands in the next month.
 	presentish_dates = (
 		present_dates
 		| half_day_dates
 		| half_leave_dates
+		| (lookahead_presentish or set())
 	)
 
 	# ---- Qualified holidays --------------------------------------------------
@@ -1054,6 +1121,11 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"basic_salary": basic,
 		"al_generated": al_generated,
 		"days_worked": flt(days_worked, 2),
+		# Col H component breakdown (surfaced in the calculation trace UI)
+		"non_holiday_present": non_holiday_present,
+		"qualified_holidays": qualified_holidays,
+		"qualified_holidays_strict": qualified_holidays_strict,
+		"false_attendance_count": false_attendance_count,
 		"late_count": late_count,
 		"approved_half_days": approved_half_days,
 		"extra_late_half_days": extra_late_half_days,
@@ -1222,6 +1294,7 @@ def get_calculation_trace(doc, employee):
 	emps_for_fetch = [emp] + ([parent_emp] if parent_emp else [])
 
 	att_map = _fetch_attendance_aggregates(ids_for_fetch, from_date, to_date)
+	lookahead_map = _fetch_lookahead_presentish(ids_for_fetch, to_date)
 	leave_map = _fetch_approved_leaves(ids_for_fetch, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(emps_for_fetch, from_date, to_date)
 	balance_map = _fetch_leave_balances(ids_for_fetch)
@@ -1250,6 +1323,7 @@ def get_calculation_trace(doc, employee):
 			parent_emp, from_date=from_date, to_date=to_date,
 			days_in_period=days_in_period,
 			att=att_map.get(parent_id, {}),
+			lookahead_presentish=lookahead_map.get(parent_id, set()),
 			leaves=leave_map.get(parent_id, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 			holiday_dates=holidays_by_emp.get(parent_id, set()),
 			balance=balance_map.get(parent_id, {}),
@@ -1264,6 +1338,7 @@ def get_calculation_trace(doc, employee):
 	row = _calculate_employee(
 		emp, from_date=from_date, to_date=to_date,
 		days_in_period=days_in_period, att=att, leaves=leaves,
+		lookahead_presentish=lookahead_map.get(employee, set()),
 		holiday_dates=holiday_dates, balance=balance, tds=tds,
 		advance=advance, cl_balance=cl_bal,
 		payable_balance=payable_balance,
@@ -1294,6 +1369,12 @@ def get_calculation_trace(doc, employee):
 	approved_full = len(leaves.get("full_leave_dates", set()))
 	approved_half = len(leaves.get("half_leave_dates", set()))
 	short_n = leaves.get("short_leave_count", 0)
+
+	# Raw (pre-dedup) non-holiday component counts, for the Col H breakdown.
+	half_leave_dates = leaves.get("half_leave_dates", set())
+	nh_present = len([d for d in present_dates if d not in holiday_dates])
+	nh_half = len([d for d in half_day_dates if d not in holiday_dates])
+	nh_half_leave = len([d for d in half_leave_dates if d not in holiday_dates])
 
 	cl_balance = flt(cl_bal)
 	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
@@ -1350,10 +1431,13 @@ def get_calculation_trace(doc, employee):
 			"items": [
 				("Attendance Processed (excl. false)", str(len(processed_dates))),
 				("Present days", str(len(present_dates))),
-				("Half-day attendance due to Late Entry / Early Exit", str(row.get("extra_late_half_days", 0))),
+				("Half days (status='Half Day', counts as a FULL day in H)", str(len(half_day_dates))),
+				("  ↳ of which due to Late Entry / Early Exit", str(row.get("extra_late_half_days", 0))),
 				("Absent days", str(len(absent_dates))),
 				("Late Entry/Early Exit", str(row.get("late_count", 0))),
 				("Total working hours (Attendance.working_hours)", "{0:.2f}".format(working_hours)),
+				("Present-ish in next month (first ≤3 days, for end-of-period holidays)",
+				 str(len(lookahead_map.get(employee, set())))),
 				("False attendances", str(false_count) + " (deducts 2 days each)"),
 			],
 		},
@@ -1373,8 +1457,17 @@ def get_calculation_trace(doc, employee):
 				                      "holidays with a present-ish day in BOTH the 3 days before AND the 3 days after"
 				                      if al_eligible else "0 (AL disabled)")),
 				("(H) Days Worked",
-				 "{0}  —  non-holiday present + holidays qualifying by OR rule (present-ish before OR after); minus 2×{1} false attendance"
-				 .format(_f(row["days_worked"]), false_count)),
+				 "{dw} = non-holiday present-ish {nhp} + qualifying holidays {qh} − 2×{fc} false attendance"
+				 .format(dw=_f(row["days_worked"]), nhp=row["non_holiday_present"],
+				         qh=row["qualified_holidays"], fc=false_count)),
+				("    ↳ non-holiday present-ish ({0})".format(row["non_holiday_present"]),
+				 "present {p} + half-day attendance {h} + approved half-day leave {hl}, de-duplicated by date = {nhp}"
+				 "  (a Half Day counts as a FULL day here; its 0.5-day impact is taken separately in Col K)"
+				 .format(p=nh_present, h=nh_half, hl=nh_half_leave, nhp=row["non_holiday_present"])),
+				("    ↳ qualifying holidays ({0})".format(row["qualified_holidays"]),
+				 "{qh} of {th} holiday(s) qualify — present-ish in ANY of the 3 days BEFORE or AFTER "
+				 "(next-month days are included when the period ends on/near a holiday)"
+				 .format(qh=row["qualified_holidays"], th=len(holiday_dates))),
 				("(I) Late Marked", str(row["late_count"])),
 				("(J) Half days marked due to extra late", str(row["extra_late_half_days"])),
 				("(K) Late deduction days",
