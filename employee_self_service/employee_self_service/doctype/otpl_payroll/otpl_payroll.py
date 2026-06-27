@@ -958,19 +958,19 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		pf_employee = (pf_basic / days_in_month) * payable_days * PF_EMPLOYEE_RATE
 
 	# ---- Col W: ESIC Employee ------------------------------------------------
-	# ESIC gross wage band (computed only if ESIC No is populated):
-	#   * gross < min_wages                   -> use min_wages
-	#   * min_wages <= gross <= max_wage_esic -> use gross
-	#   * gross > max_wage_esic               -> use max_wage_esic (capped)
+	# ESIC basic wage band (computed only if ESIC No is populated):
+	#   * basic < min_wages                   -> use min_wages
+	#   * min_wages <= basic <= max_wage_esic -> use basic
+	#   * basic > max_wage_esic               -> use max_wage_esic (capped)
 	esic_employee = 0.0
 	if emp.get("esic_no") and days_in_month:
-		esic_gross = gross
-		if min_wages and esic_gross < min_wages:
-			esic_gross = min_wages
-		if max_wage_esic and esic_gross > max_wage_esic:
-			esic_gross = max_wage_esic
-		if esic_gross:
-			esic_employee = (esic_gross / days_in_month) * payable_days * ESIC_EMPLOYEE_RATE
+		esic_base = basic
+		if min_wages and esic_base < min_wages:
+			esic_base = min_wages
+		if max_wage_esic and esic_base > max_wage_esic:
+			esic_base = max_wage_esic
+		if esic_base:
+			esic_employee = (esic_base / days_in_month) * payable_days * ESIC_EMPLOYEE_RATE
 
 	# ---- Col Y / Z: Employer shares -------------------------------------------
 	pf_employer = pf_employee * PF_EMPLOYER_FACTOR
@@ -1420,8 +1420,8 @@ def get_calculation_trace(doc, employee):
 				                      if emp.get("uan_no") else "0 (no UAN)")),
 				("(W) ESIC Employee",
 				 "{0}  —  {1}".format(_f(row["esic_employee_share"]),
-				                      ("(ESIC gross / {0}) × Q × 0.75%  [gross={1}, band {2}–{3}; capped at max_wage_esic when gross exceeds it]"
-				                       .format(days_in_month, _f(emp.get("gross_salary")),
+				                      ("(ESIC basic / {0}) × Q × 0.75%  [basic={1}, band {2}–{3}; capped at max_wage_esic when basic exceeds it]"
+				                       .format(days_in_month, _f(emp.get("basic_salary")),
 				                               _f(emp.get("min_wages")), _f(emp.get("max_wage_esic"))))
 				                      if emp.get("esic_no") else "0 (no ESIC)")),
 				("(X) TDS", "{0}  —  from OTPL Employee Investment".format(_f(row["tds"]))),

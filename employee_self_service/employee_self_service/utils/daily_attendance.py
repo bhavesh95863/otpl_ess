@@ -456,16 +456,22 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 			remarks_list.append("Missing check-out")
 
 		# Check for half day conditions
+		# Arriving at/after the half-day arrival time is also a late entry,
+		# so flag late_entry too — salary calculation relies on this flag.
 		if checkin_time and half_day_arrival:
 			checkin_only_time = get_datetime(checkin_time).time()
 			if checkin_only_time >= half_day_arrival:
 				status = "Half Day"
+				late_entry = True
 				remarks_list.append("Arrived at/after {0}".format(half_day_arrival))
 
+		# Leaving at/before the half-day departure time is also an early exit,
+		# so flag early_exit too — salary calculation relies on this flag.
 		if checkout_time and half_day_departure:
 			checkout_only_time = get_datetime(checkout_time).time()
 			if checkout_only_time <= half_day_departure:
 				status = "Half Day"
+				early_exit = True
 				remarks_list.append("Left at/before {0}".format(half_day_departure))
 
 		# Check for late arrival (always flag late_entry; may also escalate to Half Day)
