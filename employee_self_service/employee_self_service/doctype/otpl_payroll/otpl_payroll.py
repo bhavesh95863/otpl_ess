@@ -940,17 +940,23 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# AL-eligible business line); otherwise it's treated as 0 for the M
 	# formula.
 	#
-	# N = If(AL Bal >= (approved - L), (approved - L), AL Bal)
-	# M = If((approved - L) > AL Bal,
-	#        If((approved - L - AL Bal) >= 2,
+	# N = If(AL Bal >= approved, approved, AL Bal)
+	# M = If(approved > AL Bal,
+	#        If((approved - AL Bal) >= 2,
 	#           If(CL Bal >= 2, 2, CL Bal),
-	#           If(CL Bal > 0, approved - L - AL Bal, 0)),
+	#           If(CL Bal > 0, approved - AL Bal, 0)),
 	#        0)
+	#
+	# NOTE: Absent days (Col L) are NOT subtracted here. Approved leaves and
+	# Absent attendance are independent (approved leave -> "On Leave"; absent ->
+	# "Absent"); netting the two counts would wrongly forfeit a paid leave day
+	# the employee has CL/AL balance for whenever they also have absences in the
+	# same month. Col L is still deducted on its own in the payable_days formula.
 	cl_balance = flt(cl_balance)
 	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
 
 	effective_al = al_balance if al_enabled else 0
-	adjusted_leaves = max(0, approved_leaves_count - absent_count)
+	adjusted_leaves = approved_leaves_count
 
 	# Col N: Adjusted from AL
 	if al_enabled:
@@ -1483,12 +1489,12 @@ def get_calculation_trace(doc, employee):
 				("(L) Absent w/o info",
 				 "{0}  —  count of Attendance.status='Absent' (excl. false)".format(row["absent_no_info_days"])),
 				("(M) Adjusted from CL",
-				 "{0}  —  approved={1}, L={2}, AL Bal={3}, CL Bal={4}; CL covers up to 2 of (approved−L−AL Bal)"
-				 .format(_f(row["adjusted_from_cl"]), approved_full, row["absent_no_info_days"],
+				 "{0}  —  approved={1}, AL Bal={2}, CL Bal={3}; CL covers up to 2 of (approved−AL Bal). Absent (Col L) is NOT netted here."
+				 .format(_f(row["adjusted_from_cl"]), approved_full,
 				         _f(al_balance if al_eligible else 0), _f(cl_balance))),
 				("(N) Adjusted from AL",
 				 "{0}  —  {1}".format(_f(row["adjusted_from_al"]),
-				                      "min(AL Bal {0}, approved {1} − L {2})".format(_f(al_balance), approved_full, row["absent_no_info_days"])
+				                      "min(AL Bal {0}, approved {1})".format(_f(al_balance), approved_full)
 				                      if al_eligible else "0 (AL disabled)")),
 				("(O) Balance CL", "{0} = {1} − {2}".format(_f(row["balance_cl"]), _f(cl_balance), _f(row["adjusted_from_cl"]))),
 				("(P) Closing AL",
