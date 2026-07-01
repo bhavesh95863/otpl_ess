@@ -28,10 +28,29 @@ class TravelRequest(Document):
 		"""Trigger sync to remote ERP when travel request has external report_to"""
 		push_travel_to_remote_erp(self)
 		self.update_employee_travel_status()
+		self.mark_present_for_travel_period()
 
 	def on_trash(self):
 		"""Reverse employee availability/travelling changes when an approved travel request is deleted"""
 		self.reverse_employee_travel_status()
+
+	def mark_present_for_travel_period(self):
+		"""When the request is Approved, convert any 'Absent' attendance to
+		'Present' for the travel period — from Date of Departure up to today,
+		but never beyond Date of Arrival.
+
+		Example: 25-06 -> 28-06 approved on 26-06 marks 25 & 26 present now; the
+		daily scheduler flips 27 & 28 as those days pass. If approved on/after
+		30-06, the whole 25-28 range is corrected at once. Only flips
+		Absent -> Present, so it is safe to run on every save while Approved.
+		"""
+		if self.status != "Approved" or not self.employee:
+			return
+		if not self.date_of_departure or not self.date_of_arrival:
+			return
+		mark_travel_dates_present(
+			self.employee, self.date_of_departure, self.date_of_arrival, travel_request=self.name
+		)
 
 	def update_employee_travel_status(self):
 		"""
@@ -248,6 +267,54 @@ def apply_completed_travel(travel_request_name, employee, purpose):
 	return True
 
 
+def mark_travel_dates_present(employee, date_of_departure, date_of_arrival, travel_request=None):
+	"""Convert 'Absent' attendance to 'Present' for an approved travel period,
+	from ``date_of_departure`` up to today (inclusive), capped at
+	``date_of_arrival``.
+
+	Only existing 'Absent' records are flipped; missing days are NOT created and
+	other statuses (Present / Half Day / On Leave) are left untouched. Cancelled
+	attendance (docstatus=2) is ignored. Idempotent — safe to re-run.
+
+	Each flipped record gets a timeline comment noting it was set Present because
+	of ``travel_request``, so the change is auditable on the Attendance form.
+	"""
+	if not employee or not date_of_departure or not date_of_arrival:
+		return
+
+	start = getdate(date_of_departure)
+	end = min(getdate(date_of_arrival), getdate(nowdate()))
+	if start > end:
+		# Travel hasn't started yet — nothing in the past to correct.
+		return
+
+	absent_records = frappe.get_all(
+		"Attendance",
+		filters={
+			"employee": employee,
+			"attendance_date": ["between", [start, end]],
+			"status": "Absent",
+			"docstatus": ["<", 2],
+		},
+		fields=["name", "attendance_date"],
+	)
+
+	note = "Marked <b>Present</b> (was Absent) by Travel Request <b>{0}</b> ({1} to {2}).".format(
+		travel_request or "N/A", getdate(date_of_departure), getdate(date_of_arrival)
+	)
+	for att in absent_records:
+		frappe.db.set_value("Attendance", att.name, "status", "Present")
+		try:
+			# Timeline note so it's clear WHY this day became Present. A note
+			# failure must never block the attendance correction itself.
+			frappe.get_doc("Attendance", att.name).add_comment("Comment", text=note)
+		except Exception:
+			frappe.log_error(
+				message=frappe.get_traceback(),
+				title="Travel attendance note failed: {0}".format(att.name),
+			)
+
+
 def process_travel_requests():
 	"""
 	Scheduled task: runs daily.
@@ -273,7 +340,7 @@ def process_travel_requests():
 			"date_of_departure": ["<=", today],
 			"date_of_arrival": [">=", today]
 		},
-		fields=["name", "employee", "purpose"]
+		fields=["name", "employee", "purpose", "date_of_departure", "date_of_arrival"]
 	)
 	active_employees = {req.employee for req in active_requests}
 
@@ -310,6 +377,12 @@ def process_travel_requests():
 
 	for req in active_requests:
 		try:
+			# Keep attendance consistent with the trip: flip any Absent to
+			# Present from departure up to today (capped at arrival). This
+			# extends the window each day for still-ongoing travel.
+			mark_travel_dates_present(
+				req.employee, req.date_of_departure, req.date_of_arrival, travel_request=req.name
+			)
 			if req.purpose in ["Going back to work", "Going for official work"]:
 				frappe.db.set_value("Employee", req.employee, {"employee_availability": "", "travelling": 1})
 			else:
