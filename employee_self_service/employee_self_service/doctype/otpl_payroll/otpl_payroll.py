@@ -100,9 +100,13 @@ def _select_employees(where_sql, where_values):
 			e.advance_to_be_deducted            AS gross_salary,
 			e.basic_salary                      AS basic_salary,
 			COALESCE(e.no_validation, 0)        AS no_validation,
-			COALESCE(esl.min_wages, 0)          AS min_wages,
-			COALESCE(esl.max_wage_pf, 0)        AS max_wage_pf,
-			COALESCE(esl.max_wage_esic, 0)      AS max_wage_esic,
+			-- PF/ESIC wage bands: for location='Site' these are sourced from a
+			-- fixed ESS Location (esl_site) instead of the employee's own
+			-- location, which has no wage band. Sales Order OPAUT-00003 -> use
+			-- "Haridwar" bands; any other sales order -> use "Noida" bands.
+			COALESCE(CASE WHEN e.location = 'Site' THEN esl_site.min_wages     ELSE esl.min_wages     END, 0) AS min_wages,
+			COALESCE(CASE WHEN e.location = 'Site' THEN esl_site.max_wage_pf   ELSE esl.max_wage_pf   END, 0) AS max_wage_pf,
+			COALESCE(CASE WHEN e.location = 'Site' THEN esl_site.max_wage_esic ELSE esl.max_wage_esic END, 0) AS max_wage_esic,
 			COALESCE(esl.late_count_for_half_day, 3) AS late_count_for_half_day,
 			COALESCE(esl.late_count_for_full_day, 5) AS late_count_for_full_day,
 			COALESCE(esl.treat_late_as_half_day_after, 5) AS treat_late_as_half_day_after,
@@ -118,6 +122,14 @@ def _select_employees(where_sql, where_values):
 			ON so.name = e.sales_order
 		LEFT JOIN `tabESS Location` esl
 			ON esl.name = e.location
+		-- Fixed ESS Location used ONLY to source PF/ESIC wage bands for
+		-- location='Site' employees (see the min_wages/max_wage_* CASEs above).
+		-- OPAUT-00003 -> Haridwar; anything else (incl. NULL) -> Noida.
+		LEFT JOIN `tabESS Location` esl_site
+			ON esl_site.name = CASE
+				WHEN e.sales_order = 'OPAUT-00003' THEN 'Haridwar'
+				ELSE 'Noida'
+			END
 		WHERE {where}
 		ORDER BY e.employee_name ASC
 		""".format(
