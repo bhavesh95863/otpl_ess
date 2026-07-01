@@ -874,6 +874,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	qualified_holidays = 0          # OR rule, used for Col H
 	qualified_holidays_strict = 0   # AND rule, used for Col G
 	for h in holiday_dates:
+		# If the employee was on approved (full-day) leave on the holiday itself,
+		# the holiday is neither "earned" nor worked: it must NOT generate AL
+		# (Col G) and must NOT count as a worked holiday (Col H). It is already
+		# accounted for via the leave adjustment (adj_cl / adj_al), so counting
+		# it here too would both over-state AL Generated and double-count the day
+		# in payable_days.
+		if h in full_leave_dates:
+			continue
 		before = any((h - timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
 		after = any((h + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
 		if before or after:
