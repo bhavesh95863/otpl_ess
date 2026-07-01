@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.model.document import Document
-from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day
+from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day, nowdate
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
 from employee_self_service.employee_self_service.utils.leave_escalation import (
 	resolve_external_manager_pull,
@@ -20,6 +20,13 @@ class OTPLLeave(Document):
 		"""
 		Validate OTPL Leave before saving
 		"""
+		# "From Date must be today or later" — enforced only on first save
+		# (creation), so editing/approving an existing leave whose from_date has
+		# since passed is not blocked.
+		if self.is_new() and self.from_date:
+			if getdate(self.from_date) < getdate(nowdate()):
+				frappe.throw("Leave From Date cannot be in the past. Please select today or a later date.")
+
 		# Short leave must be single day, no half day
 		if self.short_leave:
 			self.half_day = 0

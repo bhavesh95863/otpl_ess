@@ -88,6 +88,13 @@ class TravelRequest(Document):
 			frappe.db.set_value("Travel Request", self.name, "post_arrival_processed", 0)
 
 	def validate_dates(self):
+		# "Start date must be today or later" — enforced only on first save
+		# (creation), so that editing/approving an existing request whose
+		# (originally valid) departure date has since passed is not blocked.
+		if self.is_new() and self.date_of_departure:
+			if getdate(self.date_of_departure) < getdate(nowdate()):
+				frappe.throw(_("Date of Departure cannot be in the past. Please select today or a later date."))
+
 		if self.date_of_departure and self.date_of_arrival:
 			if getdate(self.date_of_arrival) < getdate(self.date_of_departure):
 				frappe.throw(_("Date of Arrival cannot be before Date of Departure"))
