@@ -922,8 +922,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 
 	# ---- Col K: Late deduction days (observation #9) -------------------------
 	# K = "Deduction in days due to Late and Extra Late" =
-	#       (approved-half-days + extra-late-half-days) / 2   (half-day leave part)
+	#       approved-half-day-leaves / 2      (half-day LEAVE part)
 	#     + late-mark deduction derived from the No. of Late Marked (Col I).
+	#
+	# NOTE: "extra-late half-days" (attendance already downgraded to Half Day due
+	# to late-entry/early-exit) are intentionally NOT added here: those same late
+	# entries / early exits are already penalised through the late-mark deduction
+	# below (they are part of the Late Marked count). Adding them again would
+	# double-charge the employee for the same lateness.
 	#
 	# The late-mark deduction is a pure function of the late count, using the
 	# three ESS Location "Leave Deduction Rules" fields (defaults 3 / 5 / 5):
@@ -946,7 +952,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	elif late_count >= late_count_for_half_day:
 		late_mark_deduction = 0.5
 
-	late_deduction = (approved_half_days + extra_late_half_days) / 2.0 + late_mark_deduction
+	late_deduction = approved_half_days / 2.0 + late_mark_deduction
 
 	# ---- Col L: Absent (observation #4) --------------------------------------
 	# Just count Attendance.status='Absent' (excluding false attendance).
@@ -1495,13 +1501,14 @@ def get_calculation_trace(doc, employee):
 				 "(next-month days are included when the period ends on/near a holiday)"
 				 .format(qh=row["qualified_holidays"], th=len(holiday_dates))),
 				("(I) Late Marked", str(row["late_count"])),
-				("(J) Half days marked due to extra late", str(row["extra_late_half_days"])),
+				("(J) Half days marked due to extra late (informational — NOT deducted; already covered by late-mark rule)",
+				 str(row["extra_late_half_days"])),
 				("(K) Late deduction days",
-				 "{total} = approved half-day leaves ({ah}×0.5={ahv}) + extra-late half-days ({eh}×0.5={ehv}) "
-				 "+ late-mark deduction ({lmv})  [Late Marked {lc}; thresholds: half@{h}, full@{f}, treat-as-half-after@{t}]"
+				 "{total} = approved half-day leaves ({ah}×0.5={ahv}) + late-mark deduction ({lmv})  "
+				 "[Late Marked {lc}; thresholds: half@{h}, full@{f}, treat-as-half-after@{t}]. "
+				 "Extra-late half-days are NOT added here — those late entries/early exits are already counted in Late Marked."
 				 .format(total=_f(row["late_deduction_days"]),
 				         ah=approved_half, ahv=_f(approved_half * 0.5),
-				         eh=row["extra_late_half_days"], ehv=_f(row["extra_late_half_days"] * 0.5),
 				         lmv=_f(_late_mark_deduction), lc=row["late_count"],
 				         h=cint(emp.get("late_count_for_half_day")) or 3,
 				         f=cint(emp.get("late_count_for_full_day")) or 5,
