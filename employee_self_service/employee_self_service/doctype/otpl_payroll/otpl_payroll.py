@@ -485,6 +485,7 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 		  AND approved_to_date IS NOT NULL
 		  AND approved_from_date <= %(to_date)s
 		  AND approved_to_date   >= %(from_date)s
+		  AND leave_applications IS NOT NULL
 		""",
 		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
 		as_dict=True,

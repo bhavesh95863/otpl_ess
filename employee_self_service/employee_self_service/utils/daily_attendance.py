@@ -307,7 +307,7 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			location_rules = adjust_thresholds_for_short_leave(location_rules, short_leave_period)
 
 	# Determine attendance status based on rules
-	status, late_entry, early_exit, remarks = determine_status(
+	status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks = determine_status(
 		checkin_time, checkout_time, location_rules, employee, date
 	)
 
@@ -324,7 +324,9 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		working_hours=working_hours,
 		remarks=remarks,
 		checkin_time=checkin_time,
-		checkout_time=checkout_time
+		checkout_time=checkout_time,
+		extra_late_entry=extra_late_entry,
+		extra_early_exit=extra_early_exit
 	)
 
 	return "Processed"
@@ -384,11 +386,21 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 	"""
 	Determine attendance status based on checkin/checkout times and ESS Location rules.
 	Used for non-Worker employees only.
-	Returns: (status, late_entry, early_exit, remarks)
+
+	Late entry / early exit no longer downgrade the day to Half Day. Instead:
+	- Crossing the regular late_arrival_threshold / early_exit_threshold sets the
+	  late_entry / early_exit flags (payroll's late_count relies on these).
+	- Crossing the stricter half_day_arrival_time / half_day_departure_time
+	  additionally ticks extra_late_entry / extra_early_exit.
+	The status stays Present in all of these cases.
+
+	Returns: (status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks)
 	"""
 	status = "Present"
 	late_entry = False
 	early_exit = False
+	extra_late_entry = False
+	extra_early_exit = False
 	remarks_list = []
 
 	# If no location rules, just mark missing logs as late
@@ -401,7 +413,7 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 			remarks_list.append("Missing check-out")
 
 		remarks = ", ".join(remarks_list) if remarks_list else "Regular attendance"
-		return status, late_entry, early_exit, remarks
+		return status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks
 
 	# Get thresholds from location rules
 	try:
@@ -409,22 +421,6 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 		early_exit_threshold = None
 		half_day_arrival = None
 		half_day_departure = None
-		# Cycle thresholds: late count positions within each cycle that become Half Day.
-		# e.g. half=3, full=5 → Half Day fires at late counts 3 and 5.
-		# After the full-day threshold (5), EVERY subsequent late mark is Half Day.
-		late_for_half = int(location_rules.get('late_count_for_half_day') or 3)
-		late_for_full = int(location_rules.get('late_count_for_full_day') or 5)
-
-		def _is_half_day_for_late_count(new_count):
-			"""Return True if this late mark (1-based count incl. today) should
-			be treated as Half Day."""
-			if late_for_full > 0 and new_count > late_for_full:
-				return True
-			if late_for_full > 0 and new_count == late_for_full:
-				return True
-			if late_for_half > 0 and new_count == late_for_half:
-				return True
-			return False
 
 		if location_rules.late_arrival_threshold:
 			late_threshold = datetime.strptime(
@@ -455,67 +451,37 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 			early_exit = True
 			remarks_list.append("Missing check-out")
 
-		# Check for half day conditions
-		# Arriving at/after the half-day arrival time is also a late entry,
-		# so flag late_entry too — salary calculation relies on this flag.
+		# Crossing the stricter half-day arrival time no longer marks Half Day;
+		# it only ticks extra_late_entry (and late_entry, since it is also late).
 		if checkin_time and half_day_arrival:
 			checkin_only_time = get_datetime(checkin_time).time()
 			if checkin_only_time >= half_day_arrival:
-				status = "Half Day"
+				extra_late_entry = True
 				late_entry = True
-				remarks_list.append("Arrived at/after {0}".format(half_day_arrival))
+				remarks_list.append("Extra late entry - arrived at/after {0}".format(half_day_arrival))
 
-		# Leaving at/before the half-day departure time is also an early exit,
-		# so flag early_exit too — salary calculation relies on this flag.
+		# Crossing the stricter half-day departure time no longer marks Half Day;
+		# it only ticks extra_early_exit (and early_exit, since it is also early).
 		if checkout_time and half_day_departure:
 			checkout_only_time = get_datetime(checkout_time).time()
 			if checkout_only_time <= half_day_departure:
-				status = "Half Day"
+				extra_early_exit = True
 				early_exit = True
-				remarks_list.append("Left at/before {0}".format(half_day_departure))
+				remarks_list.append("Extra early exit - left at/before {0}".format(half_day_departure))
 
-		# Check for late arrival (always flag late_entry; may also escalate to Half Day)
+		# Regular late arrival: flag late_entry only (never Half Day).
 		if checkin_time and late_threshold:
 			checkin_only_time = get_datetime(checkin_time).time()
 			if checkin_only_time > late_threshold:
 				late_entry = True
 				remarks_list.append("Late arrival after {0}".format(late_threshold))
-				if status != "Half Day":
-					new_late_count = get_month_late_count(employee, date) + 1
-					if _is_half_day_for_late_count(new_late_count):
-						status = "Half Day"
-						remarks_list.append(
-							"Late arrival treated as Half Day (late mark #{0} in cycle of {1})".format(
-								new_late_count, late_for_full
-							)
-						)
 
-		# Check for early exit (always flag early_exit; may also escalate to Half Day)
+		# Regular early exit: flag early_exit only (never Half Day).
 		if checkout_time and early_exit_threshold:
 			checkout_only_time = get_datetime(checkout_time).time()
 			if checkout_only_time < early_exit_threshold:
 				early_exit = True
 				remarks_list.append("Early exit before {0}".format(early_exit_threshold))
-				if status != "Half Day":
-					new_late_count = get_month_late_count(employee, date) + 1
-					if _is_half_day_for_late_count(new_late_count):
-						status = "Half Day"
-						remarks_list.append(
-							"Early exit treated as Half Day (late mark #{0} in cycle of {1})".format(
-								new_late_count, late_for_full
-							)
-						)
-
-		# Check if missing logs should be treated as half day (keep late_entry/early_exit flags)
-		if (late_entry or early_exit) and status == "Present":
-			new_late_count = get_month_late_count(employee, date) + 1
-			if _is_half_day_for_late_count(new_late_count):
-				status = "Half Day"
-				remarks_list.append(
-					"Missing log treated as Half Day (late mark #{0} in cycle of {1})".format(
-						new_late_count, late_for_full
-					)
-				)
 
 	except Exception as e:
 		traceback_msg = frappe.get_traceback()
@@ -532,7 +498,7 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 		)
 
 	remarks = ", ".join(remarks_list) if remarks_list else "Regular attendance"
-	return status, late_entry, early_exit, remarks
+	return status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks
 
 
 def get_month_late_count(employee, date):
@@ -562,7 +528,7 @@ def get_month_late_count(employee, date):
 		return 0
 
 
-def create_attendance_record(employee, date, status, late_entry, early_exit, working_hours, remarks, checkin_time=None, checkout_time=None):
+def create_attendance_record(employee, date, status, late_entry, early_exit, working_hours, remarks, checkin_time=None, checkout_time=None, extra_late_entry=False, extra_early_exit=False):
 	"""Create and submit attendance record"""
 	try:
 		attendance = frappe.get_doc({
@@ -579,6 +545,10 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 			attendance.late_entry = 1 if late_entry else 0
 		if hasattr(attendance, 'early_exit'):
 			attendance.early_exit = 1 if early_exit else 0
+		if hasattr(attendance, 'extra_late_entry'):
+			attendance.extra_late_entry = 1 if extra_late_entry else 0
+		if hasattr(attendance, 'extra_early_exit'):
+			attendance.extra_early_exit = 1 if extra_early_exit else 0
 		if hasattr(attendance, 'working_hours'):
 			attendance.working_hours = working_hours
 

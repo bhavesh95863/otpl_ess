@@ -10,8 +10,8 @@ from datetime import datetime
 
 @frappe.whitelist()
 def rerun_attendance_for_period(from_date=None, to_date=None):
-	from_date = "2026-05-01"
-	to_date = "2026-05-31"
+	from_date = "2026-06-01"
+	to_date = "2026-06-30"
 	"""
 	Re-run attendance processing for all active employees for a given date range.
 	For each day in the period:
@@ -350,7 +350,7 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 				location_rules.half_day_departure_time = emp_half_day_departure_time
 
 	# Determine attendance status based on rules
-	status, late_entry, early_exit, remarks = determine_status(
+	status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks = determine_status(
 		checkin_time, checkout_time, location_rules, employee, date
 	)
 
@@ -365,7 +365,9 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 		working_hours=working_hours,
 		remarks=remarks,
 		checkin_time=checkin_time,
-		checkout_time=checkout_time
+		checkout_time=checkout_time,
+		extra_late_entry=extra_late_entry,
+		extra_early_exit=extra_early_exit
 	)
 
 	return "Processed"
