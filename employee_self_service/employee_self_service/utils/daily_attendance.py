@@ -280,31 +280,12 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			)
 			return "Absent"
 
-	# Get ESS Location rules if location is set
-	location_rules = None
-	if location:
-		if frappe.db.exists("ESS Location", location):
-			location_rules = frappe.get_doc("ESS Location", location)
-			if from_hours and to_hours:
-				location_rules.shift_start_time = from_hours
-				location_rules.shift_end_time = to_hours
-				location_rules.late_arrival_threshold = from_hours
-				location_rules.early_exit_threshold = to_hours
-			# Override with employee-level thresholds if defined
-			if emp_late_arrival_threshold:
-				location_rules.late_arrival_threshold = emp_late_arrival_threshold
-			if emp_early_exit_threshold:
-				location_rules.early_exit_threshold = emp_early_exit_threshold
-			if emp_half_day_arrival_time:
-				location_rules.half_day_arrival_time = emp_half_day_arrival_time
-			if emp_half_day_departure_time:
-				location_rules.half_day_departure_time = emp_half_day_departure_time
-
-	# Adjust thresholds if employee has an approved short leave for this date
-	if location_rules:
-		short_leave_period = get_approved_short_leave_period(employee, date)
-		if short_leave_period:
-			location_rules = adjust_thresholds_for_short_leave(location_rules, short_leave_period)
+	# Get ESS Location rules (incl. employee overrides + short-leave adjustment)
+	location_rules = build_location_rules(
+		location, date, employee, from_hours, to_hours,
+		emp_late_arrival_threshold, emp_early_exit_threshold,
+		emp_half_day_arrival_time, emp_half_day_departure_time
+	)
 
 	# Determine attendance status based on rules
 	status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks = determine_status(
@@ -387,12 +368,18 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 	Determine attendance status based on checkin/checkout times and ESS Location rules.
 	Used for non-Worker employees only.
 
-	Late entry / early exit no longer downgrade the day to Half Day. Instead:
-	- Crossing the regular late_arrival_threshold / early_exit_threshold sets the
-	  late_entry / early_exit flags (payroll's late_count relies on these).
-	- Crossing the stricter half_day_arrival_time / half_day_departure_time
-	  additionally ticks extra_late_entry / extra_early_exit.
-	The status stays Present in all of these cases.
+	Late / early handling has three tiers:
+	- Present, on time: no flags.
+	- Present, late/early past late_arrival_threshold / early_exit_threshold:
+	  late_entry / early_exit is set on EVERY such day (the "allowed"/grace
+	  marker). extra_late_entry / extra_early_exit is added only on the specific
+	  "deduction" days, i.e. when the running monthly tally of late/early days
+	  equals late_count_for_half_day, equals late_count_for_full_day, or exceeds
+	  treat_late_as_half_day_after. late_entry / early_exit stay set on those
+	  days too.
+	- Half Day: crossing the stricter half_day_arrival_time /
+	  half_day_departure_time marks the day Half Day, counted purely as Half Day
+	  (late_entry / early_exit and the extra flags are left unset).
 
 	Returns: (status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks)
 	"""
@@ -451,37 +438,64 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 			early_exit = True
 			remarks_list.append("Missing check-out")
 
-		# Crossing the stricter half-day arrival time no longer marks Half Day;
-		# it only ticks extra_late_entry (and late_entry, since it is also late).
+		# Tier 2 (Half Day): crossing the stricter half-day arrival / departure
+		# time marks the day Half Day. Such a day is counted purely as Half Day,
+		# so the late_entry / early_exit and extra flags are left unset.
+		is_half_day = False
 		if checkin_time and half_day_arrival:
-			checkin_only_time = get_datetime(checkin_time).time()
-			if checkin_only_time >= half_day_arrival:
-				extra_late_entry = True
-				late_entry = True
-				remarks_list.append("Extra late entry - arrived at/after {0}".format(half_day_arrival))
+			if get_datetime(checkin_time).time() >= half_day_arrival:
+				is_half_day = True
+				remarks_list.append("Half Day - arrived at/after {0}".format(half_day_arrival))
 
-		# Crossing the stricter half-day departure time no longer marks Half Day;
-		# it only ticks extra_early_exit (and early_exit, since it is also early).
 		if checkout_time and half_day_departure:
-			checkout_only_time = get_datetime(checkout_time).time()
-			if checkout_only_time <= half_day_departure:
-				extra_early_exit = True
-				early_exit = True
-				remarks_list.append("Extra early exit - left at/before {0}".format(half_day_departure))
+			if get_datetime(checkout_time).time() <= half_day_departure:
+				is_half_day = True
+				remarks_list.append("Half Day - left at/before {0}".format(half_day_departure))
 
-		# Regular late arrival: flag late_entry only (never Half Day).
-		if checkin_time and late_threshold:
-			checkin_only_time = get_datetime(checkin_time).time()
-			if checkin_only_time > late_threshold:
-				late_entry = True
-				remarks_list.append("Late arrival after {0}".format(late_threshold))
+		if is_half_day:
+			status = "Half Day"
+			late_entry = False
+			early_exit = False
+			extra_late_entry = False
+			extra_early_exit = False
+		else:
+			# Present tier: late arrival / early exit past the regular threshold
+			# sets late_entry / early_exit on EVERY such day (the "allowed"/grace
+			# marker).
+			if checkin_time and late_threshold:
+				if get_datetime(checkin_time).time() > late_threshold:
+					late_entry = True
+					remarks_list.append("Late arrival after {0}".format(late_threshold))
 
-		# Regular early exit: flag early_exit only (never Half Day).
-		if checkout_time and early_exit_threshold:
-			checkout_only_time = get_datetime(checkout_time).time()
-			if checkout_only_time < early_exit_threshold:
-				early_exit = True
-				remarks_list.append("Early exit before {0}".format(early_exit_threshold))
+			if checkout_time and early_exit_threshold:
+				if get_datetime(checkout_time).time() < early_exit_threshold:
+					early_exit = True
+					remarks_list.append("Early exit before {0}".format(early_exit_threshold))
+
+			# The extra flag marks the specific "deduction" days, based on the
+			# running monthly tally of late/early days. It fires when that tally:
+			#   - equals late_count_for_half_day, or
+			#   - equals late_count_for_full_day, or
+			#   - exceeds treat_late_as_half_day_after.
+			# late_entry / early_exit stay set on these days too.
+			if late_entry or early_exit:
+				half_count = int(location_rules.get('late_count_for_half_day') or 0)
+				full_count = int(location_rules.get('late_count_for_full_day') or 0)
+				treat_after = int(location_rules.get('treat_late_as_half_day_after') or 0)
+				new_late_count = get_month_late_count(employee, date) + 1
+				is_extra = (
+					(half_count and new_late_count == half_count)
+					or (full_count and new_late_count == full_count)
+					or (treat_after and new_late_count > treat_after)
+				)
+				if is_extra:
+					if late_entry:
+						extra_late_entry = True
+					if early_exit:
+						extra_early_exit = True
+					remarks_list.append(
+						"Extra mark (late/early day #{0} this month)".format(new_late_count)
+					)
 
 	except Exception as e:
 		traceback_msg = frappe.get_traceback()
@@ -635,6 +649,51 @@ def adjust_thresholds_for_short_leave(location_rules, short_leave_period):
 		location_rules.early_exit_threshold = _shift_time(location_rules.early_exit_threshold, -SHORT_LEAVE_OFFSET)
 		if location_rules.half_day_departure_time:
 			location_rules.half_day_departure_time = _shift_time(location_rules.half_day_departure_time, -SHORT_LEAVE_OFFSET)
+
+	return location_rules
+
+
+def build_location_rules(location, date, employee, from_hours=None, to_hours=None,
+	emp_late_arrival_threshold=None, emp_early_exit_threshold=None,
+	emp_half_day_arrival_time=None, emp_half_day_departure_time=None):
+	"""Load the ESS Location rules for an employee/date and return a ready-to-use
+	rules doc.
+
+	This is the single source of truth for how attendance thresholds are resolved.
+	It applies, in order:
+	  1. Employee working-hours override (from_hours / to_hours)
+	  2. Employee-level threshold overrides
+	  3. Any approved short-leave threshold shift for the date
+
+	The scheduled daily job AND the reprocess/backfill paths all call this so
+	short-leave handling can never drift between them.
+
+	Returns the (possibly mutated) ESS Location doc, or None when the location
+	has no ESS Location rules.
+	"""
+	if not location or not frappe.db.exists("ESS Location", location):
+		return None
+
+	location_rules = frappe.get_doc("ESS Location", location)
+	if from_hours and to_hours:
+		location_rules.shift_start_time = from_hours
+		location_rules.shift_end_time = to_hours
+		location_rules.late_arrival_threshold = from_hours
+		location_rules.early_exit_threshold = to_hours
+	# Override with employee-level thresholds if defined
+	if emp_late_arrival_threshold:
+		location_rules.late_arrival_threshold = emp_late_arrival_threshold
+	if emp_early_exit_threshold:
+		location_rules.early_exit_threshold = emp_early_exit_threshold
+	if emp_half_day_arrival_time:
+		location_rules.half_day_arrival_time = emp_half_day_arrival_time
+	if emp_half_day_departure_time:
+		location_rules.half_day_departure_time = emp_half_day_departure_time
+
+	# Adjust thresholds if employee has an approved short leave for this date
+	short_leave_period = get_approved_short_leave_period(employee, date)
+	if short_leave_period:
+		location_rules = adjust_thresholds_for_short_leave(location_rules, short_leave_period)
 
 	return location_rules
 

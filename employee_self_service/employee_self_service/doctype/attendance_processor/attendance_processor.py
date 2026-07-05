@@ -83,7 +83,18 @@ def process_attendance_for_employee(employee, date):
 		
 		# Get location settings
 		location_settings = frappe.get_doc("ESS Location", location)
-		
+
+		# Apply short-leave threshold shift for the date, if any, using the same
+		# helpers as the scheduled daily job so short-leave days are not wrongly
+		# flagged late / early on this manual/backfill path.
+		from employee_self_service.employee_self_service.utils.daily_attendance import (
+			get_approved_short_leave_period,
+			adjust_thresholds_for_short_leave,
+		)
+		short_leave_period = get_approved_short_leave_period(employee, date)
+		if short_leave_period:
+			location_settings = adjust_thresholds_for_short_leave(location_settings, short_leave_period)
+
 		# Get checkins for the day
 		checkin_time, checkout_time = get_employee_checkins(employee, date)
 		

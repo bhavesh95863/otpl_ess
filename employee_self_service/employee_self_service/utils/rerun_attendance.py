@@ -25,7 +25,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None):
 	to_date = getdate(to_date)
 
 	employees = frappe.get_all("Employee",
-		filters={"status": "Active"},
+		filters={"status": "Active","name":"EMP/00787"},
 		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type", "from_hours", "to_hours",
 			"late_arrival_threshold", "early_exit_threshold", "half_day_arrival_time", "half_day_departure_time"]
 	)
@@ -330,24 +330,15 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 			)
 			return "Absent"
 
-	# Get ESS Location rules
-	location_rules = None
-	if location:
-		if frappe.db.exists("ESS Location", location):
-			location_rules = frappe.get_doc("ESS Location", location)
-			if from_hours and to_hours:
-				location_rules.shift_start_time = from_hours
-				location_rules.shift_end_time = to_hours
-				location_rules.late_arrival_threshold = from_hours
-				location_rules.early_exit_threshold = to_hours
-			if emp_late_arrival_threshold:
-				location_rules.late_arrival_threshold = emp_late_arrival_threshold
-			if emp_early_exit_threshold:
-				location_rules.early_exit_threshold = emp_early_exit_threshold
-			if emp_half_day_arrival_time:
-				location_rules.half_day_arrival_time = emp_half_day_arrival_time
-			if emp_half_day_departure_time:
-				location_rules.half_day_departure_time = emp_half_day_departure_time
+	# Get ESS Location rules (incl. employee overrides + short-leave adjustment).
+	# Uses the same helper as the scheduled daily job so short-leave handling
+	# stays identical between the two paths.
+	from employee_self_service.employee_self_service.utils.daily_attendance import build_location_rules
+	location_rules = build_location_rules(
+		location, date, employee, from_hours, to_hours,
+		emp_late_arrival_threshold, emp_early_exit_threshold,
+		emp_half_day_arrival_time, emp_half_day_departure_time
+	)
 
 	# Determine attendance status based on rules
 	status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks = determine_status(
