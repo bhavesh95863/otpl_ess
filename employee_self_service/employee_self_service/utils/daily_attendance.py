@@ -213,18 +213,22 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 
 	checkin_time = None
 	checkout_time = None
+	checkin_out_of_location = False
+	checkout_out_of_location = False
 
 	if checkins:
-		# Get first IN
+		# Get first IN (and whether it was an approved out-of-location punch)
 		for log in checkins:
 			if log.log_type == "IN":
 				checkin_time = log.time
+				checkin_out_of_location = bool(log.get("approval_required") and log.get("approved"))
 				break
 
-		# Get last OUT
+		# Get last OUT (and whether it was an approved out-of-location punch)
 		for log in reversed(checkins):
 			if log.log_type == "OUT":
 				checkout_time = log.time
+				checkout_out_of_location = bool(log.get("approval_required") and log.get("approved"))
 				break
 
 	# Rule 1: No checkin at all → Absent
@@ -241,27 +245,6 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 			checkout_time=None
 		)
 		return "Absent"
-
-	# Non-Worker, non-Field, non-Site with a defined ESS Location:
-	# If approved out-of-office checkin/checkout exists → Present without late/early/half day
-	if location and location != "Site" and frappe.db.exists("ESS Location", location):
-		has_approved_out_of_office = any(
-			c.get("approval_required") and c.get("approved")
-			for c in checkins
-		)
-		if has_approved_out_of_office and (checkin_time or checkout_time):
-			create_attendance_record(
-				employee=employee,
-				date=date,
-				status="Present",
-				late_entry=False,
-				early_exit=False,
-				working_hours=0,
-				remarks="Present - Approved out-of-office check-in/check-out",
-				checkin_time=checkin_time,
-				checkout_time=checkout_time
-			)
-			return "Processed"
 
 	# Non-Worker, non-Site: Absent if check-in or check-out is missing
 	if location != "Site":
@@ -285,6 +268,14 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		location, date, employee, from_hours, to_hours,
 		emp_late_arrival_threshold, emp_early_exit_threshold,
 		emp_half_day_arrival_time, emp_half_day_departure_time
+	)
+
+	# Non-Site out-of-location approved punches use the standard shift time so
+	# the out-of-location punch is not treated as late / early.
+	checkin_time, checkout_time = apply_out_of_location_shift_times(
+		checkin_time, checkout_time,
+		checkin_out_of_location, checkout_out_of_location,
+		location_rules, date
 	)
 
 	# Determine attendance status based on rules
@@ -696,6 +687,46 @@ def build_location_rules(location, date, employee, from_hours=None, to_hours=Non
 		location_rules = adjust_thresholds_for_short_leave(location_rules, short_leave_period)
 
 	return location_rules
+
+
+def _datetime_at(date, time_val):
+	"""Build a datetime for `date` at the given time-of-day.
+
+	`time_val` may be a timedelta (how ESS Location Time fields load) or a
+	'HH:MM:SS' / 'HH:MM:SS.ffffff' string.
+	"""
+	d = getdate(date)
+	if isinstance(time_val, timedelta):
+		total_seconds = int(time_val.total_seconds())
+	else:
+		parts = str(time_val).split(":")
+		hours = int(parts[0])
+		minutes = int(parts[1]) if len(parts) > 1 else 0
+		seconds = int(float(parts[2])) if len(parts) > 2 else 0
+		total_seconds = hours * 3600 + minutes * 60 + seconds
+	return datetime(d.year, d.month, d.day) + timedelta(seconds=total_seconds)
+
+
+def apply_out_of_location_shift_times(checkin_time, checkout_time,
+	checkin_out_of_location, checkout_out_of_location, location_rules, date):
+	"""Non-Site out-of-location handling.
+
+	When a Non-Site employee's check-in (or check-out) punch was made out of
+	location and approved, that punch's time is replaced by the standard shift
+	start (or end) time from the ESS Location, so the out-of-location punch is
+	not treated as late arrival / early exit. The other punch is evaluated
+	normally.
+	"""
+	if not location_rules:
+		return checkin_time, checkout_time
+
+	if checkin_out_of_location and location_rules.get("shift_start_time"):
+		checkin_time = _datetime_at(date, location_rules.shift_start_time)
+
+	if checkout_out_of_location and location_rules.get("shift_end_time"):
+		checkout_time = _datetime_at(date, location_rules.shift_end_time)
+
+	return checkin_time, checkout_time
 
 
 def is_holiday_for_company(date):

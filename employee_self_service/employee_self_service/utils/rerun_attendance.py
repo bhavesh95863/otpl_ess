@@ -267,15 +267,19 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 
 	checkin_time = None
 	checkout_time = None
+	checkin_out_of_location = False
+	checkout_out_of_location = False
 
 	if checkins:
 		for log in checkins:
 			if log.log_type == "IN":
 				checkin_time = log.time
+				checkin_out_of_location = bool(log.get("approval_required") and log.get("approved"))
 				break
 		for log in reversed(checkins):
 			if log.log_type == "OUT":
 				checkout_time = log.time
+				checkout_out_of_location = bool(log.get("approval_required") and log.get("approved"))
 				break
 
 	# No checkin at all → Absent
@@ -292,26 +296,6 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 			checkout_time=None
 		)
 		return "Absent"
-
-	# Approved out-of-office handling
-	if location and location != "Site" and frappe.db.exists("ESS Location", location):
-		has_approved_out_of_office = any(
-			c.get("approval_required") and c.get("approved")
-			for c in checkins
-		)
-		if has_approved_out_of_office and (checkin_time or checkout_time):
-			create_attendance_record(
-				employee=employee,
-				date=date,
-				status="Present",
-				late_entry=False,
-				early_exit=False,
-				working_hours=0,
-				remarks="Present - Approved out-of-office check-in/check-out",
-				checkin_time=checkin_time,
-				checkout_time=checkout_time
-			)
-			return "Processed"
 
 	# Non-Worker, non-Site: Absent if check-in or check-out is missing
 	if location != "Site":
@@ -333,11 +317,22 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 	# Get ESS Location rules (incl. employee overrides + short-leave adjustment).
 	# Uses the same helper as the scheduled daily job so short-leave handling
 	# stays identical between the two paths.
-	from employee_self_service.employee_self_service.utils.daily_attendance import build_location_rules
+	from employee_self_service.employee_self_service.utils.daily_attendance import (
+		build_location_rules,
+		apply_out_of_location_shift_times,
+	)
 	location_rules = build_location_rules(
 		location, date, employee, from_hours, to_hours,
 		emp_late_arrival_threshold, emp_early_exit_threshold,
 		emp_half_day_arrival_time, emp_half_day_departure_time
+	)
+
+	# Non-Site out-of-location approved punches use the standard shift time so
+	# the out-of-location punch is not treated as late / early.
+	checkin_time, checkout_time = apply_out_of_location_shift_times(
+		checkin_time, checkout_time,
+		checkin_out_of_location, checkout_out_of_location,
+		location_rules, date
 	)
 
 	# Determine attendance status based on rules
