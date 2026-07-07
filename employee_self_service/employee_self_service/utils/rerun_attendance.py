@@ -25,7 +25,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None):
 	to_date = getdate(to_date)
 
 	employees = frappe.get_all("Employee",
-		filters={"status": "Active","name":"EMP/00787"},
+		filters={"status": "Active"},
 		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type", "from_hours", "to_hours",
 			"late_arrival_threshold", "early_exit_threshold", "half_day_arrival_time", "half_day_departure_time"]
 	)

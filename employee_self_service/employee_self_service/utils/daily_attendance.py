@@ -359,18 +359,18 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 	Determine attendance status based on checkin/checkout times and ESS Location rules.
 	Used for non-Worker employees only.
 
-	Late / early handling has three tiers:
-	- Present, on time: no flags.
-	- Present, late/early past late_arrival_threshold / early_exit_threshold:
-	  late_entry / early_exit is set on EVERY such day (the "allowed"/grace
-	  marker). extra_late_entry / extra_early_exit is added only on the specific
-	  "deduction" days, i.e. when the running monthly tally of late/early days
-	  equals late_count_for_half_day, equals late_count_for_full_day, or exceeds
-	  treat_late_as_half_day_after. late_entry / early_exit stay set on those
-	  days too.
-	- Half Day: crossing the stricter half_day_arrival_time /
-	  half_day_departure_time marks the day Half Day, counted purely as Half Day
-	  (late_entry / early_exit and the extra flags are left unset).
+	Late / early handling — each flag is computed INDEPENDENTLY from the ESS
+	Location threshold times. The day stays Present (late/early no longer marks
+	a Half Day):
+	- late_entry        : check-in after late_arrival_threshold.
+	- early_exit        : check-out before early_exit_threshold.
+	- extra_late_entry  : check-in at/after half_day_arrival_time (previously a
+	  Half Day; now flagged as extra late instead).
+	- extra_early_exit  : check-out at/before half_day_departure_time (previously
+	  a Half Day; now flagged as extra early instead).
+
+	The monthly count rule (late_count_for_half_day / _full_day /
+	treat_late_as_half_day_after) is NOT applied here — it is handled in payroll.
 
 	Returns: (status, late_entry, early_exit, extra_late_entry, extra_early_exit, remarks)
 	"""
@@ -429,64 +429,54 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 			early_exit = True
 			remarks_list.append("Missing check-out")
 
-		# Tier 2 (Half Day): crossing the stricter half-day arrival / departure
-		# time marks the day Half Day. Such a day is counted purely as Half Day,
-		# so the late_entry / early_exit and extra flags are left unset.
-		is_half_day = False
+		# extra_late_entry / extra_early_exit: crossing the half-day threshold.
+		# Instead of marking the day Half Day, we flag it as extra late / early.
+		#   check-in  at/after  half_day_arrival_time    -> extra_late_entry
+		#   check-out at/before half_day_departure_time  -> extra_early_exit
 		if checkin_time and half_day_arrival:
-			if get_datetime(checkin_time).time() >= half_day_arrival:
-				is_half_day = True
-				remarks_list.append("Half Day - arrived at/after {0}".format(half_day_arrival))
+			checkin_only_time = get_datetime(checkin_time).time()
+			if checkin_only_time >= half_day_arrival:
+				extra_late_entry = True
+				remarks_list.append(
+					"Extra late entry: checked in at {0}, at/after the half-day cut-off time {1}".format(
+						checkin_only_time.strftime("%H:%M"), half_day_arrival.strftime("%H:%M")
+					)
+				)
 
 		if checkout_time and half_day_departure:
-			if get_datetime(checkout_time).time() <= half_day_departure:
-				is_half_day = True
-				remarks_list.append("Half Day - left at/before {0}".format(half_day_departure))
-
-		if is_half_day:
-			status = "Half Day"
-			late_entry = False
-			early_exit = False
-			extra_late_entry = False
-			extra_early_exit = False
-		else:
-			# Present tier: late arrival / early exit past the regular threshold
-			# sets late_entry / early_exit on EVERY such day (the "allowed"/grace
-			# marker).
-			if checkin_time and late_threshold:
-				if get_datetime(checkin_time).time() > late_threshold:
-					late_entry = True
-					remarks_list.append("Late arrival after {0}".format(late_threshold))
-
-			if checkout_time and early_exit_threshold:
-				if get_datetime(checkout_time).time() < early_exit_threshold:
-					early_exit = True
-					remarks_list.append("Early exit before {0}".format(early_exit_threshold))
-
-			# The extra flag marks the specific "deduction" days, based on the
-			# running monthly tally of late/early days. It fires when that tally:
-			#   - equals late_count_for_half_day, or
-			#   - equals late_count_for_full_day, or
-			#   - exceeds treat_late_as_half_day_after.
-			# late_entry / early_exit stay set on these days too.
-			if late_entry or early_exit:
-				half_count = int(location_rules.get('late_count_for_half_day') or 0)
-				full_count = int(location_rules.get('late_count_for_full_day') or 0)
-				treat_after = int(location_rules.get('treat_late_as_half_day_after') or 0)
-				new_late_count = get_month_late_count(employee, date) + 1
-				is_extra = (
-					(half_count and new_late_count == half_count)
-					or (full_count and new_late_count == full_count)
-					or (treat_after and new_late_count > treat_after)
-				)
-				if is_extra:
-					if late_entry:
-						extra_late_entry = True
-					if early_exit:
-						extra_early_exit = True
-					remarks_list.append(
-						"Extra mark (late/early day #{0} this month)".format(new_late_count)
+			checkout_only_time = get_datetime(checkout_time).time()
+			if checkout_only_time <= half_day_departure:
+				extra_early_exit = True
+				remarks_list.append(
+					"Extra early exit: checked out at {0}, at/before the half-day cut-off time {1}".format(
+						checkout_only_time.strftime("%H:%M"), half_day_departure.strftime("%H:%M")
 					)
+				)
+
+		# late_entry / early_exit: based on the late-arrival / early-exit threshold.
+		#   check-in  after  late_arrival_threshold  -> late_entry
+		#   check-out before early_exit_threshold    -> early_exit
+		# If the day already qualifies as extra late / early (crossed the half-day
+		# threshold), the regular flag is NOT set — extra replaces it.
+		if checkin_time and late_threshold and not extra_late_entry:
+			checkin_only_time = get_datetime(checkin_time).time()
+			if checkin_only_time > late_threshold:
+				late_entry = True
+				remarks_list.append(
+					"Late entry: checked in at {0}, after the late cut-off time {1}".format(
+						checkin_only_time.strftime("%H:%M"), late_threshold.strftime("%H:%M")
+					)
+				)
+
+		if checkout_time and early_exit_threshold and not extra_early_exit:
+			checkout_only_time = get_datetime(checkout_time).time()
+			if checkout_only_time < early_exit_threshold:
+				early_exit = True
+				remarks_list.append(
+					"Early exit: checked out at {0}, before the early-exit cut-off time {1}".format(
+						checkout_only_time.strftime("%H:%M"), early_exit_threshold.strftime("%H:%M")
+					)
+				)
 
 	except Exception as e:
 		traceback_msg = frappe.get_traceback()

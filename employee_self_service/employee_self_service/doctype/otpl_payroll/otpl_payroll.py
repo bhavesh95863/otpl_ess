@@ -154,6 +154,38 @@ def _fetch_employees_by_ids(emp_ids):
 	return _select_employees("e.name IN %(ids)s", {"ids": tuple(emp_ids)})
 
 
+def _fetch_latest_gross_salary(emp_ids, as_on_date):
+	"""Latest Employee Gross Salary (with date <= as_on_date) per employee.
+
+	Returns ``{employee: {"amount": float, "date": date}}`` for employees that
+	have such a record. Employees without one are absent from the dict, so the
+	caller falls back to the Employee-level gross figure.
+	"""
+	if not emp_ids or not frappe.db.table_exists("Employee Gross Salary"):
+		return {}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT employee, gross_salary_amount, `date`
+		FROM `tabEmployee Gross Salary`
+		WHERE employee IN %(emp_ids)s
+		  AND `date` <= %(as_on)s
+		  AND docstatus < 2
+		ORDER BY `date` DESC, modified DESC
+		""",
+		{"emp_ids": tuple(emp_ids), "as_on": as_on_date},
+		as_dict=True,
+	)
+
+	out = {}
+	for r in rows:
+		# First row per employee is the latest (date DESC, then most recently
+		# modified as a tiebreaker for same-date records).
+		if r.employee not in out:
+			out[r.employee] = {"amount": flt(r.gross_salary_amount), "date": r.date}
+	return out
+
+
 @frappe.whitelist()
 def calculate_payroll(doc):
 	"""Run the full salary calculation for the doc's filters.
@@ -191,6 +223,14 @@ def calculate_payroll(doc):
 	all_emps = list(employees) + extra_emp_data
 	all_ids = [e["employee"] for e in all_emps]
 	employee_by_id = {e["employee"]: e for e in all_emps}
+
+	# Gross salary override: prefer the latest Employee Gross Salary record with
+	# date <= from_date; otherwise keep the Employee-level figure.
+	gross_override_map = _fetch_latest_gross_salary(all_ids, from_date)
+	for e in all_emps:
+		ov = gross_override_map.get(e["employee"])
+		if ov:
+			e["gross_salary"] = ov["amount"]
 
 	# Pull every dependency once, in O(N) grouped queries
 	att_map = _fetch_attendance_aggregates(all_ids, from_date, to_date)
@@ -328,8 +368,11 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 		present_dates         set[date]   - submitted Present (excluding false)
 		half_day_dates        set[date]   - submitted Half Day (excluding false)
 		absent_dates          set[date]   - submitted Absent (excluding false)
-		extra_late_half_days  int         - count of Half Day status w/ late_entry
-		late_count            int         - sum of custom_late_mark
+		late_count               int      - # days flagged late_entry or early_exit
+		late_entry_count         int      - # days with late_entry checked
+		early_exit_count         int      - # days with early_exit checked
+		extra_late_entry_count   int      - # days with extra_late_entry checked
+		extra_early_exit_count   int      - # days with extra_early_exit checked
 		working_hours         float       - sum of Attendance.working_hours
 	"""
 	if not emp_ids:
@@ -341,6 +384,12 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 	late_mark_expr = "COALESCE(a.custom_late_mark, 0)" if has_late_mark else "0"
 	has_working_hours = frappe.db.has_column("Attendance", "working_hours")
 	working_hours_expr = "COALESCE(a.working_hours, 0)" if has_working_hours else "0"
+	# Extra Late Entry / Extra Early Exit are newer custom checkboxes and may not
+	# exist on every site; fall back to 0 when absent.
+	has_extra_late = frappe.db.has_column("Attendance", "extra_late_entry")
+	extra_late_expr = "COALESCE(a.extra_late_entry, 0)" if has_extra_late else "0"
+	has_extra_early = frappe.db.has_column("Attendance", "extra_early_exit")
+	extra_early_expr = "COALESCE(a.extra_early_exit, 0)" if has_extra_early else "0"
 
 	rows = frappe.db.sql(
 		"""
@@ -351,13 +400,16 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 			{late_mark_expr}                  AS late_mark,
 			COALESCE(a.late_entry, 0)         AS late_entry,
 			COALESCE(a.early_exit, 0)         AS early_exit,
+			{extra_late_expr}                 AS extra_late_entry,
+			{extra_early_expr}                AS extra_early_exit,
 			{working_hours_expr}              AS working_hours,
 			COALESCE(a.false_attendance, 0)   AS false_attendance
 		FROM `tabAttendance` a
 		WHERE a.employee IN %(emp_ids)s
 		  AND a.attendance_date BETWEEN %(from_date)s AND %(to_date)s
 		  AND a.docstatus = 1
-		""".format(late_mark_expr=late_mark_expr, working_hours_expr=working_hours_expr),
+		""".format(late_mark_expr=late_mark_expr, working_hours_expr=working_hours_expr,
+		           extra_late_expr=extra_late_expr, extra_early_expr=extra_early_expr),
 		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
 		as_dict=True,
 	)
@@ -368,7 +420,10 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 		"half_day_dates": set(),
 		"absent_dates": set(),
 		"late_count": 0,
-		"extra_late_half_days": 0,
+		"late_entry_count": 0,
+		"early_exit_count": 0,
+		"extra_late_entry_count": 0,
+		"extra_early_exit_count": 0,
 		"working_hours": 0.0,
 		"false_attendance_count": 0,
 	})
@@ -384,14 +439,21 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 			bucket["present_dates"].add(d)
 		elif r.status == "Half Day":
 			bucket["half_day_dates"].add(d)
-			if cint(r.late_entry) or cint(r.early_exit):
-				bucket["extra_late_half_days"] += 1
 		elif r.status == "Absent":
 			bucket["absent_dates"].add(d)
-		# Late count = any attendance record in the period flagged as late
-		# entry or early exit (one count per day, regardless of which flag).
+		# Late / early marks: counted separately (their total drives the ESS
+		# Location count rule). late_count is the per-day tally kept for info.
+		if cint(r.late_entry):
+			bucket["late_entry_count"] += 1
+		if cint(r.early_exit):
+			bucket["early_exit_count"] += 1
 		if cint(r.late_entry) or cint(r.early_exit):
 			bucket["late_count"] += 1
+		# Extra Late / Early check marks drive the extra-late half-day deduction.
+		if cint(r.extra_late_entry):
+			bucket["extra_late_entry_count"] += 1
+		if cint(r.extra_early_exit):
+			bucket["extra_early_exit_count"] += 1
 		bucket["working_hours"] += flt(r.working_hours)
 
 	return out
@@ -833,7 +895,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	absent_dates = att.get("absent_dates", set())
 	processed_dates = att.get("processed_dates", set())
 	late_count = 0 if skip_late_metrics else att.get("late_count", 0)
-	extra_late_half_days = 0 if skip_late_metrics else att.get("extra_late_half_days", 0)
+	late_entry_count = 0 if skip_late_metrics else att.get("late_entry_count", 0)
+	early_exit_count = 0 if skip_late_metrics else att.get("early_exit_count", 0)
+	# Total late/early marks — drives the ESS Location count rule (3/5/5).
+	late_early_total = late_entry_count + early_exit_count
+	extra_late_entry_count = 0 if skip_late_metrics else att.get("extra_late_entry_count", 0)
+	extra_early_exit_count = 0 if skip_late_metrics else att.get("extra_early_exit_count", 0)
+	# Extra-late half-days to deduct = (extra late entries + extra early exits) / 2.
+	extra_late_half_days = (extra_late_entry_count + extra_early_exit_count) / 2.0
 	working_hours = flt(att.get("working_hours", 0.0))
 	false_attendance_count = att.get("false_attendance_count", 0)
 
@@ -921,39 +990,31 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	days_worked -= 2 * false_attendance_count
 	days_worked = max(days_worked, 0)
 
-	# ---- Col K: Late deduction days (observation #9) -------------------------
-	# K = "Deduction in days due to Late and Extra Late" =
-	#       approved-half-day-leaves / 2      (half-day LEAVE part)
-	#     + late-mark deduction derived from the No. of Late Marked (Col I).
-	#
-	# NOTE: "extra-late half-days" (attendance already downgraded to Half Day due
-	# to late-entry/early-exit) are intentionally NOT added here: those same late
-	# entries / early exits are already penalised through the late-mark deduction
-	# below (they are part of the Late Marked count). Adding them again would
-	# double-charge the employee for the same lateness.
-	#
-	# The late-mark deduction is a pure function of the late count, using the
-	# three ESS Location "Leave Deduction Rules" fields (defaults 3 / 5 / 5):
-	#   * late_count >= late_count_for_full_day      -> 1 day (full day)
-	#   * late_count >= late_count_for_half_day      -> 0.5 day (half day)
-	#   * else                                       -> 0
-	#   * additionally, for every late beyond treat_late_as_half_day_after,
-	#     add 0.5 (that late is treated as an extra half day).
-	# So with 3 / 5 / 5:  3->0.5, 4->0.5, 5->1.0, 6->1.5, 7->2.0, ...
+	# ---- Col K: Late deduction days -----------------------------------------
+	# K = approved-half-day-leaves / 2   (half-day LEAVE part; the only Half Day now)
+	#   + late-mark deduction            (ESS Location count rule applied to the
+	#                                      total late_entry + early_exit marks)
+	#   + extra-late half-days           ((extra_late + extra_early) / 2, direct)
 	approved_half_days = len(half_leave_dates)
 
+	# Late-mark deduction from the ESS Location "Leave Deduction Rules" (defaults
+	# 3 / 5 / 5) applied to the total late/early marks:
+	#   total >= late_count_for_full_day  -> 1 day, plus 0.5 for each mark beyond
+	#                                        treat_late_as_half_day_after
+	#   total >= late_count_for_half_day  -> 0.5 day
+	#   else                              -> 0
 	late_count_for_half_day = cint(emp.get("late_count_for_half_day")) or 3
 	late_count_for_full_day = cint(emp.get("late_count_for_full_day")) or 5
 	treat_late_as_half_day_after = cint(emp.get("treat_late_as_half_day_after")) or 5
 	late_mark_deduction = 0.0
-	if late_count >= late_count_for_full_day:
+	if late_early_total >= late_count_for_full_day:
 		late_mark_deduction = 1.0
-		if late_count > treat_late_as_half_day_after:
-			late_mark_deduction += (late_count - treat_late_as_half_day_after) * 0.5
-	elif late_count >= late_count_for_half_day:
+		if late_early_total > treat_late_as_half_day_after:
+			late_mark_deduction += (late_early_total - treat_late_as_half_day_after) * 0.5
+	elif late_early_total >= late_count_for_half_day:
 		late_mark_deduction = 0.5
 
-	late_deduction = approved_half_days / 2.0 + late_mark_deduction
+	late_deduction = approved_half_days / 2.0 + late_mark_deduction + extra_late_half_days
 
 	# ---- Col L: Absent (observation #4) --------------------------------------
 	# Just count Attendance.status='Absent' (excluding false attendance).
@@ -1160,8 +1221,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"qualified_holidays_strict": qualified_holidays_strict,
 		"false_attendance_count": false_attendance_count,
 		"late_count": late_count,
+		"late_entry_count": late_entry_count,
+		"early_exit_count": early_exit_count,
+		"late_early_total": late_early_total,
+		"late_mark_deduction": flt(late_mark_deduction, 2),
 		"approved_half_days": approved_half_days,
-		"extra_late_half_days": extra_late_half_days,
+		"extra_late_entry_count": extra_late_entry_count,
+		"extra_early_exit_count": extra_early_exit_count,
+		"extra_late_half_days": flt(extra_late_half_days, 2),
 		"short_leaves_count": short_leave_count,
 		"late_deduction_days": flt(late_deduction, 2),
 		"absent_no_info_days": absent_count,
@@ -1326,6 +1393,14 @@ def get_calculation_trace(doc, employee):
 	ids_for_fetch = [employee] + ([parent_id] if parent_id else [])
 	emps_for_fetch = [emp] + ([parent_emp] if parent_emp else [])
 
+	# Gross salary override (same rule as calculate_payroll): latest Employee
+	# Gross Salary record with date <= from_date, else the Employee field.
+	gross_override_map = _fetch_latest_gross_salary(ids_for_fetch, from_date)
+	for e in emps_for_fetch:
+		ov = gross_override_map.get(e["employee"]) if e else None
+		if ov:
+			e["gross_salary"] = ov["amount"]
+
 	att_map = _fetch_attendance_aggregates(ids_for_fetch, from_date, to_date)
 	lookahead_map = _fetch_lookahead_presentish(ids_for_fetch, to_date)
 	leave_map = _fetch_approved_leaves(ids_for_fetch, from_date, to_date)
@@ -1405,6 +1480,7 @@ def get_calculation_trace(doc, employee):
 
 	# Raw (pre-dedup) non-holiday component counts, for the Col H breakdown.
 	half_leave_dates = leaves.get("half_leave_dates", set())
+	full_leave_dates = leaves.get("full_leave_dates", set())
 	nh_present = len([d for d in present_dates if d not in holiday_dates])
 	nh_half = len([d for d in half_day_dates if d not in holiday_dates])
 	nh_half_leave = len([d for d in half_leave_dates if d not in holiday_dates])
@@ -1413,18 +1489,6 @@ def get_calculation_trace(doc, employee):
 	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
 	full_adv = flt(advance.get("full", 0.0))
 	part_adv = flt(advance.get("part", 0.0))
-
-	# Late-mark portion of Col K (mirrors _calculate_employee).
-	_lc_half = cint(emp.get("late_count_for_half_day")) or 3
-	_lc_full = cint(emp.get("late_count_for_full_day")) or 5
-	_lc_treat = cint(emp.get("treat_late_as_half_day_after")) or 5
-	_late_mark_deduction = 0.0
-	if row["late_count"] >= _lc_full:
-		_late_mark_deduction = 1.0
-		if row["late_count"] > _lc_treat:
-			_late_mark_deduction += (row["late_count"] - _lc_treat) * 0.5
-	elif row["late_count"] >= _lc_half:
-		_late_mark_deduction = 0.5
 
 	al_reason = []
 	if not is_worker_site:
@@ -1443,7 +1507,12 @@ def get_calculation_trace(doc, employee):
 				("Staff Type / Location", "{0} / {1}".format(staff_type or "-", location or "-")),
 				("Period", "{0} → {1} ({2} days selected; {3} days in month)".format(from_date, to_date, days_in_period, days_in_month)),
 				("UAN No / ESIC No", "{0} / {1}".format(emp.get("uan_no") or "-", emp.get("esic_no") or "-")),
-				("Gross (Rate of Wages)", _f(emp.get("gross_salary"))),
+				("Gross (Rate of Wages)",
+				 "{0}  —  {1}".format(
+					_f(emp.get("gross_salary")),
+					"from Employee Gross Salary dated {0}".format(gross_override_map[employee]["date"].strftime("%d-%b-%Y"))
+					if gross_override_map.get(employee)
+					else "from Employee master (no Employee Gross Salary on/before {0})".format(from_date.strftime("%d-%b-%Y")))),
 				("Basic Salary", _f(emp.get("basic_salary"))),
 				("Wage Bands (ESS Location)",
 				 "Min Wages {0} | Max Wage PF {1} | Max Wage ESIC {2}"
@@ -1464,10 +1533,16 @@ def get_calculation_trace(doc, employee):
 			"items": [
 				("Attendance Processed (excl. false)", str(len(processed_dates))),
 				("Present days", str(len(present_dates))),
-				("Half days (status='Half Day', counts as a FULL day in H)", str(len(half_day_dates))),
-				("  ↳ of which due to Late Entry / Early Exit", str(row.get("extra_late_half_days", 0))),
+				("Half Days (status = Half Day) — leave half-days only", str(len(half_day_dates))),
 				("Absent days", str(len(absent_dates))),
-				("Late Entry/Early Exit", str(row.get("late_count", 0))),
+				("Late Entry marks", str(row.get("late_entry_count", 0))),
+				("Early Exit marks", str(row.get("early_exit_count", 0))),
+				("Late + Early total (for the count rule)", str(row.get("late_early_total", 0))),
+				("Extra Late Entry marks", str(row.get("extra_late_entry_count", 0))),
+				("Extra Early Exit marks", str(row.get("extra_early_exit_count", 0))),
+				("Extra Late + Extra Early total", "{0}  →  ÷2 = {1} day(s)".format(
+					row.get("extra_late_entry_count", 0) + row.get("extra_early_exit_count", 0),
+					_f(row.get("extra_late_half_days", 0)))),
 				("Total working hours (Attendance.working_hours)", "{0:.2f}".format(working_hours)),
 				("Present-ish in next month (first ≤3 days, for end-of-period holidays)",
 				 str(len(lookahead_map.get(employee, set())))),
@@ -1501,19 +1576,26 @@ def get_calculation_trace(doc, employee):
 				 "{qh} of {th} holiday(s) qualify — present-ish in ANY of the 3 days BEFORE or AFTER "
 				 "(next-month days are included when the period ends on/near a holiday)"
 				 .format(qh=row["qualified_holidays"], th=len(holiday_dates))),
-				("(I) Late Marked", str(row["late_count"])),
-				("(J) Half days marked due to extra late (informational — NOT deducted; already covered by late-mark rule)",
-				 str(row["extra_late_half_days"])),
-				("(K) Late deduction days",
-				 "{total} = approved half-day leaves ({ah}×0.5={ahv}) + late-mark deduction ({lmv})  "
-				 "[Late Marked {lc}; thresholds: half@{h}, full@{f}, treat-as-half-after@{t}]. "
-				 "Extra-late half-days are NOT added here — those late entries/early exits are already counted in Late Marked."
-				 .format(total=_f(row["late_deduction_days"]),
-				         ah=approved_half, ahv=_f(approved_half * 0.5),
-				         lmv=_f(_late_mark_deduction), lc=row["late_count"],
+				("(I) Late + Early marks (drives the count rule)",
+				 "{tot} = Late Entry {le} + Early Exit {ee}  →  rule (half≥{h}, full≥{f}, +0.5 beyond {t}) = {lmv} day(s)"
+				 .format(tot=row.get("late_early_total", 0),
+				         le=row.get("late_entry_count", 0), ee=row.get("early_exit_count", 0),
 				         h=cint(emp.get("late_count_for_half_day")) or 3,
 				         f=cint(emp.get("late_count_for_full_day")) or 5,
-				         t=cint(emp.get("treat_late_as_half_day_after")) or 5)),
+				         t=cint(emp.get("treat_late_as_half_day_after")) or 5,
+				         lmv=_f(row.get("late_mark_deduction", 0)))),
+				("(J) Extra Late + Extra Early marks",
+				 "{tot} = Extra Late Entry {el} + Extra Early Exit {ee}  →  ÷2 = {xh} day(s)"
+				 .format(el=row.get("extra_late_entry_count", 0),
+				         ee=row.get("extra_early_exit_count", 0),
+				         tot=row.get("extra_late_entry_count", 0) + row.get("extra_early_exit_count", 0),
+				         xh=_f(row.get("extra_late_half_days", 0)))),
+				("(K) Total days deducted",
+				 "{total} day(s) = half-day leaves ({ah}×0.5={ahv}) + late/early rule ({lmv}) + extra late/early ({xh})"
+				 .format(total=_f(row["late_deduction_days"]),
+				         ah=approved_half, ahv=_f(approved_half * 0.5),
+				         lmv=_f(row.get("late_mark_deduction", 0)),
+				         xh=_f(row.get("extra_late_half_days", 0)))),
 				("(L) Absent w/o info",
 				 "{0}  —  count of Attendance.status='Absent' (excl. false)".format(row["absent_no_info_days"])),
 				("(M) Adjusted from CL",
