@@ -592,11 +592,20 @@ def get_approved_short_leave_period(employee, date):
 def adjust_thresholds_for_short_leave(location_rules, short_leave_period):
 	"""Adjust location_rules timing thresholds based on short leave period.
 
-	First Half short leave: employee is off in the morning, so start time
-	shifts forward by 2 hours (e.g. 9:30 → 11:30).
+	On a short-leave day the regular late-arrival / early-exit thresholds are
+	NOT considered at all. Only the half-day cut-off is checked, and it is
+	derived directly from the shift timing (not from the existing threshold
+	fields):
 
-	Second Half short leave: employee leaves early, so end time shifts
-	back by 2 hours (e.g. 18:00 → 16:00).
+	First Half short leave: employee is off in the morning and is expected in
+	~2 hours after shift start. The half-day arrival cut-off becomes
+	shift_start_time + 2h (e.g. 9:30 → 11:30); only an arrival at/after that
+	is flagged (extra_late_entry). Regular late-arrival is disabled.
+
+	Second Half short leave: employee leaves ~2 hours before shift end. The
+	half-day departure cut-off becomes shift_end_time - 2h (e.g. 18:00 →
+	16:00); only a departure at/before that is flagged (extra_early_exit).
+	Regular early-exit is disabled.
 	"""
 	SHORT_LEAVE_OFFSET = timedelta(hours=2)
 
@@ -620,16 +629,20 @@ def adjust_thresholds_for_short_leave(location_rules, short_leave_period):
 		return new_total
 
 	if short_leave_period == "First Half":
+		# Half-day arrival cut-off is derived from shift start (+2h), computed
+		# before shift_start_time itself is shifted.
+		location_rules.half_day_arrival_time = _shift_time(location_rules.shift_start_time, SHORT_LEAVE_OFFSET)
+		# Regular late-arrival is not considered on a short-leave day.
+		location_rules.late_arrival_threshold = None
 		location_rules.shift_start_time = _shift_time(location_rules.shift_start_time, SHORT_LEAVE_OFFSET)
-		location_rules.late_arrival_threshold = _shift_time(location_rules.late_arrival_threshold, SHORT_LEAVE_OFFSET)
-		if location_rules.half_day_arrival_time:
-			location_rules.half_day_arrival_time = _shift_time(location_rules.half_day_arrival_time, SHORT_LEAVE_OFFSET)
 
 	elif short_leave_period == "Second Half":
+		# Half-day departure cut-off is derived from shift end (-2h), computed
+		# before shift_end_time itself is shifted.
+		location_rules.half_day_departure_time = _shift_time(location_rules.shift_end_time, -SHORT_LEAVE_OFFSET)
+		# Regular early-exit is not considered on a short-leave day.
+		location_rules.early_exit_threshold = None
 		location_rules.shift_end_time = _shift_time(location_rules.shift_end_time, -SHORT_LEAVE_OFFSET)
-		location_rules.early_exit_threshold = _shift_time(location_rules.early_exit_threshold, -SHORT_LEAVE_OFFSET)
-		if location_rules.half_day_departure_time:
-			location_rules.half_day_departure_time = _shift_time(location_rules.half_day_departure_time, -SHORT_LEAVE_OFFSET)
 
 	return location_rules
 
