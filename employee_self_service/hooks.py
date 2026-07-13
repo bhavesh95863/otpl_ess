@@ -16,7 +16,11 @@ after_migrate = "employee_self_service.setup.after_install"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/employee_self_service/css/employee_self_service.css"
-# app_include_js = "/assets/employee_self_service/js/employee_self_service.js"
+
+# Restricts every Employee link picker (in this app and OTPL Accounting) to
+# Active employees. Declared in one place because Frappe v12 has no link_filters
+# DocField property — see the file for the map and the deliberate exclusions.
+app_include_js = "/assets/employee_self_service/js/employee_active_filter.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/employee_self_service/css/employee_self_service.css"
