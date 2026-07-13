@@ -30,7 +30,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	"""
 	from_date = getdate(from_date or "2026-06-01")
 	to_date = getdate(to_date or "2026-06-30")
-	location = "Noida"
+	location = "Haridwar"
 	filters = {"status": "Active"}
 	if location:
 		filters["location"] = location
