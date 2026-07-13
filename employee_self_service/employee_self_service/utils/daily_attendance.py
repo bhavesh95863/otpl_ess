@@ -110,6 +110,12 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		# Attendance already created for this day, skip
 		return "Skipped"
 
+	# Self-repair: a Half Day OTPL Leave approved before the Leave Application was
+	# dropped still carries one, and it would make this day Skipped below — so the
+	# half-day timing rules would never run. Retire it first, then process the day
+	# for real. No-op for every other leave.
+	remove_obsolete_half_day_leave_application(employee, date)
+
 	# Check if leave application exists for this day
 	existing_leave = frappe.db.exists(
 		"Leave Application",
@@ -359,9 +365,11 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 	Determine attendance status based on checkin/checkout times and ESS Location rules.
 	Used for non-Worker employees only.
 
+	Status is Present, except on an approved Half Day Leave day, where it is
+	Half Day (see get_approved_half_day_leave_period).
+
 	Late / early handling — each flag is computed INDEPENDENTLY from the ESS
-	Location threshold times. The day stays Present (late/early no longer marks
-	a Half Day):
+	Location threshold times. Late/early on its own no longer marks a Half Day:
 	- late_entry        : check-in after late_arrival_threshold.
 	- early_exit        : check-out before early_exit_threshold.
 	- extra_late_entry  : check-in at/after half_day_arrival_time (previously a
@@ -380,6 +388,17 @@ def determine_status(checkin_time, checkout_time, location_rules, employee, date
 	extra_late_entry = False
 	extra_early_exit = False
 	remarks_list = []
+
+	# An approved Half Day Leave makes the day a Half Day whatever the punches
+	# say (a missing punch is caught upstream and returns Absent before we get
+	# here). The 0.5-day deduction is NOT taken from this status — payroll reads
+	# it off the OTPL Leave itself (approved_half_days) — so this must not be
+	# double-counted. Late / early flags are still computed below, against the
+	# leave-shifted thresholds from adjust_thresholds_for_half_day_leave.
+	half_day_leave_period = get_approved_half_day_leave_period(employee, date)
+	if half_day_leave_period:
+		status = "Half Day"
+		remarks_list.append("Approved {0} leave".format(half_day_leave_period))
 
 	# If no location rules, just mark missing logs as late
 	if not location_rules:
@@ -572,6 +591,46 @@ def create_attendance_record(employee, date, status, late_entry, early_exit, wor
 		raise
 
 
+FIRST_HALF = "First Half"
+SECOND_HALF = "Second Half"
+
+# The mobile app writes half_day_period as free text and sends it ALREADY
+# TRANSLATED for some locales, so the stored value is not always English
+# (e.g. 'पहली छमाही'). Comparing the raw value against "First Half" silently
+# misses those records — the day would get no threshold adjustment at all — so
+# every read goes through normalize_half_day_period().
+_HALF_DAY_PERIOD_ALIASES = {
+	"first half": FIRST_HALF,
+	"1st half": FIRST_HALF,
+	"पहली छमाही": FIRST_HALF,
+	"second half": SECOND_HALF,
+	"2nd half": SECOND_HALF,
+	"दूसरी छमाही": SECOND_HALF,
+}
+
+
+def normalize_half_day_period(period, employee=None, date=None):
+	"""Map a stored half_day_period to canonical 'First Half' / 'Second Half'.
+
+	Returns None for an empty value, and for an unrecognised one — which is
+	logged, because it means a leave silently gets no threshold adjustment.
+	"""
+	if not period:
+		return None
+
+	normalized = _HALF_DAY_PERIOD_ALIASES.get(str(period).strip().lower())
+	if not normalized:
+		frappe.log_error(
+			title="Unrecognised Half Day Period: {0}".format(period),
+			message=(
+				"OTPL Leave half_day_period {0!r} (employee {1}, date {2}) does not map to "
+				"First Half / Second Half, so no attendance threshold adjustment was applied. "
+				"Add it to _HALF_DAY_PERIOD_ALIASES in daily_attendance.py."
+			).format(period, employee, date)
+		)
+	return normalized
+
+
 def get_approved_short_leave_period(employee, date):
 	"""Check if employee has an approved OTPL Leave with short_leave on this date.
 	Returns the half_day_period ('First Half' or 'Second Half') or None."""
@@ -586,7 +645,203 @@ def get_approved_short_leave_period(employee, date):
 		},
 		"half_day_period"
 	)
-	return result if result else None
+	return normalize_half_day_period(result, employee, date)
+
+
+def remove_obsolete_half_day_leave_application(employee, date):
+	"""Self-repair: retire the Leave Application of a Half Day OTPL Leave that no
+	longer warrants one. Returns the number removed.
+
+	A Half Day OTPL Leave used to auto-create a Leave Application. It no longer
+	does — the day is now processed as real attendance (Half Day status, plus
+	late / early marks against leave-shifted thresholds), exactly as Short Leave
+	already worked. But leaves approved BEFORE that change still carry their
+	Leave Application, and its mere existence makes attendance skip the day, so
+	the half-day timing rules would never run for it.
+
+	Rather than a one-off patch, both attendance paths call this first: the day
+	is repaired the moment it is processed or re-processed.
+
+	What counts as obsolete is decided by OTPLLeave._leave_application_range() —
+	the SAME method the live approval flow uses — so repair and go-forward can
+	never disagree. It keeps the Leave Application when one is still legitimately
+	needed:
+	  * a multi-day Half Day, whose full-leave days still need it, and
+	  * Worker / Field / Noida-Driver / no-check-in employees, who are not
+	    punch-based and whose attendance the Leave Application still generates.
+	"""
+	otpl_leave = frappe.db.get_value(
+		"OTPL Leave",
+		{
+			"employee": employee,
+			"half_day": 1,
+			"status": "Approved",
+			"half_day_date": date
+		},
+		"name"
+	)
+	if not otpl_leave:
+		return 0
+
+	doc = frappe.get_doc("OTPL Leave", otpl_leave)
+	start = doc.approved_from_date or doc.from_date
+	end = doc.approved_to_date or doc.to_date
+
+	# A real range back means this leave still needs a Leave Application.
+	la_from, la_to = doc._leave_application_range(start, end)
+	if la_from and la_to:
+		return 0
+
+	removed = 0
+	for leave_app_name in _linked_leave_applications(doc):
+		try:
+			leave_app = frappe.get_doc("Leave Application", leave_app_name)
+			leave_app.flags.ignore_permissions = True
+			# Sanctioned detach: validate_leave_application_cancel() otherwise
+			# refuses to cancel an auto-created application whose OTPL Leave is
+			# still Approved.
+			leave_app.flags.ignore_otpl_leave_link = True
+
+			if leave_app.docstatus == 1:
+				leave_app.cancel()
+
+			frappe.delete_doc(
+				"Leave Application", leave_app_name,
+				force=True, ignore_permissions=True
+			)
+			removed += 1
+		except Exception:
+			frappe.log_error(
+				title="Could not remove obsolete Half Day Leave Application: {0}".format(
+					leave_app_name
+				),
+				message=frappe.get_traceback()
+			)
+
+	if removed:
+		doc.db_set("leave_applications", "", update_modified=False)
+
+	return removed
+
+
+def _linked_leave_applications(doc):
+	"""Every Leave Application belonging to an OTPL Leave.
+
+	Reads the `leave_applications` reference field AND searches by the
+	description stamp make_leave_application() writes, so an application whose
+	reference was never recorded back is still found.
+	"""
+	names = [n.strip() for n in (doc.leave_applications or "").split(",") if n.strip()]
+
+	for row in frappe.get_all(
+		"Leave Application",
+		filters={
+			"description": "Auto-created from OTPL Leave: {0}".format(doc.name),
+			"docstatus": ["<", 2]
+		},
+		fields=["name"]
+	):
+		if row.name not in names:
+			names.append(row.name)
+
+	return [n for n in names if frappe.db.exists("Leave Application", n)]
+
+
+def get_approved_half_day_leave_period(employee, date):
+	"""Check if employee has an approved Half Day OTPL Leave on this date.
+	Returns the half_day_period ('First Half' or 'Second Half') or None.
+
+	Keyed on half_day_date, which is the ONE day of the leave that is a half
+	day — a Half Day may also be the first/last day of a longer leave, whose
+	other days are ordinary full-day Leave Applications and get skipped upstream
+	as normal. Keying on half_day_date (rather than the approved range) is also
+	what OTPL Payroll does for approved_half_days, so the two agree by
+	construction.
+
+	The half day itself creates no Leave Application, so the day reaches normal
+	attendance processing: shifted thresholds + a Half Day status.
+	"""
+	result = frappe.db.get_value(
+		"OTPL Leave",
+		{
+			"employee": employee,
+			"half_day": 1,
+			"status": "Approved",
+			"half_day_date": date
+		},
+		"half_day_period"
+	)
+	return normalize_half_day_period(result, employee, date)
+
+
+def _shift_time(time_val, offset):
+	"""Add/subtract offset from a timedelta or 'HH:MM:SS' string, returned as a timedelta."""
+	if not time_val:
+		return time_val
+	# Convert to timedelta seconds for arithmetic
+	if isinstance(time_val, timedelta):
+		total = time_val
+	else:
+		parts = str(time_val).split(":")
+		total = timedelta(hours=int(parts[0]), minutes=int(parts[1]),
+						  seconds=int(float(parts[2])) if len(parts) > 2 else 0)
+	new_total = total + offset
+	# Clamp to 0–24h range
+	if new_total.total_seconds() < 0:
+		new_total = timedelta(0)
+	if new_total.total_seconds() > 86400:
+		new_total = timedelta(hours=24)
+	return new_total
+
+
+def adjust_thresholds_for_half_day_leave(location_rules, half_day_leave_period):
+	"""Adjust location_rules timing thresholds for an approved Half Day Leave.
+
+	The half the employee is present for is half the shift, i.e. the leave
+	boundary sits 4h30m from the shift edge. A 1-hour window past that boundary
+	is a normal late entry / early exit; beyond that window it is a double
+	(extra) late entry / early exit. Example, shift 09:30–18:00:
+
+	First Half leave (off 09:30–14:00, must check in by 14:00):
+	  boundary = shift_start + 4h30m        = 14:00
+	  check-in <= 14:00                     -> on time
+	  14:00 < check-in < 15:00              -> late_entry
+	  check-in >= 15:00                     -> extra_late_entry (double)
+	  no check-in at all                    -> Absent (handled upstream)
+
+	Second Half leave (off 13:30–18:00, must check out after 13:30):
+	  boundary = shift_end - 4h30m          = 13:30
+	  check-out >= 13:30                    -> on time
+	  12:30 < check-out < 13:30             -> early_exit
+	  check-out <= 12:30                    -> extra_early_exit (double)
+	  no check-out at all                   -> Absent (handled upstream)
+
+	These map straight onto the existing late_arrival_threshold /
+	half_day_arrival_time (and early_exit_threshold / half_day_departure_time)
+	pair, so determine_status needs no special-casing. The opposite side of the
+	shift keeps the location's normal thresholds — on a First Half leave the
+	employee still works through to the usual shift end, and vice versa.
+	"""
+	HALF_DAY_LEAVE_OFFSET = timedelta(hours=4, minutes=30)
+	DOUBLE_MARK_WINDOW = timedelta(hours=1)
+
+	if half_day_leave_period == "First Half":
+		# Boundary (shift start + 4h30m) is the late cut-off; one hour later the
+		# late entry becomes a double. Computed before shift_start_time is moved.
+		boundary = _shift_time(location_rules.shift_start_time, HALF_DAY_LEAVE_OFFSET)
+		location_rules.late_arrival_threshold = boundary
+		location_rules.half_day_arrival_time = _shift_time(boundary, DOUBLE_MARK_WINDOW)
+		location_rules.shift_start_time = boundary
+
+	elif half_day_leave_period == "Second Half":
+		# Boundary (shift end - 4h30m) is the early-exit cut-off; one hour before
+		# it the early exit becomes a double. Computed before shift_end_time moves.
+		boundary = _shift_time(location_rules.shift_end_time, -HALF_DAY_LEAVE_OFFSET)
+		location_rules.early_exit_threshold = boundary
+		location_rules.half_day_departure_time = _shift_time(boundary, -DOUBLE_MARK_WINDOW)
+		location_rules.shift_end_time = boundary
+
+	return location_rules
 
 
 def adjust_thresholds_for_short_leave(location_rules, short_leave_period):
@@ -608,25 +863,6 @@ def adjust_thresholds_for_short_leave(location_rules, short_leave_period):
 	Regular early-exit is disabled.
 	"""
 	SHORT_LEAVE_OFFSET = timedelta(hours=2)
-
-	def _shift_time(time_val, offset):
-		"""Add/subtract offset from a timedelta or time string and return as timedelta."""
-		if not time_val:
-			return time_val
-		# Convert to timedelta seconds for arithmetic
-		if isinstance(time_val, timedelta):
-			total = time_val
-		else:
-			parts = str(time_val).split(":")
-			total = timedelta(hours=int(parts[0]), minutes=int(parts[1]),
-							  seconds=int(parts[2]) if len(parts) > 2 else 0)
-		new_total = total + offset
-		# Clamp to 0–24h range
-		if new_total.total_seconds() < 0:
-			new_total = timedelta(0)
-		if new_total.total_seconds() > 86400:
-			new_total = timedelta(hours=24)
-		return new_total
 
 	if short_leave_period == "First Half":
 		# Half-day arrival cut-off is derived from shift start (+2h), computed
@@ -658,9 +894,10 @@ def build_location_rules(location, date, employee, from_hours=None, to_hours=Non
 	  1. Employee working-hours override (from_hours / to_hours)
 	  2. Employee-level threshold overrides
 	  3. Any approved short-leave threshold shift for the date
+	  4. Any approved half-day-leave threshold shift for the date
 
 	The scheduled daily job AND the reprocess/backfill paths all call this so
-	short-leave handling can never drift between them.
+	short-leave / half-day-leave handling can never drift between them.
 
 	Returns the (possibly mutated) ESS Location doc, or None when the location
 	has no ESS Location rules.
@@ -688,6 +925,11 @@ def build_location_rules(location, date, employee, from_hours=None, to_hours=Non
 	short_leave_period = get_approved_short_leave_period(employee, date)
 	if short_leave_period:
 		location_rules = adjust_thresholds_for_short_leave(location_rules, short_leave_period)
+
+	# Adjust thresholds if employee has an approved half day leave for this date
+	half_day_leave_period = get_approved_half_day_leave_period(employee, date)
+	if half_day_leave_period:
+		location_rules = adjust_thresholds_for_half_day_leave(location_rules, half_day_leave_period)
 
 	return location_rules
 

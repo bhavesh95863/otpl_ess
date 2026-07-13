@@ -194,9 +194,11 @@
    "fieldtype": "Section Break"
   },
   {
+   "depends_on": "eval:doc.short_leave==1 || doc.half_day==1",
    "fieldname": "half_day_period",
-   "fieldtype": "Read Only",
-   "label": "Half Day Period"
+   "fieldtype": "Select",
+   "label": "Half Day Period",
+   "options": "\nFirst Half\nSecond Half"
   },
   {
    "default": "You have received a leave application. Please check your ESS app and either approve or reject the leave application asap.",

@@ -9,25 +9,40 @@ from datetime import datetime
 
 
 @frappe.whitelist()
-def rerun_attendance_for_period(from_date=None, to_date=None):
-	from_date = "2026-06-01"
-	to_date = "2026-06-30"
+def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	"""
-	Re-run attendance processing for all active employees for a given date range.
+	Re-run attendance processing for active employees over a date range.
+
+	from_date / to_date default to June 2026. `location` optionally restricts to
+	a single ESS Location (e.g. "Noida"); leave it empty to cover every location
+	— Half Day leaves exist outside Noida, so a location-filtered re-run would
+	silently leave those employees' attendance stale.
+
 	For each day in the period:
 	1. Cancel and delete any existing attendance for that employee/day.
 	2. If a leave application exists:
 	   - If half_day and half_day_date matches → mark "Half Day"
 	   - Otherwise → mark "On Leave"
 	3. Else, run the same attendance logic as daily_attendance.process_employee_attendance.
+	   This is where an approved Half Day OTPL Leave (which no longer creates a
+	   Leave Application) is picked up and the day is marked Half Day with its
+	   late / early marks.
 	"""
-	from_date = getdate(from_date)
-	to_date = getdate(to_date)
+	from_date = getdate(from_date or "2026-06-01")
+	to_date = getdate(to_date or "2026-06-30")
+	location = "Noida"
+	filters = {"status": "Active"}
+	if location:
+		filters["location"] = location
 
 	employees = frappe.get_all("Employee",
-		filters={"status": "Active","location":"Noida"},
+		filters=filters,
 		fields=["name", "employee_name", "location", "company", "no_check_in", "staff_type", "from_hours", "to_hours",
 			"late_arrival_threshold", "early_exit_threshold", "half_day_arrival_time", "half_day_departure_time"]
+	)
+
+	from employee_self_service.employee_self_service.utils.daily_attendance import (
+		remove_obsolete_half_day_leave_application,
 	)
 
 	total_processed = 0
@@ -36,6 +51,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None):
 	total_errors = 0
 	total_leave = 0
 	total_cancelled = 0
+	total_repaired = 0
 
 	current_date = from_date
 	while current_date <= to_date:
@@ -45,7 +61,15 @@ def rerun_attendance_for_period(from_date=None, to_date=None):
 				cancelled = cancel_and_delete_existing_attendance(emp.name, current_date)
 				total_cancelled += cancelled
 
-				# Step 2: Check leave application
+				# Step 2: Retire the Leave Application of a Half Day OTPL Leave that
+				# no longer warrants one. MUST happen before the leave check below —
+				# otherwise that check finds the stale application, marks the day from
+				# it, and step 4 (which applies the half-day timing rules) never runs.
+				total_repaired += remove_obsolete_half_day_leave_application(
+					emp.name, current_date
+				)
+
+				# Step 3: Check leave application
 				leave_result = check_and_create_leave_attendance(emp.name, current_date)
 				if leave_result:
 					total_leave += 1
@@ -56,7 +80,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None):
 				if current_date_continue:
 					pass  # leave attendance already created, move on
 				else:
-					# Step 3: Re-run normal attendance logic
+					# Step 4: Re-run normal attendance logic
 					result = rerun_employee_attendance(
 						emp.name, emp.location, current_date,
 						emp.get("no_check_in", 0), emp.get("staff_type"),
@@ -93,14 +117,17 @@ def rerun_attendance_for_period(from_date=None, to_date=None):
 
 	summary = (
 		"Rerun Attendance Completed for {0} to {1}\n"
-		"Cancelled: {2}, Processed: {3}, Leave: {4}, Absent: {5}, Skipped: {6}, Errors: {7}, Total Employees: {8}"
-	).format(from_date, to_date, total_cancelled, total_processed, total_leave, total_absent, total_skipped, total_errors, len(employees))
+		"Cancelled: {2}, Repaired Half Day Leave Applications: {3}, Processed: {4}, "
+		"Leave: {5}, Absent: {6}, Skipped: {7}, Errors: {8}, Total Employees: {9}"
+	).format(from_date, to_date, total_cancelled, total_repaired, total_processed, total_leave, total_absent, total_skipped, total_errors, len(employees))
 	frappe.logger().info(summary)
+	print(summary)
 
 	return {
 		"from_date": str(from_date),
 		"to_date": str(to_date),
 		"cancelled": total_cancelled,
+		"half_day_leave_applications_removed": total_repaired,
 		"processed": total_processed,
 		"leave": total_leave,
 		"absent": total_absent,

@@ -59,10 +59,11 @@ def execute():
 		try:
 			doc = frappe.get_doc("OTPL Leave", name)
 
-			# Short Leave never creates a Leave Application (the employee stays
-			# present for the day). These records are correct as-is — nothing to
-			# repair, and we must not touch their actual attendance.
-			if doc.short_leave:
+			# Short Leave and Half Day Leave never create a Leave Application (the
+			# employee stays present for part of the day). These records are
+			# correct as-is — nothing to repair, and we must not touch their
+			# actual attendance.
+			if doc.short_leave or doc.half_day:
 				skipped += 1
 				continue
 

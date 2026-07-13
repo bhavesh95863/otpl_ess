@@ -37,6 +37,9 @@ class OTPLLeave(Document):
 				self.total_no_of_approved_days = 1
 			self.validate_short_leave_limit()
 		else:
+			if self.half_day:
+				self.validate_half_day()
+
 			# Calculate total number of days
 			if self.from_date and self.to_date:
 				self.total_no_of_days = date_diff(self.to_date, self.from_date) + 1
@@ -187,6 +190,51 @@ class OTPLLeave(Document):
 			if self.short_leave == 1 or self.half_day == 1:
 				frappe.throw("Short Leave or Half Day not allowed")
 
+	def validate_half_day(self):
+		"""Validate a Half Day leave.
+
+		A Half Day leave no longer creates a Leave Application for the half day
+		itself — daily attendance processes that day for real (Half Day status,
+		plus late / early marks against leave-shifted thresholds). For that to
+		work two things must hold:
+
+		1. half_day_period must be known, so attendance can tell which side of
+		   the shift the leave falls on. The mobile app has sent this reliably
+		   since Mar-2026; older records may have it blank, so it is only
+		   enforced on new records and at approval time (a blank one can still
+		   be cancelled).
+		2. The half day must sit at the FIRST or LAST day of the leave. The rest
+		   of the range still becomes a Leave Application, and carving the half
+		   day out of an edge always leaves one contiguous block — a half day in
+		   the middle would split the range in two.
+
+		The date range is never rewritten here: a Half Day may legitimately be
+		one end of a multi-day leave (e.g. half day Fri + full day Sat).
+		"""
+		if self.status == "Cancelled":
+			return
+
+		if not self.half_day_date:
+			self.half_day_date = self.from_date
+
+		if self.from_date and self.to_date:
+			half_day_date = getdate(self.half_day_date)
+			if half_day_date not in (getdate(self.from_date), getdate(self.to_date)):
+				frappe.throw(
+					"The Half Day must be the first or the last day of the leave "
+					"({0} to {1}), but it is set to {2}.".format(
+						self.from_date, self.to_date, self.half_day_date
+					),
+					title="Invalid Half Day Date"
+				)
+
+		if not self.half_day_period and (self.is_new() or self.status == "Approved"):
+			frappe.throw(
+				"Please select the Half Day Period (First Half or Second Half). "
+				"Attendance needs it to know when the employee is due in or out.",
+				title="Half Day Period Required"
+			)
+
 	def validate_short_leave_limit(self):
 		"""Validate that employee has not exceeded 2 short leaves in the month"""
 		if self.status == "Cancelled":
@@ -271,9 +319,81 @@ class OTPLLeave(Document):
 				# overwrite the actual Present attendance). Short Leave is tracked
 				# on the OTPL Leave only — daily attendance adjusts its thresholds
 				# (get_approved_short_leave_period) and payroll counts it directly.
+				#
+				# A Half Day is handled the same way, but only for the half day
+				# ITSELF: _create_regular_leave_applications carves half_day_date
+				# out of the range, so any remaining full-leave days still get a
+				# Leave Application. A single-day Half Day therefore creates none.
 				if self.short_leave:
 					return
 				self._create_regular_leave_applications()
+
+	def _uses_checkin_based_attendance(self):
+		"""True when this employee's attendance is computed from check-in / check-out
+		against ESS Location rules (daily_attendance.determine_status).
+
+		Only those employees can have a Half Day measured by punch times, so they
+		are the only ones for whom the half day is carved out of the Leave
+		Application. Workers, Field staff, Noida Drivers and no-check-in employees
+		are processed by other paths (run_worker_attendance,
+		_process_field_attendance, run_driver_attendance, auto-Present) that know
+		nothing about half-day timing — for them the Leave Application is what
+		produces the Half Day attendance, so it must keep being created.
+		"""
+		row = frappe.db.get_value(
+			"Employee", self.employee, ["staff_type", "location", "no_check_in"]
+		)
+		if not row:
+			return False
+
+		staff_type, location, no_check_in = row
+
+		if no_check_in:
+			return False
+		if staff_type in ("Worker", "Field"):
+			return False
+		if staff_type == "Driver" and location == "Noida":
+			return False
+		return True
+
+	def _leave_application_range(self, from_date, to_date):
+		"""Narrow an approved range to the days that still need a Leave Application.
+
+		For check-in-based employees the half day itself never gets one: it is
+		tracked on the OTPL Leave and processed as real attendance (Half Day
+		status + late / early marks), so it is carved out of the range here.
+		validate_half_day() guarantees the half day is the first or last day of
+		the leave, so removing it always leaves one contiguous block.
+
+		Returns (None, None) when nothing but the half day remains — i.e. the
+		ordinary single-day Half Day, which creates no Leave Application at all.
+		"""
+		if not (self.half_day and self.half_day_date):
+			return from_date, to_date
+
+		# Employees whose attendance is not punch-based keep the old behaviour:
+		# the Leave Application covers the half day and generates its attendance.
+		if not self._uses_checkin_based_attendance():
+			return from_date, to_date
+
+		half_day_date = getdate(self.half_day_date)
+		start, end = getdate(from_date), getdate(to_date)
+
+		# Half day outside the approved range: the approver trimmed it away, so
+		# the whole approved range is ordinary full-day leave.
+		if not (start <= half_day_date <= end):
+			return from_date, to_date
+
+		if start == end:
+			return None, None
+		if half_day_date == start:
+			return add_days(from_date, 1), to_date
+		if half_day_date == end:
+			return from_date, add_days(to_date, -1)
+
+		# Mid-range half day is blocked by validate_half_day(); if a legacy
+		# record slips through, keep the old behaviour rather than lose days.
+		return from_date, to_date
 
 	def _create_regular_leave_applications(self):
 		from_date = self.approved_from_date
@@ -281,6 +401,11 @@ class OTPLLeave(Document):
 
 		if not (from_date and to_date):
 			frappe.throw("Approved From Date and Approved To Date are required")
+
+		from_date, to_date = self._leave_application_range(from_date, to_date)
+		if not (from_date and to_date):
+			# Nothing left but the half day — no Leave Application to create.
+			return
 
 		calendar_days = date_diff(to_date, from_date) + 1
 		casual_leave = "Casual Leave"
@@ -452,6 +577,12 @@ def validate_leave_application_cancel(doc, method):
 	Prevent direct cancellation of Leave Applications created from OTPL Leave.
 	Users must change OTPL Leave status to Cancelled instead.
 	"""
+	# Deliberate detach by a maintenance script (e.g. the half-day Leave
+	# Application cleanup), which removes the Leave Application while the OTPL
+	# Leave itself stays Approved.
+	if doc.flags.get("ignore_otpl_leave_link"):
+		return
+
 	# Check if this Leave Application was created from OTPL Leave
 	if doc.description and "Auto-created from OTPL Leave:" in doc.description:
 		# Extract OTPL Leave name from description
