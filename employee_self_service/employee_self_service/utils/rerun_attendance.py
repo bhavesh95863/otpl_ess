@@ -30,8 +30,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	"""
 	from_date = getdate(from_date or "2026-06-01")
 	to_date = getdate(to_date or "2026-06-30")
-	location = "Haridwar"
-	filters = {"status": "Active"}
+	filters = {"status": "Active","name":"EMP/00491"}
 	if location:
 		filters["location"] = location
 
@@ -43,6 +42,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 
 	from employee_self_service.employee_self_service.utils.daily_attendance import (
 		remove_obsolete_half_day_leave_application,
+		repair_half_day_leave_pair,
 	)
 
 	total_processed = 0
@@ -52,6 +52,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	total_leave = 0
 	total_cancelled = 0
 	total_repaired = 0
+	total_merged = 0
 
 	current_date = from_date
 	while current_date <= to_date:
@@ -61,13 +62,21 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 				cancelled = cancel_and_delete_existing_attendance(emp.name, current_date)
 				total_cancelled += cancelled
 
-				# Step 2: Retire the Leave Application of a Half Day OTPL Leave that
-				# no longer warrants one. MUST happen before the leave check below —
-				# otherwise that check finds the stale application, marks the day from
-				# it, and step 4 (which applies the half-day timing rules) never runs.
-				total_repaired += remove_obsolete_half_day_leave_application(
-					emp.name, current_date
-				)
+				# Step 2: Repair the day's leave records. MUST happen before the leave
+				# check below — otherwise that check finds a stale Leave Application,
+				# marks the day from it, and step 4 (which applies the half-day timing
+				# rules) never runs.
+				#   2a. Two approved half days on this date = a whole day away: merge
+				#       them into ONE full-day leave with a single full-day Leave
+				#       Application, so the day becomes "On Leave" at step 3.
+				#   2b. Otherwise retire the obsolete Leave Application of a lone half
+				#       day, so step 4 processes the day for real.
+				if repair_half_day_leave_pair(emp.name, current_date):
+					total_merged += 1
+				else:
+					total_repaired += remove_obsolete_half_day_leave_application(
+						emp.name, current_date
+					)
 
 				# Step 3: Check leave application
 				leave_result = check_and_create_leave_attendance(emp.name, current_date)
@@ -117,9 +126,10 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 
 	summary = (
 		"Rerun Attendance Completed for {0} to {1}\n"
-		"Cancelled: {2}, Repaired Half Day Leave Applications: {3}, Processed: {4}, "
-		"Leave: {5}, Absent: {6}, Skipped: {7}, Errors: {8}, Total Employees: {9}"
-	).format(from_date, to_date, total_cancelled, total_repaired, total_processed, total_leave, total_absent, total_skipped, total_errors, len(employees))
+		"Cancelled: {2}, Half Day Leave Applications retired: {3}, "
+		"Half Day pairs merged into full-day leave: {4}, Processed: {5}, "
+		"Leave: {6}, Absent: {7}, Skipped: {8}, Errors: {9}, Total Employees: {10}"
+	).format(from_date, to_date, total_cancelled, total_repaired, total_merged, total_processed, total_leave, total_absent, total_skipped, total_errors, len(employees))
 	frappe.logger().info(summary)
 	print(summary)
 
@@ -128,6 +138,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 		"to_date": str(to_date),
 		"cancelled": total_cancelled,
 		"half_day_leave_applications_removed": total_repaired,
+		"half_day_pairs_merged": total_merged,
 		"processed": total_processed,
 		"leave": total_leave,
 		"absent": total_absent,

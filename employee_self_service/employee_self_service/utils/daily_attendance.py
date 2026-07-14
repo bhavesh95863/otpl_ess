@@ -110,11 +110,15 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		# Attendance already created for this day, skip
 		return "Skipped"
 
-	# Self-repair: a Half Day OTPL Leave approved before the Leave Application was
-	# dropped still carries one, and it would make this day Skipped below — so the
-	# half-day timing rules would never run. Retire it first, then process the day
-	# for real. No-op for every other leave.
-	remove_obsolete_half_day_leave_application(employee, date)
+	# Self-repair, in order. Both are no-ops for an ordinary leave.
+	#   1. Two approved half days on this date = a whole day away. Merge them into
+	#      one full-day leave with a single full-day Leave Application, so the day
+	#      below is skipped and marked "On Leave" rather than Half Day.
+	#   2. Otherwise, a lone Half Day approved before the Leave Application was
+	#      dropped still carries one, and it would make this day Skipped — so the
+	#      half-day timing rules would never run. Retire it and process for real.
+	if not repair_half_day_leave_pair(employee, date):
+		remove_obsolete_half_day_leave_application(employee, date)
 
 	# Check if leave application exists for this day
 	existing_leave = frappe.db.exists(
@@ -692,6 +696,18 @@ def remove_obsolete_half_day_leave_application(employee, date):
 	if la_from and la_to:
 		return 0
 
+	removed = _detach_leave_applications(doc)
+	return removed
+
+
+def _detach_leave_applications(doc):
+	"""Cancel + delete every Leave Application of an OTPL Leave, and clear its
+	reference field. Returns how many were removed.
+
+	The in-memory doc is cleared too, not just the row: a later
+	_create_regular_leave_applications() on the same object would otherwise append
+	to a stale reference list and resurrect the name of a just-deleted application.
+	"""
 	removed = 0
 	for leave_app_name in _linked_leave_applications(doc):
 		try:
@@ -712,16 +728,75 @@ def remove_obsolete_half_day_leave_application(employee, date):
 			removed += 1
 		except Exception:
 			frappe.log_error(
-				title="Could not remove obsolete Half Day Leave Application: {0}".format(
-					leave_app_name
-				),
+				title="Could not remove Leave Application: {0}".format(leave_app_name),
 				message=frappe.get_traceback()
 			)
 
 	if removed:
+		doc.leave_applications = ""
 		doc.db_set("leave_applications", "", update_modified=False)
 
 	return removed
+
+
+def repair_half_day_leave_pair(employee, date):
+	"""Self-repair: collapse two approved half days on the SAME date into one
+	full-day leave. Returns 1 if a pair was merged, else 0.
+
+	Two approved half days on one date mean the employee was away the whole day.
+	Approving the second half now merges the pair on the spot
+	(OTPLLeave._merge_opposite_half_day). Pairs approved BEFORE that change are
+	still two separate half days, each carrying its own half-day Leave
+	Application, so the day reads as a "Half Day" the employee half-worked when in
+	fact they were away all day.
+
+	Attendance heals it the moment the day is processed or re-processed: both
+	half-day Leave Applications are retired, the pair is merged into a single
+	full-day OTPL Leave, and one full-day Leave Application is created — leaving
+	an ordinary full-day leave ("On Leave" attendance, one day of CL). No patch,
+	no migration.
+
+	Whether a pair may be merged is decided by OTPLLeave._find_opposite_half_day()
+	— the same method the approval flow uses — so repair and go-forward can never
+	disagree. In particular a half day that is one end of a LONGER leave is never
+	merged, because collapsing it would destroy that leave's full-leave days.
+	"""
+	rows = frappe.get_all(
+		"OTPL Leave",
+		filters={
+			"employee": employee,
+			"half_day": 1,
+			"status": "Approved",
+			"half_day_date": date
+		},
+		fields=["name"],
+		order_by="creation asc"
+	)
+	if len(rows) < 2:
+		return 0
+
+	# The earliest-filed half day survives and becomes the full-day leave.
+	survivor = frappe.get_doc("OTPL Leave", rows[0].name)
+	other = survivor._find_opposite_half_day()
+	if not other:
+		return 0
+
+	try:
+		# Retire BOTH half-day Leave Applications first — otherwise the day would
+		# carry them alongside the new full-day one and be counted twice.
+		_detach_leave_applications(survivor)
+		_detach_leave_applications(frappe.get_doc("OTPL Leave", other))
+
+		survivor._merge_opposite_half_day()
+		survivor._create_regular_leave_applications()
+	except Exception:
+		frappe.log_error(
+			title="Could not merge half day pair: {0} on {1}".format(employee, date),
+			message=frappe.get_traceback()
+		)
+		return 0
+
+	return 1
 
 
 def _linked_leave_applications(doc):

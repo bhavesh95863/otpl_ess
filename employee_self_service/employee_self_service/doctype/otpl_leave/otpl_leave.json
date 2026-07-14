@@ -34,6 +34,7 @@
   "external_manager",
   "section_break_23",
   "leave_applications",
+  "merged_into",
   "whatsapp_to_approver",
   "whatsapp_to_applicant"
  ],
@@ -187,6 +188,15 @@
    "fieldname": "leave_applications",
    "fieldtype": "Small Text",
    "label": "Leave Applications",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.merged_into",
+   "description": "This half day was combined with the other half day on the same date into a single full-day leave.",
+   "fieldname": "merged_into",
+   "fieldtype": "Link",
+   "label": "Merged Into",
+   "options": "OTPL Leave",
    "read_only": 1
   },
   {

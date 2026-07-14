@@ -25,6 +25,10 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import cint, cstr, flt, getdate, get_last_day
 
+from employee_self_service.employee_self_service.utils.daily_attendance import (
+	normalize_half_day_period,
+)
+
 
 # Constants from the salary spec
 ESIC_GROSS_LIMIT = 21000.0
@@ -498,10 +502,12 @@ def _fetch_lookahead_presentish(emp_ids, to_date):
 	for r in rows:
 		out[r.employee].add(getdate(r.attendance_date))
 
-	# Approved half-day leaves in the window
+	# Approved half-day leaves in the window: the employee worked the other half,
+	# so the day is "present-ish". UNLESS both halves were approved — then they
+	# were away all day, which is a full leave and NOT present-ish.
 	lrows = frappe.db.sql(
 		"""
-		SELECT employee, half_day_date
+		SELECT employee, half_day_date, half_day_period
 		FROM `tabOTPL Leave`
 		WHERE employee IN %(emp_ids)s
 		  AND status = 'Approved'
@@ -511,9 +517,20 @@ def _fetch_lookahead_presentish(emp_ids, to_date):
 		{"emp_ids": tuple(emp_ids), "start": window_start, "end": window_end},
 		as_dict=True,
 	)
+
+	half_periods = defaultdict(lambda: defaultdict(set))
 	for r in lrows:
 		if r.half_day_date:
-			out[r.employee].add(getdate(r.half_day_date))
+			hd = getdate(r.half_day_date)
+			out[r.employee].add(hd)
+			period = normalize_half_day_period(r.half_day_period)
+			if period:
+				half_periods[r.employee][hd].add(period)
+
+	for employee, by_date in half_periods.items():
+		for d, periods in by_date.items():
+			if len(periods) >= 2:
+				out[employee].discard(d)
 
 	return out
 
@@ -538,7 +555,7 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 	rows = frappe.db.sql(
 		"""
 		SELECT employee, approved_from_date, approved_to_date,
-		       COALESCE(half_day, 0) AS half_day, half_day_date,
+		       COALESCE(half_day, 0) AS half_day, half_day_date, half_day_period,
 		       COALESCE(short_leave, 0) AS short_leave
 		FROM `tabOTPL Leave`
 		WHERE employee IN %(emp_ids)s
@@ -547,11 +564,25 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 		  AND approved_to_date IS NOT NULL
 		  AND approved_from_date <= %(to_date)s
 		  AND approved_to_date   >= %(from_date)s
-		  AND leave_applications IS NOT NULL
+		  AND (
+		        -- A Half Day / Short Leave deliberately creates NO Leave
+		        -- Application (it is tracked on the OTPL Leave and deducted
+		        -- here), so requiring one would silently drop every such record
+		        -- and Col K would stop deducting for them entirely.
+		        COALESCE(half_day, 0) = 1
+		        OR COALESCE(short_leave, 0) = 1
+		        -- A full-day leave with no Leave Application never materialised
+		        -- (creation failed); it is not counted, as before.
+		        OR leave_applications IS NOT NULL
+		      )
 		""",
 		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
 		as_dict=True,
 	)
+
+	# employee -> date -> set of normalised half-day periods approved on it.
+	# Two OPPOSITE halves on one date mean the employee was away the whole day.
+	half_periods = defaultdict(lambda: defaultdict(set))
 
 	for r in rows:
 		bucket = out[r.employee]
@@ -568,6 +599,9 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 			hd = getdate(r.half_day_date) if r.half_day_date else None
 			if hd and from_date <= hd <= to_date:
 				bucket["half_leave_dates"].add(hd)
+				period = normalize_half_day_period(r.half_day_period)
+				if period:
+					half_periods[r.employee][hd].add(period)
 			# A half-day leave application can still cover a multi-day range;
 			# treat all OTHER dates of the range as full-day leaves. If
 			# half_day_date is missing, the whole range collapses to a single
@@ -588,6 +622,21 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 		while d <= end:
 			bucket["full_leave_dates"].add(d)
 			d += timedelta(days=1)
+
+	# First Half + Second Half approved on the same date = a whole day away. It is
+	# a FULL leave day (1 day of CL/AL, added back via adj_cl/adj_al), not a half
+	# day (0.5 in Col K) — the half_leave_dates set would otherwise collapse the
+	# two records into one date and only ever deduct half of it.
+	#
+	# Approving the second half now merges the pair into a single full-day OTPL
+	# Leave (OTPLLeave._merge_opposite_half_day), so this only fires for pairs
+	# approved BEFORE that change — which it corrects with no data migration.
+	for employee, by_date in half_periods.items():
+		for d, periods in by_date.items():
+			if len(periods) >= 2:
+				out[employee]["half_leave_dates"].discard(d)
+				out[employee]["full_leave_dates"].add(d)
+
 	return out
 
 
@@ -909,6 +958,16 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# Approved leaves (per observation #7 separated) ----------------------------
 	full_leave_dates = leaves.get("full_leave_dates", set())
 	half_leave_dates = leaves.get("half_leave_dates", set())
+
+	# A full-day approved leave is added back through adj_cl / adj_al, so it must
+	# NOT also be counted as a worked day. Normally it cannot be — a full-day leave
+	# produces "On Leave" attendance, which is in neither set — so this is a no-op.
+	# It matters for a date the employee was fully away on two half-day leaves but
+	# whose Attendance still reads "Half Day" (pairs approved before they began
+	# merging into one full-day leave). Without this the day would be counted twice:
+	# once in days_worked and again in adj_cl.
+	present_dates = present_dates - full_leave_dates
+	half_day_dates = half_day_dates - full_leave_dates
 	short_leave_count = leaves.get("short_leave_count", 0)
 	approved_leaves_count = len(full_leave_dates)  # full-day only
 
