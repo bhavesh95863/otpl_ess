@@ -739,28 +739,56 @@ def _detach_leave_applications(doc):
 	return removed
 
 
+def half_day_merge_supported():
+	"""True when the half-day pair merge is safe to attempt.
+
+	The merge writes `merged_into` on the half day it retires. That field arrives
+	with a doctype change, so on a site where `bench migrate` has not run the
+	column does not exist and the write fails — AFTER the old Leave Applications
+	have been deleted. Every caller checks this BEFORE taking any destructive
+	action, so a un-migrated site simply leaves the pair alone rather than
+	half-merging it.
+	"""
+	return frappe.db.has_column("OTPL Leave", "merged_into")
+
+
 def repair_half_day_leave_pair(employee, date):
 	"""Self-repair: collapse two approved half days on the SAME date into one
 	full-day leave. Returns 1 if a pair was merged, else 0.
 
 	Two approved half days on one date mean the employee was away the whole day.
-	Approving the second half now merges the pair on the spot
-	(OTPLLeave._merge_opposite_half_day). Pairs approved BEFORE that change are
-	still two separate half days, each carrying its own half-day Leave
-	Application, so the day reads as a "Half Day" the employee half-worked when in
-	fact they were away all day.
+	Approving the second half now merges the pair on the spot (merge_half_day_pair).
+	Pairs approved BEFORE that change are still two separate half days, each
+	carrying its own half-day Leave Application, so the day reads as a "Half Day"
+	the employee half-worked when in fact they were away all day.
 
 	Attendance heals it the moment the day is processed or re-processed: both
-	half-day Leave Applications are retired, the pair is merged into a single
-	full-day OTPL Leave, and one full-day Leave Application is created — leaving
-	an ordinary full-day leave ("On Leave" attendance, one day of CL). No patch,
-	no migration.
+	half-day Leave Applications are retired, a NEW full-day OTPL Leave is created
+	from the pair (both halves are then Cancelled with `merged_into` pointing at
+	it), and that leave gets a real approved Leave Application — leaving an
+	ordinary full-day leave ("On Leave" attendance, one day of CL). No patch, no
+	migration.
 
 	Whether a pair may be merged is decided by OTPLLeave._find_opposite_half_day()
 	— the same method the approval flow uses — so repair and go-forward can never
 	disagree. In particular a half day that is one end of a LONGER leave is never
 	merged, because collapsing it would destroy that leave's full-leave days.
 	"""
+	# HARD GATE. Nothing below this line may run on a site where the merge cannot
+	# complete: the destructive step (deleting the two half-day Leave Applications)
+	# happens before the full-day one is created, so a failure part-way would leave
+	# the day with no Leave Application at all.
+	if not half_day_merge_supported():
+		frappe.log_error(
+			title="Half day pair merge skipped: schema not migrated",
+			message=(
+				"OTPL Leave has no `merged_into` column, so two half days on {0} for "
+				"{1} were left as-is rather than risk a half-finished merge. "
+				"Run `bench migrate` to enable it."
+			).format(date, employee)
+		)
+		return 0
+
 	rows = frappe.get_all(
 		"OTPL Leave",
 		filters={
@@ -775,27 +803,50 @@ def repair_half_day_leave_pair(employee, date):
 	if len(rows) < 2:
 		return 0
 
-	# The earliest-filed half day survives and becomes the full-day leave.
-	survivor = frappe.get_doc("OTPL Leave", rows[0].name)
-	other = survivor._find_opposite_half_day()
+	first = frappe.get_doc("OTPL Leave", rows[0].name)
+	other = first._find_opposite_half_day()
 	if not other:
 		return 0
+	second = frappe.get_doc("OTPL Leave", other)
 
+	# The merge deletes the two half-day Leave Applications and creates one full-day
+	# one. Those steps cannot be reordered (the old ones must go before the new one,
+	# or ERPNext rejects it as overlapping leave), so they are made ATOMIC instead:
+	# any failure rewinds to the savepoint and the day is left exactly as found.
+	from employee_self_service.employee_self_service.doctype.otpl_leave.otpl_leave import (
+		merge_half_day_pair,
+	)
+
+	frappe.db.sql("SAVEPOINT half_day_pair_merge")
 	try:
-		# Retire BOTH half-day Leave Applications first — otherwise the day would
-		# carry them alongside the new full-day one and be counted twice.
-		_detach_leave_applications(survivor)
-		_detach_leave_applications(frappe.get_doc("OTPL Leave", other))
+		# Legacy half days may still carry a Leave Application of their own; they
+		# must go before the full-day one is created.
+		_detach_leave_applications(first)
+		_detach_leave_applications(second)
 
-		survivor._merge_opposite_half_day()
-		survivor._create_regular_leave_applications()
+		merged = merge_half_day_pair(first, second)
+		if not merged:
+			raise RuntimeError("merge did not produce a full-day leave")
+
+		# The whole point of the merge is the full-day Leave Application. If it was
+		# not created, the day would silently end up with NO leave at all (and be
+		# marked Absent — which is exactly how this went wrong before). Treat that
+		# as a failure and rewind rather than persist it.
+		if not frappe.db.get_value("OTPL Leave", merged, "leave_applications"):
+			raise RuntimeError(
+				"merged leave {0} has no Leave Application".format(merged)
+			)
 	except Exception:
+		frappe.db.sql("ROLLBACK TO SAVEPOINT half_day_pair_merge")
 		frappe.log_error(
-			title="Could not merge half day pair: {0} on {1}".format(employee, date),
+			title="Could not merge half day pair: {0} on {1} (rolled back)".format(
+				employee, date
+			),
 			message=frappe.get_traceback()
 		)
 		return 0
 
+	frappe.db.sql("RELEASE SAVEPOINT half_day_pair_merge")
 	return 1
 
 

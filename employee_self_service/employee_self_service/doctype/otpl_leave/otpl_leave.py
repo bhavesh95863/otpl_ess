@@ -340,12 +340,13 @@ class OTPLLeave(Document):
 					return
 
 				# Two approved half days on the SAME date add up to a whole day off.
-				# Collapse the pair into this single full-day leave before any Leave
-				# Application is built, so the day becomes ordinary full-day leave:
-				# one Leave Application consuming a full day of CL, "On Leave"
-				# attendance, and no half-day timing rules.
+				# They are replaced by ONE new full-day OTPL Leave (which does get a
+				# real approved Leave Application) and both halves are cancelled. This
+				# leave is one of them, so once merged there is nothing more to do here.
 				if self.half_day:
-					self._merge_opposite_half_day()
+					other = self._find_opposite_half_day()
+					if other and merge_half_day_pair(self, frappe.get_doc("OTPL Leave", other)):
+						return
 
 				self._create_regular_leave_applications()
 
@@ -394,65 +395,6 @@ class OTPLLeave(Document):
 			return row.name
 
 		return None
-
-	def _merge_opposite_half_day(self):
-		"""Collapse a First Half + Second Half pair on the same date into THIS leave.
-
-		The employee filed two half days; together they are a full day away. This
-		record becomes that full-day leave (half_day cleared, range pinned to the
-		single date) and the other is Cancelled with `merged_into` pointing here.
-
-		Doing it here — before _create_regular_leave_applications runs — means the
-		full-day Leave Application falls out of the normal path with no special
-		casing, and every downstream consumer (attendance -> "On Leave", payroll ->
-		one full approved leave day consuming CL) sees an ordinary full-day leave.
-
-		Writes go through db_set so validate() is not re-entered mid-approval.
-		"""
-		other = self._find_opposite_half_day()
-		if not other:
-			return
-
-		merged_date = self.half_day_date
-
-		# This record becomes the full-day leave for that date.
-		self.half_day = 0
-		self.half_day_period = None
-		self.half_day_date = None
-		self.from_date = merged_date
-		self.to_date = merged_date
-		self.approved_from_date = merged_date
-		self.approved_to_date = merged_date
-		self.total_no_of_days = 1
-		self.total_no_of_approved_days = 1
-
-		for field in (
-			"half_day", "half_day_period", "half_day_date",
-			"from_date", "to_date", "approved_from_date", "approved_to_date",
-			"total_no_of_days", "total_no_of_approved_days",
-		):
-			self.db_set(field, self.get(field), update_modified=False)
-
-		# Retire the other half. It never had a Leave Application of its own (a
-		# half day does not create one), so there is nothing to cancel behind it.
-		other_doc = frappe.get_doc("OTPL Leave", other)
-		other_doc.flags.ignore_permissions = True
-		other_doc.db_set("merged_into", self.name, update_modified=False)
-		other_doc.db_set("status", "Cancelled", update_modified=False)
-
-		note = "Merged into {0}: this half day and {1} fall on the same date ({2}), " \
-			"so together they were approved as one full-day leave.".format(
-				self.name, other, merged_date
-			)
-		self.add_comment("Comment", text=note)
-		other_doc.add_comment("Comment", text=note)
-
-		frappe.msgprint(
-			"Two half-day leaves on {0} were combined into a single full-day leave. "
-			"{1} has been cancelled and merged into {2}.".format(merged_date, other, self.name),
-			title="Half Days Combined",
-			indicator="orange",
-		)
 
 	def _uses_checkin_based_attendance(self):
 		"""True when this employee's attendance is computed from check-in / check-out
@@ -696,6 +638,108 @@ def bulk_cancel_otpl_leaves(names):
 		doc.save(ignore_permissions=True)
 
 	frappe.db.commit()
+
+
+def merge_half_day_pair(first, second):
+	"""Replace two approved half-day leaves on the same date with ONE full-day leave.
+
+	The employee filed two half days (First Half + Second Half) for the same date;
+	together they are a whole day away. Rather than promote one of them, a NEW
+	OTPL Leave is created for that date as an ordinary full-day leave, and BOTH
+	halves are Cancelled with `merged_into` pointing at it. Each of the three
+	records gets a comment naming the other two, so the history is obvious from
+	any of them.
+
+	The difference that matters: a half day deliberately creates NO Leave
+	Application (it is only counted), but a full day is real leave — so the new
+	leave goes through the normal path and DOES get an approved Leave Application
+	consuming a full day of CL/LWP.
+
+	Returns the new OTPL Leave's name, or None if the merge is not possible.
+	Raises on failure — callers run this inside a savepoint.
+	"""
+	from employee_self_service.employee_self_service.utils.daily_attendance import (
+		half_day_merge_supported,
+	)
+
+	# Without `merged_into` the halves cannot be marked as retired, and a
+	# half-finished merge would leave the day with no leave at all. Leave the pair
+	# alone — payroll still counts the date as one full leave day meanwhile.
+	if not half_day_merge_supported():
+		frappe.log_error(
+			title="Half day pair merge skipped: schema not migrated",
+			message=(
+				"OTPL Leave has no `merged_into` column, so the half days on {0} for "
+				"{1} were left unmerged. Run `bench migrate`."
+			).format(first.half_day_date, first.employee)
+		)
+		return None
+
+	merged_date = getdate(first.half_day_date)
+
+	merged = frappe.new_doc("OTPL Leave")
+	merged.employee = first.employee
+	merged.employee_name = first.get("employee_name")
+	merged.applicant_mobile_no = first.get("applicant_mobile_no")
+	merged.alternate_mobile_no = first.get("alternate_mobile_no")
+	merged.from_date = merged_date
+	merged.to_date = merged_date
+	merged.approved_from_date = merged_date
+	merged.approved_to_date = merged_date
+	merged.half_day = 0
+	merged.short_leave = 0
+	merged.total_no_of_days = 1
+	merged.total_no_of_approved_days = 1
+	merged.status = "Approved"
+	merged.reason = (
+		"Auto-created by merging two approved half-day leaves on {0}: "
+		"{1} ({2}) and {3} ({4}).".format(
+			merged_date,
+			first.name, first.half_day_period or "?",
+			second.name, second.half_day_period or "?",
+		)
+	)
+	merged.approver = first.get("approver")
+	merged.approver_name = first.get("approver_name")
+	merged.approver_mobile_no = first.get("approver_mobile_no")
+
+	# System-generated from two leaves that were ALREADY approved. Re-running
+	# validate() would re-derive the approver chain and re-apply the "from date
+	# cannot be in the past" rule — neither makes sense here, and both can throw
+	# during a nightly attendance run.
+	merged.flags.ignore_validate = True
+	merged.flags.ignore_permissions = True
+	merged.insert(ignore_permissions=True)
+
+	# A full day is real leave, so unlike a half day it DOES get an approved
+	# Leave Application (Casual Leave / LWP, exactly as any full-day leave).
+	merged._create_regular_leave_applications()
+
+	for half in (first, second):
+		half.flags.ignore_permissions = True
+		half.db_set("merged_into", merged.name, update_modified=False)
+		half.db_set("status", "Cancelled", update_modified=False)
+		# Keep the in-memory doc consistent: `first` may be mid-approval in its own
+		# on_update, and later hooks read self.status.
+		half.status = "Cancelled"
+		half.merged_into = merged.name
+
+	note = (
+		"Half day {0} ({1}) and half day {2} ({3}) both fall on {4}, so they were "
+		"merged into the single full-day leave {5}. Both half days are cancelled; "
+		"{5} carries the Leave Application for the day."
+	).format(
+		first.name, first.half_day_period or "?",
+		second.name, second.half_day_period or "?",
+		merged_date, merged.name,
+	)
+	for doc in (merged, first, second):
+		try:
+			doc.add_comment("Comment", text=note)
+		except Exception:
+			pass   # a comment is nice to have; never fail the merge over it
+
+	return merged.name
 
 
 def validate_leave_application_cancel(doc, method):

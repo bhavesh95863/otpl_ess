@@ -628,9 +628,9 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 	# day (0.5 in Col K) — the half_leave_dates set would otherwise collapse the
 	# two records into one date and only ever deduct half of it.
 	#
-	# Approving the second half now merges the pair into a single full-day OTPL
-	# Leave (OTPLLeave._merge_opposite_half_day), so this only fires for pairs
-	# approved BEFORE that change — which it corrects with no data migration.
+	# Approving the second half now replaces the pair with a single full-day OTPL
+	# Leave (otpl_leave.merge_half_day_pair), so this only fires for pairs approved
+	# BEFORE that change — which it corrects with no data migration.
 	for employee, by_date in half_periods.items():
 		for d, periods in by_date.items():
 			if len(periods) >= 2:
