@@ -110,13 +110,16 @@ def process_employee_attendance(employee, location, date, no_check_in=0, staff_t
 		# Attendance already created for this day, skip
 		return "Skipped"
 
-	# Self-repair, in order. Both are no-ops for an ordinary leave.
+	# Self-repair, in order. All are no-ops for an ordinary leave.
+	#   0. A Half Day supersedes a Short Leave on the same date + period: cancel
+	#      the redundant Short Leave (with a comment on both docs).
 	#   1. Two approved half days on this date = a whole day away. Merge them into
 	#      one full-day leave with a single full-day Leave Application, so the day
 	#      below is skipped and marked "On Leave" rather than Half Day.
 	#   2. Otherwise, a lone Half Day approved before the Leave Application was
 	#      dropped still carries one, and it would make this day Skipped — so the
 	#      half-day timing rules would never run. Retire it and process for real.
+	repair_short_leave_half_day_conflict(employee, date)
 	if not repair_half_day_leave_pair(employee, date):
 		remove_obsolete_half_day_leave_application(employee, date)
 
@@ -848,6 +851,41 @@ def repair_half_day_leave_pair(employee, date):
 
 	frappe.db.sql("RELEASE SAVEPOINT half_day_pair_merge")
 	return 1
+
+
+def repair_short_leave_half_day_conflict(employee, date):
+	"""Self-repair: a Half Day supersedes a Short Leave on the same date + period.
+
+	Short Leave and Half Day both claim a side of the shift via `half_day_period`.
+	A Half Day means the employee is away for that whole half, so a Short Leave on
+	the same period is redundant. Going forward this is handled the moment the Half
+	Day is saved (OTPLLeave.override_short_leave_with_half_day); this heals records
+	that already coexist — the Short Leave is Cancelled and a comment is added to
+	both documents. Returns the number of Short Leaves overridden.
+
+	Only same-period conflicts are touched: a Half Day First Half + Short Leave
+	Second Half do not overlap and are left alone.
+	"""
+	overridden = 0
+	half_days = frappe.get_all(
+		"OTPL Leave",
+		filters={
+			"employee": employee,
+			"half_day": 1,
+			"status": ["in", ["Pending", "Approved"]],
+			"half_day_date": getdate(date),
+		},
+		fields=["name"],
+	)
+	for hd in half_days:
+		doc = frappe.get_doc("OTPL Leave", hd.name)
+		if doc.override_short_leave_with_half_day():
+			overridden += 1
+
+	if overridden:
+		frappe.db.commit()
+
+	return overridden
 
 
 def _linked_leave_applications(doc):

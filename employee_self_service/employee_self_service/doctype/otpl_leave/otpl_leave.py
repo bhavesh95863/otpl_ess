@@ -36,6 +36,7 @@ class OTPLLeave(Document):
 				self.approved_to_date = self.approved_from_date
 				self.total_no_of_approved_days = 1
 			self.validate_short_leave_limit()
+			self.validate_no_half_day_conflict()
 		else:
 			if self.half_day:
 				self.validate_half_day()
@@ -247,6 +248,20 @@ class OTPLLeave(Document):
 				title="Half Day Period Required"
 			)
 
+		# A given half of a day can only be taken once. If another live Half Day
+		# already claims the same date + same period, this one is a duplicate of
+		# that half — reject it. (First Half + Second Half is fine and instead
+		# merges into a full-day leave; that is the OPPOSITE period, not this.)
+		duplicate = self._same_period_conflict(self.half_day_date, want_short_leave=False)
+		if duplicate:
+			frappe.throw(
+				"A Half Day leave ({0}) is already applied for {1} ({2}). The same half "
+				"of the day cannot be applied twice.".format(
+					duplicate, getdate(self.half_day_date), self.half_day_period
+				),
+				title="Half Day Already Applied"
+			)
+
 	def validate_short_leave_limit(self):
 		"""Validate that employee has not exceeded 2 short leaves in the month"""
 		if self.status == "Cancelled":
@@ -277,6 +292,106 @@ class OTPLLeave(Document):
 				title="Short Leave Limit Exceeded"
 			)
 
+	def _same_period_conflict(self, date, want_short_leave):
+		"""The employee's other live OTPL Leave covering the SAME date and the SAME
+		half-day period as this one.
+
+		Short Leave and Half Day both store their side of the shift in
+		`half_day_period`, so an overlap means the two claim the same half of the
+		same day. Different halves (e.g. Half Day First Half + Short Leave Second
+		Half) do not overlap and are left alone.
+
+		``want_short_leave`` picks which kind to look for: a Short Leave (when the
+		caller is a Half Day) or a Half Day (when the caller is a Short Leave).
+		Periods are normalised before comparison because the mobile app stores the
+		field already translated for some locales.
+		"""
+		from employee_self_service.employee_self_service.utils.daily_attendance import (
+			normalize_half_day_period,
+		)
+
+		period = normalize_half_day_period(self.half_day_period)
+		if not (period and date and self.employee):
+			return None
+
+		if want_short_leave:
+			# Short Leave is single-day and keeps its date in from_date.
+			filters = {"short_leave": 1, "from_date": getdate(date)}
+		else:
+			filters = {"half_day": 1, "half_day_date": getdate(date)}
+
+		filters.update({
+			"name": ["!=", self.name or ""],
+			"employee": self.employee,
+			"status": ["in", ["Pending", "Approved"]],
+		})
+
+		for row in frappe.get_all("OTPL Leave", filters=filters,
+		                          fields=["name", "half_day_period"]):
+			if normalize_half_day_period(row.half_day_period) == period:
+				return row.name
+
+		return None
+
+	def validate_no_half_day_conflict(self):
+		"""A Short Leave cannot be taken for a half the employee is already off for.
+
+		If a Half Day already claims the same period of the same date, the employee
+		is away for that entire half — a Short Leave (a shorter absence inside the
+		working half) is meaningless there, so it is rejected. The reverse order is
+		allowed and handled by ``override_short_leave_with_half_day``: applying the
+		Half Day supersedes the Short Leave.
+		"""
+		if self.status == "Cancelled":
+			return
+
+		other = self._same_period_conflict(self.from_date, want_short_leave=False)
+		if other:
+			frappe.throw(
+				"A Half Day leave ({0}) is already applied for {1} ({2}), so the employee "
+				"is already off for that half of the day. A Short Leave cannot be applied "
+				"for the same period. Cancel {0} first if the Short Leave is what you want."
+				.format(other, getdate(self.from_date), self.half_day_period),
+				title="Half Day Already Applied"
+			)
+
+	def override_short_leave_with_half_day(self):
+		"""A Half Day supersedes a Short Leave already applied for the same period.
+
+		The Short Leave was a partial absence inside that half; the Half Day means
+		the employee is away for all of it, so the Short Leave is redundant and is
+		Cancelled (which also frees up its slot in the 2-per-month quota).
+
+		Written with db_set: validate() only allows an Approved leave to move to
+		Cancelled, and a Pending Short Leave must be retired here too.
+
+		Returns the cancelled Short Leave's name, or None if there was nothing to
+		override (so callers such as the attendance re-run can count / report it).
+		"""
+		if self.status == "Cancelled" or not self.half_day:
+			return None
+
+		other = self._same_period_conflict(self.half_day_date, want_short_leave=True)
+		if not other:
+			return None
+
+		short = frappe.get_doc("OTPL Leave", other)
+		short.flags.ignore_permissions = True
+		short.db_set("status", "Cancelled", update_modified=False)
+		short.status = "Cancelled"
+
+		note = (
+			"Short Leave {0} was cancelled: Half Day leave {1} was applied for the same "
+			"period ({2}) on {3}, so the employee is away for that whole half."
+		).format(other, self.name, self.half_day_period, getdate(self.half_day_date))
+		for doc in (short, self):
+			try:
+				doc.add_comment("Comment", text=note)
+			except Exception:
+				pass   # a comment is nice to have; never fail the override over it
+
+		return other
+
 	def _is_on_leave(self, employee):
 		"""Check whether the given employee has an approved Leave Application
 		covering this OTPL Leave's from_date."""
@@ -299,6 +414,11 @@ class OTPLLeave(Document):
 		"""
 		Trigger sync to remote ERP when leave is saved with external manager
 		"""
+		# A Half Day supersedes a Short Leave already applied for the same period.
+		# Retire it before the day's Leave Applications are built, so nothing is
+		# derived from a Short Leave that is about to be cancelled.
+		self.override_short_leave_with_half_day()
+
 		# Create Leave Applications FIRST, before anything commits.
 		# This must run before push_leave_to_remote_erp(), which calls
 		# frappe.db.commit() internally: if creation were done after that commit

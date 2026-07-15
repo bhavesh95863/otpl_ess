@@ -30,7 +30,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	"""
 	from_date = getdate(from_date or "2026-06-01")
 	to_date = getdate(to_date or "2026-06-30")
-	filters = {"status": "Active","name":"EMP/00491"}
+	filters = {"status": "Active","location":"Haridwar"}
 	if location:
 		filters["location"] = location
 
@@ -43,6 +43,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	from employee_self_service.employee_self_service.utils.daily_attendance import (
 		remove_obsolete_half_day_leave_application,
 		repair_half_day_leave_pair,
+		repair_short_leave_half_day_conflict,
 	)
 
 	total_processed = 0
@@ -53,6 +54,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	total_cancelled = 0
 	total_repaired = 0
 	total_merged = 0
+	total_short_leave_overridden = 0
 
 	current_date = from_date
 	while current_date <= to_date:
@@ -66,11 +68,16 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 				# check below — otherwise that check finds a stale Leave Application,
 				# marks the day from it, and step 4 (which applies the half-day timing
 				# rules) never runs.
-				#   2a. Two approved half days on this date = a whole day away: merge
+				#   2a. A Half Day supersedes a Short Leave on the same date + period:
+				#       cancel the redundant Short Leave (comment added to both docs).
+				#   2b. Two approved half days on this date = a whole day away: merge
 				#       them into ONE full-day leave with a single full-day Leave
 				#       Application, so the day becomes "On Leave" at step 3.
-				#   2b. Otherwise retire the obsolete Leave Application of a lone half
+				#   2c. Otherwise retire the obsolete Leave Application of a lone half
 				#       day, so step 4 processes the day for real.
+				total_short_leave_overridden += repair_short_leave_half_day_conflict(
+					emp.name, current_date
+				)
 				if repair_half_day_leave_pair(emp.name, current_date):
 					total_merged += 1
 				else:
@@ -127,9 +134,12 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	summary = (
 		"Rerun Attendance Completed for {0} to {1}\n"
 		"Cancelled: {2}, Half Day Leave Applications retired: {3}, "
-		"Half Day pairs merged into full-day leave: {4}, Processed: {5}, "
-		"Leave: {6}, Absent: {7}, Skipped: {8}, Errors: {9}, Total Employees: {10}"
-	).format(from_date, to_date, total_cancelled, total_repaired, total_merged, total_processed, total_leave, total_absent, total_skipped, total_errors, len(employees))
+		"Half Day pairs merged into full-day leave: {4}, "
+		"Short Leaves overridden by Half Day: {5}, Processed: {6}, "
+		"Leave: {7}, Absent: {8}, Skipped: {9}, Errors: {10}, Total Employees: {11}"
+	).format(from_date, to_date, total_cancelled, total_repaired, total_merged,
+	         total_short_leave_overridden, total_processed, total_leave, total_absent,
+	         total_skipped, total_errors, len(employees))
 	frappe.logger().info(summary)
 	print(summary)
 
@@ -139,6 +149,7 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 		"cancelled": total_cancelled,
 		"half_day_leave_applications_removed": total_repaired,
 		"half_day_pairs_merged": total_merged,
+		"short_leaves_overridden": total_short_leave_overridden,
 		"processed": total_processed,
 		"leave": total_leave,
 		"absent": total_absent,
