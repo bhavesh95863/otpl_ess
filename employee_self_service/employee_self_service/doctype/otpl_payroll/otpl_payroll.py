@@ -1002,6 +1002,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# in-period days after it to evaluate.
 	qualified_holidays = 0          # OR rule, used for Col H
 	qualified_holidays_strict = 0   # AND rule, used for Col G
+	qualifying_holiday_dates = set()   # OR-rule holiday dates, used to net Col L
 	for h in holiday_dates:
 		# If the employee was on approved (full-day) leave on the holiday itself,
 		# the holiday is neither "earned" nor worked: it must NOT generate AL
@@ -1015,6 +1016,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		after = any((h + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
 		if before or after:
 			qualified_holidays += 1
+			qualifying_holiday_dates.add(h)
 		# If the day immediately before/after the holiday lies outside the
 		# payroll period, that side is unobservable -> treat it as satisfied
 		# so a boundary holiday is not unfairly disqualified.
@@ -1075,9 +1077,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 
 	late_deduction = approved_half_days / 2.0 + late_mark_deduction + extra_late_half_days
 
-	# ---- Col L: Absent (observation #4) --------------------------------------
-	# Just count Attendance.status='Absent' (excluding false attendance).
-	absent_count = len(absent_dates)
+	# ---- Col L: Absent w/o info (observation #4) -----------------------------
+	# Count of Attendance.status='Absent' (excluding false attendance), MINUS any
+	# qualifying holiday (OR rule, Col H) that falls on an Absent-marked day. A
+	# qualifying holiday is a paid/earned holiday (counted in Days Worked); if a
+	# holiday date was also marked Absent, that Absent must not be double-counted
+	# against the employee here.
+	absent_on_qualifying_holiday = len(absent_dates & qualifying_holiday_dates)
+	absent_count = len(absent_dates) - absent_on_qualifying_holiday
 
 	# ---- Col M / N: Adjusted from CL / AL ------------------------------------
 	# CL comes from the standard "Casual Leave" allocation (passed in by the
@@ -1291,6 +1298,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"short_leaves_count": short_leave_count,
 		"late_deduction_days": flt(late_deduction, 2),
 		"absent_no_info_days": absent_count,
+		"absent_on_qualifying_holiday": absent_on_qualifying_holiday,
 		"adjusted_from_cl": flt(adj_cl, 2),
 		"adjusted_from_al": flt(adj_al, 2),
 		"balance_cl": flt(balance_cl, 2),
@@ -1656,7 +1664,8 @@ def get_calculation_trace(doc, employee):
 				         lmv=_f(row.get("late_mark_deduction", 0)),
 				         xh=_f(row.get("extra_late_half_days", 0)))),
 				("(L) Absent w/o info",
-				 "{0}  —  count of Attendance.status='Absent' (excl. false)".format(row["absent_no_info_days"])),
+				 "{0}  —  Absent (excl. false) − qualifying holidays on absent days ({1})".format(
+				     row["absent_no_info_days"], row.get("absent_on_qualifying_holiday", 0))),
 				("(M) Adjusted from CL",
 				 "{0}  —  approved={1}, AL Bal={2}, CL Bal={3}; CL covers up to 2 of (approved−AL Bal). Absent (Col L) is NOT netted here."
 				 .format(_f(row["adjusted_from_cl"]), approved_full,
