@@ -5,7 +5,7 @@
 from __future__ import unicode_literals
 import frappe
 from frappe.model.document import Document
-from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day, nowdate
+from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day, nowdate, flt
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
 from employee_self_service.employee_self_service.utils.leave_escalation import (
 	resolve_external_manager_pull,
@@ -595,56 +595,108 @@ class OTPLLeave(Document):
 			# Nothing left but the half day — no Leave Application to create.
 			return
 
-		calendar_days = date_diff(to_date, from_date) + 1
+		from_date, to_date = getdate(from_date), getdate(to_date)
 		casual_leave = "Casual Leave"
 		lwp = "Leave Without Pay"
 
-		cl_balance = get_leave_balance_on(
+		# Casual Leave is capped at MONTHLY_CL_CAP DAYS per calendar month (company
+		# rule); every further full-day-leave day in that month is Leave Without Pay.
+		# The annual CL allocation still bounds the running total. Both limits are
+		# applied DAY BY DAY, so a leave that spans two months is capped in each
+		# month independently. Days are grouped into contiguous Leave Applications,
+		# broken at CL/LWP changes AND at month boundaries so every application stays
+		# within one month (keeps the monthly accounting exact).
+		MONTHLY_CL_CAP = 2.0
+		annual_cl_remaining = flt(get_leave_balance_on(
 			employee=self.employee,
 			leave_type=casual_leave,
 			date=from_date,
 			consider_all_leaves_in_the_allocation_period=True
-		) or 0
+		) or 0)
 
-		# Use integer calendar days for the CL/LWP split to keep date arithmetic safe
-		cl_calendar_days = min(int(cl_balance), calendar_days)
-		lwp_calendar_days = calendar_days - cl_calendar_days
+		month_cl_used = {}
 
-		if cl_calendar_days > 0:
-			cl_to_date = add_days(from_date, cl_calendar_days - 1)
-			cl_leave_days = cl_calendar_days
-			cl_half_day = 0
-			cl_half_day_date = None
-			if self.half_day and self._is_half_day_in_range(from_date, cl_to_date):
-				cl_leave_days -= 0.5
-				cl_half_day = 1
-				cl_half_day_date = self.half_day_date
+		def _day_weight(d):
+			# The half day counts as 0.5 of a leave day; every other day is 1.
+			if self.half_day and self.half_day_date and getdate(self.half_day_date) == d:
+				return 0.5
+			return 1.0
+
+		segments = []   # [leave_type, seg_start, seg_end]
+		d = from_date
+		while d <= to_date:
+			mkey = (d.year, d.month)
+			if mkey not in month_cl_used:
+				month_cl_used[mkey] = self._casual_leave_days_in_month(d)
+
+			weight = _day_weight(d)
+			if (MONTHLY_CL_CAP - month_cl_used[mkey]) >= weight and annual_cl_remaining >= weight:
+				dtype = casual_leave
+				month_cl_used[mkey] += weight
+				annual_cl_remaining -= weight
+			else:
+				dtype = lwp
+
+			prev = segments[-1] if segments else None
+			if (prev and prev[0] == dtype and prev[2] == add_days(d, -1)
+					and (prev[2].year, prev[2].month) == mkey):
+				prev[2] = d
+			else:
+				segments.append([dtype, d, d])
+			d = add_days(d, 1)
+
+		for leave_type, seg_start, seg_end in segments:
+			total_days = date_diff(seg_end, seg_start) + 1
+			seg_half_day = 0
+			seg_half_day_date = None
+			if self.half_day and self.half_day_date and seg_start <= getdate(self.half_day_date) <= seg_end:
+				total_days -= 0.5
+				seg_half_day = 1
+				seg_half_day_date = self.half_day_date
 			self.make_leave_application(
-				leave_type=casual_leave,
-				from_date=from_date,
-				to_date=cl_to_date,
-				total_days=cl_leave_days,
-				half_day=cl_half_day,
-				half_day_date=cl_half_day_date
+				leave_type=leave_type,
+				from_date=seg_start,
+				to_date=seg_end,
+				total_days=total_days,
+				half_day=seg_half_day,
+				half_day_date=seg_half_day_date
 			)
 
-		if lwp_calendar_days > 0:
-			lwp_from_date = add_days(from_date, cl_calendar_days)
-			lwp_leave_days = lwp_calendar_days
-			lwp_half_day = 0
-			lwp_half_day_date = None
-			if self.half_day and self._is_half_day_in_range(lwp_from_date, to_date):
-				lwp_leave_days -= 0.5
-				lwp_half_day = 1
-				lwp_half_day_date = self.half_day_date
-			self.make_leave_application(
-				leave_type=lwp,
-				from_date=lwp_from_date,
-				to_date=to_date,
-				total_days=lwp_leave_days,
-				half_day=lwp_half_day,
-				half_day_date=lwp_half_day_date
-			)
+	def _casual_leave_days_in_month(self, date):
+		"""Casual Leave DAYS this employee has already taken in ``date``'s calendar
+		month, from approved Leave Applications OTHER than this OTPL Leave's own.
+
+		A cross-month application is counted only for the days that fall inside the
+		month, and a half-day application contributes 0.5. Used to enforce the
+		2-CL-days-per-month cap in ``_create_regular_leave_applications``.
+		"""
+		month_start = get_first_day(getdate(date))
+		month_end = get_last_day(getdate(date))
+		own_stamp = "Auto-created from OTPL Leave: {0}".format(self.name)
+
+		rows = frappe.get_all(
+			"Leave Application",
+			filters={
+				"employee": self.employee,
+				"leave_type": "Casual Leave",
+				"docstatus": 1,
+				"from_date": ["<=", month_end],
+				"to_date": [">=", month_start],
+			},
+			fields=["from_date", "to_date", "half_day", "half_day_date", "description"],
+		)
+
+		total = 0.0
+		for r in rows:
+			if r.description == own_stamp:
+				continue   # this leave's own applications (reprocessing) don't count
+			s = max(getdate(r.from_date), month_start)
+			e = min(getdate(r.to_date), month_end)
+			days = date_diff(e, s) + 1
+			if r.half_day and r.half_day_date and s <= getdate(r.half_day_date) <= e:
+				days -= 0.5
+			total += days
+		return total
 
 	def _is_half_day_in_range(self, start_date, end_date):
 		from frappe.utils import getdate
