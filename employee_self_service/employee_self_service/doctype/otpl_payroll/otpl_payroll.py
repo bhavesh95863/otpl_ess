@@ -1150,14 +1150,18 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	salary_amount = per_day * payable_days
 
 	# ---- Col S: OT/HRA/Petrol (observations #17, #18) ------------------------
-	# OT hours = [working_hours + (holiday-list dates in period * 8)] - (days_worked * 8)
+	# OT hours = [working_hours + (QUALIFYING holidays * 8)] - (days_worked * 8)
 	# OT amount = OT hours * (gross / (days_in_month * 8))
+	# Only QUALIFYING holidays (OR rule, the same ones counted in Col H Days
+	# Worked) contribute their 8 hours — not every holiday-list date. A holiday
+	# the employee did not earn (no present-ish neighbour) is not part of days
+	# worked, so it must not inflate OT hours either.
 	ot_hra_petrol = 0.0
 	ot_hours = 0.0
 	if ot_eligible and gross and days_in_month:
 		ot_hours = (
 			working_hours
-			+ (len(holiday_dates) * STD_HOURS_PER_DAY)
+			+ (qualified_holidays * STD_HOURS_PER_DAY)
 			- (days_worked * SALARY_HOURS_PER_DAY)
 		)
 		hourly_rate = gross / (days_in_month * SALARY_HOURS_PER_DAY)
@@ -1693,8 +1697,8 @@ def get_calculation_trace(doc, employee):
 				         days_in_month, _f(row["payable_days"]))),
 				("(S) OT/HRA/Petrol",
 				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
-				                      "OT hours = [working_hours({0:.2f}) + holiday-dates({1}) × 8] − (H({2}) × 8) ; amount = OT × Gross/({3}×8)"
-				                      .format(working_hours, len(holiday_dates), _f(row["days_worked"]), days_in_month)
+				                      "OT hours = [working_hours({0:.2f}) + qualifying-holidays({1}) × 8] − (H({2}) × 8) ; amount = OT × Gross/({3}×8)"
+				                      .format(working_hours, row["qualified_holidays"], _f(row["days_worked"]), days_in_month)
 				                      if ot_eligible else "N/A (only Worker@Noida/Haridwar or Driver)")),
 				("(T) Incentive",
 				 "{0}  —  {1}".format(_f(row["incentive"]),
