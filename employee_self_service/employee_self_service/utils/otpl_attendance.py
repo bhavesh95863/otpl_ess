@@ -43,6 +43,53 @@ def after_employee_checkin_insert(doc, method):
         doc.manager = frappe.db.get_value("Employee",doc.reports_to,"user_id")
     doc.save(ignore_permissions=True)
 
+    # Travelling-CL gate: an enabled staff type may only punch OUT OF LOCATION
+    # (approval_required) when a travelling request has been applied.
+    enforce_travelling_cl_gate(doc)
+
+
+def enforce_travelling_cl_gate(doc):
+    """Block an out-of-location check-in / check-out by a travelling-enabled staff
+    type when no Travelling CL has been applied for that date.
+
+    Rules:
+      * Only applies to OUT-OF-LOCATION punches (approval_required set above).
+      * Only to staff types listed in the punch location's ESS Location
+        "Travelling Enabled Staff Types".
+      * Site Workers are exempt — they already have travelling activated.
+      * "Applied" means a Pending or Approved Travelling CL covers the punch date;
+        the manager still approves the request (and then the punch) separately.
+
+    If the gate fails the just-inserted checkin is deleted and an error is raised,
+    so the app cannot record an out-of-location punch without a travelling request.
+    """
+    from frappe.utils import getdate
+    from employee_self_service.employee_self_service.doctype.travelling_cl.travelling_cl import (
+        has_active_travelling_cl,
+        is_travel_enabled_staff_type,
+    )
+
+    if not doc.get("approval_required"):
+        return
+
+    # Site Workers already have travelling activated — never gated.
+    if doc.get("employee_location") == "Site" and doc.get("staff_type") == "Worker":
+        return
+
+    if not is_travel_enabled_staff_type(doc.get("employee_location"), doc.get("staff_type")):
+        return
+
+    punch_date = getdate(doc.time)
+    if has_active_travelling_cl(doc.employee, punch_date):
+        return
+
+    frappe.db.delete("Employee Checkin", {"name": doc.name})
+    frappe.db.commit()
+    frappe.throw(
+        _("Out-of-location check-in / check-out is not allowed without an applied Travelling CL. "
+          "Please raise a Travelling CL for {0} first.").format(punch_date)
+    )
+
 
 def validate_site_checkin_radius(doc):
     """Mark approval required when Site employee checkin is outside ESS Location radius."""
@@ -255,12 +302,16 @@ def get_location_history(employee):
 
 
 @frappe.whitelist()
-def approve_checkin(checkin_name, log_time=None):
-    """Approve an employee checkin"""
+def approve_checkin(checkin_name, log_time=None, ignore_permission=False):
+    """Approve an employee checkin.
+
+    ``ignore_permission`` skips the manager/Administrator check — used when the
+    approval is driven by an already-authorised action (e.g. a Travelling CL being
+    approved cascades approval to its linked out-of-location check-ins)."""
     doc = frappe.get_doc("Employee Checkin", checkin_name)
 
     # Check if user has permission to approve
-    if not (
+    if not ignore_permission and not (
         frappe.session.user == "Administrator" or frappe.session.user == doc.manager
     ):
         frappe.throw("You don't have permission to approve this check-in")

@@ -909,6 +909,10 @@ def send_to_remote_erp(erp_url, api_key, api_secret, doctype_name, data, sync_ac
 			api_method = "receive_travel_request_pull"
 		elif doctype_name == "Travel Status Update":
 			api_method = "receive_travel_status_update"
+		elif doctype_name == "Travelling CL Pull":
+			api_method = "receive_travelling_cl_pull"
+		elif doctype_name == "Travelling CL Status Update":
+			api_method = "receive_travelling_cl_status_update"
 		else:
 			return False
 		
@@ -2217,4 +2221,221 @@ def sync_employee_leave_status_to_remote():
 		frappe.log_error(
 			message=frappe.get_traceback(),
 			title="Error in sync_employee_leave_status_to_remote cron"
+		)
+
+
+# ==================== TRAVELLING CL SYNC ====================
+# Mirrors the Travel Request sync chain (push -> queue -> receive pull ->
+# status back) for the Travelling CL doctype.
+
+
+def push_travelling_cl_to_remote_erp(tcl_doc):
+	"""Push Travelling CL to all enabled remote ERPs when the approver is external.
+	Called from Travelling CL on_update."""
+	try:
+		if not tcl_doc.has_external_report_to or not tcl_doc.external_report_to:
+			return
+		if hasattr(tcl_doc, 'flags') and tcl_doc.flags.get('ignore_sync'):
+			return
+
+		sync_settings_list = frappe.get_all("ERP Sync Settings", filters={"enabled": 1}, fields=["name"])
+		if not sync_settings_list:
+			return
+
+		tcl_data = {
+			"travelling_cl_id": tcl_doc.name,
+			"employee": tcl_doc.employee,
+			"employee_name": tcl_doc.employee_name,
+			"department": tcl_doc.department,
+			"from_date": str(tcl_doc.from_date) if tcl_doc.from_date else None,
+			"to_date": str(tcl_doc.to_date) if tcl_doc.to_date else None,
+			"number_of_days": tcl_doc.number_of_days,
+			"purpose": tcl_doc.purpose,
+			"additional_notes": tcl_doc.additional_notes,
+			"status": tcl_doc.status,
+			"report_to": frappe.db.get_value("Employee Pull", tcl_doc.external_report_to, "employee"),
+			"has_external_report_to": tcl_doc.has_external_report_to,
+			"external_report_to": tcl_doc.external_report_to,
+			"remarks": tcl_doc.remarks,
+		}
+
+		for settings in sync_settings_list:
+			queue_doc = frappe.get_doc({
+				"doctype": "ERP Sync Queue",
+				"erp_sync_settings": settings.name,
+				"doctype_name": "Travelling CL",
+				"document_name": tcl_doc.name,
+				"sync_action": "Create/Update",
+				"sync_data": json.dumps(tcl_data),
+				"status": "Pending",
+				"retry_count": 0,
+			})
+			queue_doc.insert(ignore_permissions=True)
+			frappe.enqueue(
+				"employee_self_service.employee_self_service.utils.erp_sync.process_travelling_cl_sync_queue",
+				queue="default", timeout=300, queue_name=queue_doc.name, is_async=True, now=False,
+			)
+
+		frappe.db.commit()
+
+	except Exception:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error queueing Travelling CL sync for {0}".format(tcl_doc.name),
+		)
+
+
+def process_travelling_cl_sync_queue(queue_name):
+	"""Process a queued Travelling CL sync from ERP Sync Queue."""
+	try:
+		queue_doc = frappe.get_doc("ERP Sync Queue", queue_name)
+		queue_doc.status = "Processing"
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		sync_settings = frappe.get_doc("ERP Sync Settings", queue_doc.erp_sync_settings)
+		if not sync_settings.enabled:
+			queue_doc.status = "Failed"
+			queue_doc.error_log = "ERP Sync Settings is disabled"
+			queue_doc.save(ignore_permissions=True)
+			frappe.db.commit()
+			return
+
+		sync_data = json.loads(queue_doc.sync_data)
+		success = send_to_remote_erp(
+			sync_settings.erp_url,
+			sync_settings.get_password("api_key"),
+			sync_settings.get_password("api_secret"),
+			"Travelling CL Pull",
+			sync_data,
+			queue_doc.sync_action,
+		)
+
+		if success:
+			queue_doc.status = "Completed"
+			queue_doc.error_log = ""
+		else:
+			raise Exception("Failed to sync Travelling CL to remote ERP")
+
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+
+	except Exception as e:
+		handle_sync_error(queue_name, str(e))
+
+
+@frappe.whitelist()
+def receive_travelling_cl_pull(data, source_site=None):
+	"""Receive Travelling CL Pull data from a remote ERP (external approver side)."""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		tcl_id = data.get("travelling_cl_id")
+		values = {
+			"employee": data.get("employee"),
+			"employee_name": data.get("employee_name"),
+			"department": data.get("department"),
+			"from_date": data.get("from_date"),
+			"to_date": data.get("to_date"),
+			"number_of_days": data.get("number_of_days"),
+			"purpose": data.get("purpose"),
+			"additional_notes": data.get("additional_notes"),
+			"status": data.get("status"),
+			"report_to": data.get("report_to"),
+			"has_external_report_to": data.get("has_external_report_to", 0),
+			"external_report_to": data.get("external_report_to"),
+			"remarks": data.get("remarks"),
+			"source_erp": source_site,
+		}
+
+		# Upsert by the travelling_cl_id FIELD (the source Travelling CL's id), NOT
+		# by the Pull's own name — the Pull has its own TCLP##### series so its id
+		# never collides with a local Travelling CL id.
+		existing = frappe.db.get_value("Travelling CL Pull", {"travelling_cl_id": tcl_id}, "name")
+		if existing:
+			doc = frappe.get_doc("Travelling CL Pull", existing)
+			doc.update(values)
+			doc.flags.ignore_sync = True
+			doc.save(ignore_permissions=True)
+		else:
+			doc = frappe.get_doc(dict(doctype="Travelling CL Pull", travelling_cl_id=tcl_id, **values))
+			doc.flags.ignore_sync = True
+			doc.insert(ignore_permissions=True)
+
+		frappe.db.commit()
+		return {"success": True, "message": "Travelling CL Pull synced successfully"}
+
+	except Exception as e:
+		frappe.log_error(message=frappe.get_traceback(), title="Error receiving Travelling CL Pull data")
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def receive_travelling_cl_status_update(data, source_site=None):
+	"""Receive a status update for a Travelling CL back on its SOURCE ERP, updating
+	the original Travelling CL when the external manager approves / rejects it."""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		tcl_id = data.get("travelling_cl_id")
+		status = data.get("status")
+		if not tcl_id or not status:
+			return {"success": False, "message": "travelling_cl_id and status are required"}
+		if not frappe.db.exists("Travelling CL", tcl_id):
+			return {"success": False, "message": "Travelling CL {0} not found".format(tcl_id)}
+
+		doc = frappe.get_doc("Travelling CL", tcl_id)
+		doc.status = status
+		if data.get("remarks"):
+			doc.remarks = data.get("remarks")
+		doc.flags.ignore_sync = True
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		return {"success": True, "message": "Travelling CL status updated"}
+
+	except Exception as e:
+		frappe.log_error(message=frappe.get_traceback(), title="Error receiving Travelling CL status update")
+		return {"success": False, "message": str(e)}
+
+
+def push_travelling_cl_status_to_source(tcl_pull_doc):
+	"""Push a Travelling CL Pull status change back to the source ERP's Travelling
+	CL. Called from Travelling CL Pull on_update (external manager decision)."""
+	try:
+		if not tcl_pull_doc.source_erp:
+			return
+		if hasattr(tcl_pull_doc, 'flags') and tcl_pull_doc.flags.get('ignore_sync'):
+			return
+
+		sync_settings = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1, "erp_url": tcl_pull_doc.source_erp},
+			fields=["name"], limit=1,
+		)
+		if not sync_settings:
+			return
+
+		status_data = {
+			"travelling_cl_id": tcl_pull_doc.travelling_cl_id,
+			"status": tcl_pull_doc.status,
+			"remarks": tcl_pull_doc.remarks,
+		}
+		settings = frappe.get_doc("ERP Sync Settings", sync_settings[0].name)
+		send_to_remote_erp(
+			settings.erp_url,
+			settings.get_password("api_key"),
+			settings.get_password("api_secret"),
+			"Travelling CL Status Update",
+			status_data,
+			"Status Update",
+		)
+
+	except Exception:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error syncing Travelling CL status to source for {0}".format(
+				tcl_pull_doc.travelling_cl_id
+			),
 		)

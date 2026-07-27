@@ -182,7 +182,8 @@ scheduler_events = {
         "0 0 * * *": [
             "employee_self_service.employee_self_service.utils.auto_checkout.auto_checkout_driver",
             "employee_self_service.employee_self_service.utils.daily_attendance.process_daily_attendance",
-            "employee_self_service.employee_self_service.doctype.travel_request.travel_request.process_travel_requests"
+            "employee_self_service.employee_self_service.doctype.travel_request.travel_request.process_travel_requests",
+            "employee_self_service.employee_self_service.utils.travelling_cl_credit.credit_travelling_cl_holidays"
         ],
         "45 0 * * *": [
             "employee_self_service.employee_self_service.utils.attendance_discrepancy_email.send_attendance_discrepancy_email"

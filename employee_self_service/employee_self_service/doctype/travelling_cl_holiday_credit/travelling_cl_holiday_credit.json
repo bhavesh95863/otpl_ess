@@ -1,0 +1,41 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "hash",
+ "creation": "2026-07-15 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "holiday_date",
+  "column_break_1",
+  "leaves",
+  "travelling_cl",
+  "leave_ledger_entry"
+ ],
+ "fields": [
+  {"fieldname": "employee", "fieldtype": "Link", "label": "Employee", "options": "Employee", "reqd": 1, "in_standard_filter": 1},
+  {"fieldname": "employee_name", "fieldtype": "Read Only", "label": "Employee Name", "fetch_from": "employee.employee_name"},
+  {"fieldname": "holiday_date", "fieldtype": "Date", "label": "Holiday Date", "reqd": 1, "in_standard_filter": 1},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "leaves", "fieldtype": "Float", "label": "CL Credited", "default": "1"},
+  {"fieldname": "travelling_cl", "fieldtype": "Link", "label": "Travelling CL", "options": "Travelling CL"},
+  {"fieldname": "leave_ledger_entry", "fieldtype": "Link", "label": "Leave Ledger Entry", "options": "Leave Ledger Entry", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-15 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "Travelling CL Holiday Credit",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

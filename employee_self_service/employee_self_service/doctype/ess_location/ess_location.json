@@ -29,6 +29,8 @@
   "treat_late_as_half_day_after",
   "section_break_23",
   "reporting_manager",
+  "travel_out_of_location_section",
+  "travel_out_of_location_staff_types",
   "section_break_25",
   "min_wages",
   "max_wage_pf",
@@ -178,6 +180,18 @@
    "fieldtype": "Link",
    "label": "Reporting Manager",
    "options": "Employee"
+  },
+  {
+   "fieldname": "travel_out_of_location_section",
+   "fieldtype": "Section Break",
+   "label": "Out-of-Location / Travelling"
+  },
+  {
+   "fieldname": "travel_out_of_location_staff_types",
+   "fieldtype": "Table",
+   "label": "Travelling Enabled Staff Types",
+   "options": "ESS Location Travel Staff Type",
+   "description": "Staff types for whom the travelling request (and out-of-location check-in / check-out) is enabled at this location. Options are pulled from the Employee 'Staff Type' field. Site Workers are always enabled and need not be listed."
   },
   {
    "fieldname": "section_break_25",

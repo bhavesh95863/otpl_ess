@@ -505,6 +505,52 @@ def get_employee_checkin_approval_list(start=0, page_length=10, log_type=None):
         return exception_handler(e)
 
 
+def _travelling_cl_gate_for_checkin(checkin_doc):
+    """Decide whether an out-of-location check-in may be approved yet, given its
+    Travelling CL (Phase 4 sequencing).
+
+    Returns {"blocked": False} when approval may proceed (not a travelling-gated
+    punch, Site Worker, or the Travelling CL is already Approved). Returns
+    blocked=True with the Travelling CL name + status when the manager must
+    approve the Travelling CL first (Pending) or it is otherwise unapproved.
+    """
+    from frappe.utils import getdate
+    from employee_self_service.employee_self_service.doctype.travelling_cl.travelling_cl import (
+        is_travel_enabled_staff_type,
+        get_active_travelling_cl,
+        has_approved_travelling_cl,
+    )
+
+    if not checkin_doc.get("approval_required"):
+        return {"blocked": False}
+
+    # Site Workers already have travelling activated — never gated.
+    if checkin_doc.get("employee_location") == "Site" and checkin_doc.get("staff_type") == "Worker":
+        return {"blocked": False}
+
+    if not is_travel_enabled_staff_type(checkin_doc.get("employee_location"), checkin_doc.get("staff_type")):
+        return {"blocked": False}
+
+    date = getdate(checkin_doc.time)
+    if has_approved_travelling_cl(checkin_doc.employee, date):
+        return {"blocked": False}   # travelling request approved -> checkin may be approved
+
+    pending = get_active_travelling_cl(checkin_doc.employee, date)
+    if pending:
+        return {
+            "blocked": True,
+            "travelling_cl": pending,
+            "status": "Pending",
+            "message": "Approve the Travelling CL {0} first, then approve this check-in.".format(pending),
+        }
+    return {
+        "blocked": True,
+        "travelling_cl": None,
+        "status": None,
+        "message": "This out-of-location check-in has no applied Travelling CL and cannot be approved.",
+    }
+
+
 @frappe.whitelist()
 @ess_validate(methods=["POST"])
 def approve_employee_checkin():
@@ -534,6 +580,20 @@ def approve_employee_checkin():
         # Check if already approved
         if checkin_doc.approved == 1:
             return gen_response(500, "Check-in is already approved")
+
+        # Travelling-CL sequencing (Phase 4): for a travelling-enabled staff type,
+        # an out-of-location punch can only be approved AFTER its Travelling CL is
+        # approved. If the covering request is still Pending, refuse and hand the
+        # app the Travelling CL to approve first (it then redirects back here). If
+        # it was Rejected, the punch is already auto-rejected.
+        travel_gate = _travelling_cl_gate_for_checkin(checkin_doc)
+        if travel_gate.get("blocked"):
+            return gen_response(200, travel_gate.get("message"), {
+                "redirect_to": "travelling_cl",
+                "travelling_cl": travel_gate.get("travelling_cl"),
+                "travelling_cl_status": travel_gate.get("status"),
+                "checkin": checkin_name,
+            })
 
         # Set approved field and updated time if provided
         checkin_doc.approved = 1
@@ -1455,8 +1515,28 @@ def pending_approval_counts():
         travel_pull_count = len(travel_pull_list)
         travel_count = travel_count + travel_pull_count
 
+        # Count Travelling CL records (internal approver = this manager)
+        travelling_cl_count = 0
+        if emp_name:
+            travelling_cl_count = frappe.db.count(
+                "Travelling CL",
+                filters={"status": "Pending", "report_to": emp_name}
+            )
+
+        # Count Travelling CL Pull records (external approver side)
+        travelling_cl_pull_list = frappe.get_all(
+            "Travelling CL Pull",
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "=", "Pending"],
+                ["report_to", "=", emp_name],
+            ],
+            fields=["name"]
+        )
+        travelling_cl_count = travelling_cl_count + len(travelling_cl_pull_list)
+
         # Calculate total
-        total_count = leave_count + expense_count + checkin_count + checkout_count + site_expense_pending_count + travel_count
+        total_count = leave_count + expense_count + checkin_count + checkout_count + site_expense_pending_count + travel_count + travelling_cl_count
 
         # Prepare response data
         result = {
@@ -1466,6 +1546,7 @@ def pending_approval_counts():
             "checkout": checkout_count,
             "site_expense_pending": site_expense_pending_count,
             "travel": travel_count,
+            "travelling_cl": travelling_cl_count,
             "total": total_count
         }
 
