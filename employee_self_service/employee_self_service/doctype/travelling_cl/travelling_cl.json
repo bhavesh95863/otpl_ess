@@ -1,8 +1,7 @@
 {
- "actions": [],
  "allow_rename": 1,
  "autoname": "TCL.#####",
- "creation": "2026-07-15 12:00:00.000000",
+ "creation": "2026-07-15 12:00:00",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
@@ -34,45 +33,189 @@
   "remarks"
  ],
  "fields": [
-  {"fieldname": "employee", "fieldtype": "Link", "label": "Employee", "options": "Employee", "reqd": 1, "in_standard_filter": 1},
-  {"fieldname": "employee_name", "fieldtype": "Read Only", "label": "Employee Name", "fetch_from": "employee.employee_name"},
-  {"fieldname": "applicant_mobile_no", "fieldtype": "Data", "label": "Applicant Mobile No"},
-  {"fieldname": "department", "fieldtype": "Link", "label": "Department", "options": "Department", "fetch_from": "employee.department"},
-  {"fieldname": "column_break_4", "fieldtype": "Column Break"},
-  {"fieldname": "from_date", "fieldtype": "Date", "label": "From Date", "reqd": 1},
-  {"fieldname": "to_date", "fieldtype": "Date", "label": "To Date", "reqd": 1},
-  {"fieldname": "number_of_days", "fieldtype": "Int", "label": "Number of Days", "read_only": 1},
-  {"fieldname": "section_break_8", "fieldtype": "Section Break"},
-  {"fieldname": "purpose", "fieldtype": "Link", "label": "Purpose", "options": "Travelling Purpose", "description": "Optional. Managed under the Travelling Purpose master."},
-  {"fieldname": "additional_notes", "fieldtype": "Small Text", "label": "Additional Notes"},
-  {"fieldname": "column_break_reason", "fieldtype": "Column Break"},
-  {"fieldname": "attachment", "fieldtype": "Attach", "label": "Attachment"},
-  {"fieldname": "section_break_status", "fieldtype": "Section Break"},
-  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Pending\nApproved\nRejected\nCancelled", "default": "Pending", "in_standard_filter": 1},
-  {"fieldname": "column_break_status", "fieldtype": "Column Break"},
-  {"fieldname": "section_break_approver", "fieldtype": "Section Break", "label": "Approver"},
-  {"fieldname": "report_to", "fieldtype": "Link", "label": "Report To", "options": "Employee", "read_only": 1},
-  {"fieldname": "approver_name", "fieldtype": "Data", "label": "Approver Name", "read_only": 1},
-  {"fieldname": "approver_mobile_no", "fieldtype": "Data", "label": "Approver Mobile No", "read_only": 1},
-  {"fieldname": "column_break_approver", "fieldtype": "Column Break"},
-  {"fieldname": "has_external_report_to", "fieldtype": "Check", "label": "Has External Report To", "read_only": 1},
-  {"fieldname": "external_report_to", "fieldtype": "Data", "label": "External Report To", "read_only": 1},
-  {"fieldname": "section_break_remarks", "fieldtype": "Section Break"},
-  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "Remarks"}
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Employee",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Read Only",
+   "in_list_view": 1,
+   "label": "Employee Name"
+  },
+  {
+   "fieldname": "applicant_mobile_no",
+   "fieldtype": "Data",
+   "label": "Applicant Mobile No"
+  },
+  {
+   "fetch_from": "employee.department",
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "label": "Department",
+   "options": "Department"
+  },
+  {
+   "fieldname": "column_break_4",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "label": "From Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "label": "To Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "number_of_days",
+   "fieldtype": "Int",
+   "label": "Number of Days",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_8",
+   "fieldtype": "Section Break"
+  },
+  {
+   "description": "Optional. Managed under the Travelling Purpose master.",
+   "fieldname": "purpose",
+   "fieldtype": "Link",
+   "label": "Purpose",
+   "options": "Travelling Purpose"
+  },
+  {
+   "fieldname": "additional_notes",
+   "fieldtype": "Small Text",
+   "label": "Additional Notes"
+  },
+  {
+   "fieldname": "column_break_reason",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "attachment",
+   "fieldtype": "Attach",
+   "label": "Attachment"
+  },
+  {
+   "fieldname": "section_break_status",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nApproved\nRejected\nCancelled"
+  },
+  {
+   "fieldname": "column_break_status",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_approver",
+   "fieldtype": "Section Break",
+   "label": "Approver"
+  },
+  {
+   "fieldname": "report_to",
+   "fieldtype": "Link",
+   "label": "Report To",
+   "options": "Employee",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approver_name",
+   "fieldtype": "Data",
+   "label": "Approver Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approver_mobile_no",
+   "fieldtype": "Data",
+   "label": "Approver Mobile No",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_approver",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "has_external_report_to",
+   "fieldtype": "Check",
+   "label": "Has External Report To",
+   "read_only": 1
+  },
+  {
+   "fieldname": "external_report_to",
+   "fieldtype": "Data",
+   "label": "External Report To",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_remarks",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
  ],
- "index_web_pages_for_search": 1,
- "links": [],
- "modified": "2026-07-15 12:00:00.000000",
+ "modified": "2026-08-01 20:01:07.183800",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Travelling CL",
  "owner": "Administrator",
  "permissions": [
-  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
-  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "HR Manager", "share": 1, "write": 1},
-  {"create": 1, "email": 1, "print": 1, "read": 1, "report": 1, "role": "Employee", "share": 1, "write": 1}
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Employee",
+   "share": 1,
+   "write": 1
+  }
  ],
  "sort_field": "modified",
- "sort_order": "DESC",
- "states": []
+ "sort_order": "DESC"
 }

@@ -328,11 +328,26 @@ def approve_checkin(checkin_name, log_time=None, ignore_permission=False):
     from employee_self_service.employee_self_service.utils.daily_attendance import (
         process_employee_attendance,
     )
-    from frappe.utils import getdate
+    from frappe.utils import getdate, today
 
     attendance_date = getdate(doc.time)
     employee = doc.employee
     employee_location = frappe.db.get_value("Employee", employee, "location")
+
+    # Only a PAST day is settled enough to mark attendance from. The employee is
+    # still working today, so the check-out — and with it the working hours, the
+    # early-exit mark and any Half Day — has not happened yet; processing now
+    # would freeze the day on the check-in alone. Today's approval is left for
+    # the midnight cron (process_daily_attendance), which runs the day once it is
+    # complete. Same rule as the mobile approval path (otpl_approval.approve_checkin).
+    if attendance_date >= getdate(today()):
+        return {
+            "status": "success",
+            "message": (
+                "Check-in approved successfully. Attendance for today will be "
+                "processed after the day ends."
+            ),
+        }
 
     try:
         # Check if attendance already exists
