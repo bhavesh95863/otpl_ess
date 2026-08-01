@@ -43,16 +43,35 @@ STD_HOURS_PER_DAY = 8.0
 SALARY_HOURS_PER_DAY = 8.0
 
 # --- Driver OT rule (hardcoded per business spec) --------------------------
-# In-station duty ends at 19:30. Each hour of late checkout adds ₹100; a checkout
-# after 23:30 is the max ₹700 (₹500 for the hours + a flat ₹200). Out-of-station
-# (approved Travelling CL) days and worked qualifying holidays are a flat ₹700.
+# In-station duty ends at 19:30 and OT accrues on COMPLETED hours past it: one
+# minute over is not an hour, so the first ₹100 lands at 20:30. A checkout after
+# 23:30 is the max ₹700 (₹500 for the hours + a flat ₹200 late-night addition).
+# Out-of-station (approved Travelling CL) days and worked qualifying holidays
+# are a flat ₹700.
 DRIVER_OT_FLAT = 700.0
 DRIVER_DUTY_END = time(19, 30)
+# Absolute clock time past which the flat ₹700 applies. Anchored to the rule's
+# own wording ("after 11.30 pm"), not to the hour count, because the ₹200 on top
+# is a late-night addition rather than another hour of OT.
+DRIVER_OT_MAX_AFTER = time(23, 30)
 
 
 def _driver_checkout_ot(checkout_dt, att_date):
-	"""In-station Driver OT for a single day's checkout time (hardcoded tiers):
-	<=19:30 -> 0, then +₹100 per hour band up to 23:30 (₹400), after 23:30 -> ₹700.
+	"""In-station Driver OT for a single day's checkout time (hardcoded tiers).
+
+	OT is earned per COMPLETED hour after the 19:30 duty end, so a checkout at
+	19:31 — or 19:30:48 — earns nothing; the first ₹100 needs a full hour:
+
+	    <= 20:30 -> ₹0      (under an hour past duty end)
+	    <= 21:30 -> ₹100    (1 completed hour)
+	    <= 22:30 -> ₹200    (2)
+	    <= 23:30 -> ₹300    (3)
+	    >  23:30 -> ₹700    (flat max: ₹500 for the hours + ₹200 late night)
+
+	The ₹700 stays anchored to "after 23:30", so the ₹400 step the old
+	hour-STARTED banding produced no longer occurs — 23:30 goes straight to the
+	flat max.
+
 	Boundaries are computed as datetimes on ``att_date`` so a checkout after
 	midnight (next-day timestamp) correctly lands in the after-23:30 band."""
 	if not checkout_dt:
@@ -60,20 +79,19 @@ def _driver_checkout_ot(checkout_dt, att_date):
 	base = getdate(att_date)
 	c = get_datetime(checkout_dt)
 
-	def at(h, m):
-		return get_datetime(datetime.combine(base, time(h, m)))
+	def at(t):
+		return get_datetime(datetime.combine(base, t))
 
-	if c <= at(19, 30):
+	# Tested first: a next-day (post-midnight) timestamp is past every boundary.
+	if c > at(DRIVER_OT_MAX_AFTER):
+		return DRIVER_OT_FLAT
+	if c <= at(time(20, 30)):
 		return 0.0
-	if c <= at(20, 30):
+	if c <= at(time(21, 30)):
 		return 100.0
-	if c <= at(21, 30):
+	if c <= at(time(22, 30)):
 		return 200.0
-	if c <= at(22, 30):
-		return 300.0
-	if c <= at(23, 30):
-		return 400.0
-	return DRIVER_OT_FLAT
+	return 300.0
 
 
 # -----------------------------------------------------------------------------
@@ -1801,7 +1819,8 @@ def get_calculation_trace(doc, employee):
 				("(S) OT/HRA/Petrol",
 				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
 				                      ("Driver rule (₹): out-of-station (Travelling CL) days × ₹700 + worked qualifying holidays × ₹700 "
-				                       "+ in-station checkout tiers (>19:30 +₹100/hr, after 23:30 ₹700). "
+				                       "+ in-station checkout tiers (₹100 per COMPLETED hour after 19:30, so ≤20:30 ₹0 / "
+				                       "≤21:30 ₹100 / ≤22:30 ₹200 / ≤23:30 ₹300; after 23:30 flat ₹700). "
 				                       "Travelling CL days in period = {tcl}"
 				                       .format(tcl=len(travelling_cl_map.get(employee, set())))
 				                       if is_driver else
