@@ -913,6 +913,10 @@ def send_to_remote_erp(erp_url, api_key, api_secret, doctype_name, data, sync_ac
 			api_method = "receive_travelling_cl_pull"
 		elif doctype_name == "Travelling CL Status Update":
 			api_method = "receive_travelling_cl_status_update"
+		elif doctype_name == "OTPL Leave Amendment Pull":
+			api_method = "receive_leave_amendment_pull"
+		elif doctype_name == "OTPL Leave Amendment Status Update":
+			api_method = "receive_leave_amendment_status_update"
 		else:
 			return False
 		
@@ -2437,5 +2441,222 @@ def push_travelling_cl_status_to_source(tcl_pull_doc):
 			message=frappe.get_traceback(),
 			title="Error syncing Travelling CL status to source for {0}".format(
 				tcl_pull_doc.travelling_cl_id
+			),
+		)
+
+
+# ==================== OTPL LEAVE AMENDMENT SYNC ====================
+# Mirrors the Travelling CL sync chain (push -> queue -> receive pull ->
+# status back) for the OTPL Leave Amendment doctype.
+
+
+def push_leave_amendment_to_remote_erp(amend_doc):
+	"""Push an OTPL Leave Amendment to all enabled remote ERPs when the approver is
+	external. Called from OTPL Leave Amendment on_update."""
+	try:
+		if not amend_doc.has_external_report_to or not amend_doc.external_report_to:
+			return
+		if hasattr(amend_doc, 'flags') and amend_doc.flags.get('ignore_sync'):
+			return
+
+		sync_settings_list = frappe.get_all("ERP Sync Settings", filters={"enabled": 1}, fields=["name"])
+		if not sync_settings_list:
+			return
+
+		data = {
+			"leave_amendment_id": amend_doc.name,
+			"employee": amend_doc.employee,
+			"employee_name": amend_doc.employee_name,
+			"original_leave": amend_doc.original_leave,
+			"original_from_date": str(amend_doc.original_from_date) if amend_doc.original_from_date else None,
+			"original_to_date": str(amend_doc.original_to_date) if amend_doc.original_to_date else None,
+			"amended_from_date": str(amend_doc.amended_from_date) if amend_doc.amended_from_date else None,
+			"amended_to_date": str(amend_doc.amended_to_date) if amend_doc.amended_to_date else None,
+			"number_of_days": amend_doc.number_of_days,
+			"reason": amend_doc.reason,
+			"status": amend_doc.status,
+			"report_to": frappe.db.get_value("Employee Pull", amend_doc.external_report_to, "employee"),
+			"has_external_report_to": amend_doc.has_external_report_to,
+			"external_report_to": amend_doc.external_report_to,
+			"remarks": amend_doc.remarks,
+		}
+
+		for settings in sync_settings_list:
+			queue_doc = frappe.get_doc({
+				"doctype": "ERP Sync Queue",
+				"erp_sync_settings": settings.name,
+				"doctype_name": "OTPL Leave Amendment",
+				"document_name": amend_doc.name,
+				"sync_action": "Create/Update",
+				"sync_data": json.dumps(data),
+				"status": "Pending",
+				"retry_count": 0,
+			})
+			queue_doc.insert(ignore_permissions=True)
+			frappe.enqueue(
+				"employee_self_service.employee_self_service.utils.erp_sync.process_leave_amendment_sync_queue",
+				queue="default", timeout=300, queue_name=queue_doc.name, is_async=True, now=False,
+			)
+
+		frappe.db.commit()
+
+	except Exception:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error queueing OTPL Leave Amendment sync for {0}".format(amend_doc.name),
+		)
+
+
+def process_leave_amendment_sync_queue(queue_name):
+	"""Process a queued OTPL Leave Amendment sync from ERP Sync Queue."""
+	try:
+		queue_doc = frappe.get_doc("ERP Sync Queue", queue_name)
+		queue_doc.status = "Processing"
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+
+		sync_settings = frappe.get_doc("ERP Sync Settings", queue_doc.erp_sync_settings)
+		if not sync_settings.enabled:
+			queue_doc.status = "Failed"
+			queue_doc.error_log = "ERP Sync Settings is disabled"
+			queue_doc.save(ignore_permissions=True)
+			frappe.db.commit()
+			return
+
+		sync_data = json.loads(queue_doc.sync_data)
+		success = send_to_remote_erp(
+			sync_settings.erp_url,
+			sync_settings.get_password("api_key"),
+			sync_settings.get_password("api_secret"),
+			"OTPL Leave Amendment Pull",
+			sync_data,
+			queue_doc.sync_action,
+		)
+
+		if success:
+			queue_doc.status = "Completed"
+			queue_doc.error_log = ""
+		else:
+			raise Exception("Failed to sync OTPL Leave Amendment to remote ERP")
+
+		queue_doc.save(ignore_permissions=True)
+		frappe.db.commit()
+
+	except Exception as e:
+		handle_sync_error(queue_name, str(e))
+
+
+@frappe.whitelist()
+def receive_leave_amendment_pull(data, source_site=None):
+	"""Receive OTPL Leave Amendment Pull data from a remote ERP (external approver side)."""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		amend_id = data.get("leave_amendment_id")
+		values = {
+			"employee": data.get("employee"),
+			"employee_name": data.get("employee_name"),
+			"original_leave": data.get("original_leave"),
+			"original_from_date": data.get("original_from_date"),
+			"original_to_date": data.get("original_to_date"),
+			"amended_from_date": data.get("amended_from_date"),
+			"amended_to_date": data.get("amended_to_date"),
+			"number_of_days": data.get("number_of_days"),
+			"reason": data.get("reason"),
+			"status": data.get("status"),
+			"report_to": data.get("report_to"),
+			"has_external_report_to": data.get("has_external_report_to", 0),
+			"external_report_to": data.get("external_report_to"),
+			"remarks": data.get("remarks"),
+			"source_erp": source_site,
+		}
+
+		# Upsert by the leave_amendment_id FIELD (source id), NOT the Pull's own name.
+		existing = frappe.db.get_value("OTPL Leave Amendment Pull", {"leave_amendment_id": amend_id}, "name")
+		if existing:
+			doc = frappe.get_doc("OTPL Leave Amendment Pull", existing)
+			doc.update(values)
+			doc.flags.ignore_sync = True
+			doc.save(ignore_permissions=True)
+		else:
+			doc = frappe.get_doc(dict(doctype="OTPL Leave Amendment Pull", leave_amendment_id=amend_id, **values))
+			doc.flags.ignore_sync = True
+			doc.insert(ignore_permissions=True)
+
+		frappe.db.commit()
+		return {"success": True, "message": "OTPL Leave Amendment Pull synced successfully"}
+
+	except Exception as e:
+		frappe.log_error(message=frappe.get_traceback(), title="Error receiving OTPL Leave Amendment Pull data")
+		return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def receive_leave_amendment_status_update(data, source_site=None):
+	"""Receive a status update for an OTPL Leave Amendment back on its SOURCE ERP,
+	updating the original amendment (which runs the cancel-old/create-new cascade)."""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		amend_id = data.get("leave_amendment_id")
+		status = data.get("status")
+		if not amend_id or not status:
+			return {"success": False, "message": "leave_amendment_id and status are required"}
+		if not frappe.db.exists("OTPL Leave Amendment", amend_id):
+			return {"success": False, "message": "OTPL Leave Amendment {0} not found".format(amend_id)}
+
+		doc = frappe.get_doc("OTPL Leave Amendment", amend_id)
+		doc.status = status
+		if data.get("remarks"):
+			doc.remarks = data.get("remarks")
+		doc.flags.ignore_sync = True
+		doc.save(ignore_permissions=True)
+		frappe.db.commit()
+		return {"success": True, "message": "OTPL Leave Amendment status updated"}
+
+	except Exception as e:
+		frappe.log_error(message=frappe.get_traceback(), title="Error receiving OTPL Leave Amendment status update")
+		return {"success": False, "message": str(e)}
+
+
+def push_leave_amendment_status_to_source(amend_pull_doc):
+	"""Push an OTPL Leave Amendment Pull status change back to the source ERP's
+	OTPL Leave Amendment. Called from OTPL Leave Amendment Pull on_update."""
+	try:
+		if not amend_pull_doc.source_erp:
+			return
+		if hasattr(amend_pull_doc, 'flags') and amend_pull_doc.flags.get('ignore_sync'):
+			return
+
+		sync_settings = frappe.get_all(
+			"ERP Sync Settings",
+			filters={"enabled": 1, "erp_url": amend_pull_doc.source_erp},
+			fields=["name"], limit=1,
+		)
+		if not sync_settings:
+			return
+
+		status_data = {
+			"leave_amendment_id": amend_pull_doc.leave_amendment_id,
+			"status": amend_pull_doc.status,
+			"remarks": amend_pull_doc.remarks,
+		}
+		settings = frappe.get_doc("ERP Sync Settings", sync_settings[0].name)
+		send_to_remote_erp(
+			settings.erp_url,
+			settings.get_password("api_key"),
+			settings.get_password("api_secret"),
+			"OTPL Leave Amendment Status Update",
+			status_data,
+			"Status Update",
+		)
+
+	except Exception:
+		frappe.log_error(
+			message=frappe.get_traceback(),
+			title="Error syncing OTPL Leave Amendment status to source for {0}".format(
+				amend_pull_doc.leave_amendment_id
 			),
 		)

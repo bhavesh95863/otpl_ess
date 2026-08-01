@@ -1535,8 +1535,28 @@ def pending_approval_counts():
         )
         travelling_cl_count = travelling_cl_count + len(travelling_cl_pull_list)
 
+        # Count OTPL Leave Amendment records (internal approver = this manager)
+        leave_amendment_count = 0
+        if emp_name:
+            leave_amendment_count = frappe.db.count(
+                "OTPL Leave Amendment",
+                filters={"status": "Pending", "report_to": emp_name}
+            )
+
+        # Count OTPL Leave Amendment Pull records (external approver side)
+        leave_amendment_pull_list = frappe.get_all(
+            "OTPL Leave Amendment Pull",
+            filters=[
+                ["source_erp", "is", "set"],
+                ["status", "=", "Pending"],
+                ["report_to", "=", emp_name],
+            ],
+            fields=["name"]
+        )
+        leave_amendment_count = leave_amendment_count + len(leave_amendment_pull_list)
+
         # Calculate total
-        total_count = leave_count + expense_count + checkin_count + checkout_count + site_expense_pending_count + travel_count + travelling_cl_count
+        total_count = leave_count + expense_count + checkin_count + checkout_count + site_expense_pending_count + travel_count + travelling_cl_count + leave_amendment_count
 
         # Prepare response data
         result = {
@@ -1547,6 +1567,7 @@ def pending_approval_counts():
             "site_expense_pending": site_expense_pending_count,
             "travel": travel_count,
             "travelling_cl": travelling_cl_count,
+            "leave_amendment": leave_amendment_count,
             "total": total_count
         }
 
