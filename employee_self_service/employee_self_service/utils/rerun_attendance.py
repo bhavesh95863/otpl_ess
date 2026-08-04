@@ -406,3 +406,74 @@ def rerun_employee_attendance(employee, location, date, no_check_in=0, staff_typ
 	)
 
 	return "Processed"
+
+
+@frappe.whitelist()
+def rerun_attendance_for_employee_date(employee, date):
+	"""Re-run attendance for a SINGLE employee on a SINGLE date.
+
+	Same per-day sequence as rerun_attendance_for_period (cancel existing →
+	repair leave records → leave attendance or normal attendance), but for one
+	employee/day. Used when an approval that lands AFTER the day was already
+	processed must refresh that day's attendance — e.g. a Short Leave approved
+	the next day, which shifts the late / extra-late thresholds. Because the
+	existing attendance is cancelled first and rebuilt through
+	build_location_rules (which reads the now-approved short leave), the late /
+	extra-late marks are recomputed against the updated timing.
+
+	Returns the result string ("Processed" / "Skipped" / "Absent" / "Leave" /
+	"Error").
+	"""
+	from employee_self_service.employee_self_service.utils.daily_attendance import (
+		remove_obsolete_half_day_leave_application,
+		repair_half_day_leave_pair,
+		repair_short_leave_half_day_conflict,
+	)
+
+	date = getdate(date)
+	emp = frappe.db.get_value(
+		"Employee", employee,
+		["name", "location", "company", "no_check_in", "staff_type", "from_hours", "to_hours",
+			"late_arrival_threshold", "early_exit_threshold", "half_day_arrival_time",
+			"half_day_departure_time"],
+		as_dict=True
+	)
+	if not emp:
+		return "Error"
+
+	try:
+		# Step 1: Cancel and delete existing attendance for the day.
+		cancel_and_delete_existing_attendance(emp.name, date)
+
+		# Step 2: Repair the day's leave records before the leave check below.
+		repair_short_leave_half_day_conflict(emp.name, date)
+		if not repair_half_day_leave_pair(emp.name, date):
+			remove_obsolete_half_day_leave_application(emp.name, date)
+
+		# Step 3: A full-day / half-day Leave Application drives attendance directly.
+		if check_and_create_leave_attendance(emp.name, date):
+			return "Leave"
+
+		# Step 4: Re-run normal attendance logic (short-leave thresholds applied
+		# via build_location_rules).
+		return rerun_employee_attendance(
+			emp.name, emp.location, date,
+			emp.get("no_check_in", 0), emp.get("staff_type"),
+			emp.get("from_hours"), emp.get("to_hours"),
+			emp.get("late_arrival_threshold"), emp.get("early_exit_threshold"),
+			emp.get("half_day_arrival_time"), emp.get("half_day_departure_time")
+		)
+	except Exception:
+		traceback_msg = frappe.get_traceback()
+		frappe.log_error(
+			title="Rerun Attendance Error: {0} on {1}".format(emp.name, date),
+			message=traceback_msg
+		)
+		from employee_self_service.employee_self_service.doctype.attendance_creation_failed_log.attendance_creation_failed_log import log_attendance_creation_failure
+		log_attendance_creation_failure(
+			employee=emp.name,
+			date=date,
+			reason="Rerun attendance error: {0}".format(str(traceback_msg)),
+			error_log=traceback_msg
+		)
+		return "Error"
