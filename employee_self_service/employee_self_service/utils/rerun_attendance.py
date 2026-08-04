@@ -28,8 +28,8 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	   Leave Application) is picked up and the day is marked Half Day with its
 	   late / early marks.
 	"""
-	from_date = getdate(from_date or "2026-06-01")
-	to_date = getdate(to_date or "2026-06-30")
+	from_date = getdate(from_date or "2026-07-01")
+	to_date = getdate(to_date or "2026-07-31")
 	filters = {"status": "Active","location":"Haridwar"}
 	if location:
 		filters["location"] = location

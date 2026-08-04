@@ -14,15 +14,15 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Staff Type",
-   "options": "\nManager\nWorker\nStaff\nField\nDirector\nNot Applicable\nConsultant\nDriver",
+   "options": "",
    "reqd": 1,
-   "description": "Options are refreshed from the Employee 'Staff Type' field."
+   "description": "Options are pulled live from the Employee 'Staff Type' field - none are stored here."
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-07-15 12:00:00.000000",
+ "modified": "2026-08-04 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "ESS Location Travel Staff Type",
