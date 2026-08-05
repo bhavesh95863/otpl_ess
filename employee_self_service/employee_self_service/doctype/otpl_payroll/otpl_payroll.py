@@ -134,6 +134,22 @@ def get_employees(doc):
 	return _select_employees(filters["sql"], filters["values"])
 
 
+def _business_line_sql():
+	"""SQL expression resolving an employee's Business Line from their own
+	``business_vertical`` (then ``external_business_vertical``), the same source
+	the OTPL Leave approver flow uses. Sales Order is not used as a source.
+	References the ``e`` alias, so callers must join Employee as ``e``.
+	"""
+	terms = []
+	if frappe.db.has_column("Employee", "business_vertical"):
+		terms.append("NULLIF(e.business_vertical, '')")
+	if frappe.db.has_column("Employee", "external_business_vertical"):
+		terms.append("NULLIF(e.external_business_vertical, '')")
+	if not terms:
+		return "NULL"
+	return "COALESCE({0})".format(", ".join(terms))
+
+
 def _select_employees(where_sql, where_values):
 	"""Internal helper: run the canonical employee SELECT used by payroll
 	calculation. ``where_sql`` is appended after ``e.status='Active'``-style
@@ -141,6 +157,7 @@ def _select_employees(where_sql, where_values):
 	predicate when fetching by explicit IDs).
 	"""
 	dummy_expr = "e.dummy_employee" if frappe.db.has_column("Employee", "dummy_employee") else "NULL"
+	business_line_expr = _business_line_sql()
 	return frappe.db.sql(
 		"""
 		SELECT
@@ -171,10 +188,8 @@ def _select_employees(where_sql, where_values):
 			{conv_expr}                         AS conveyance_amount,
 			{tel_expr}                          AS telephone_amount,
 			{dummy_expr}                        AS dummy_employee,
-			so.business_line                    AS business_line
+			{business_line_expr}                AS business_line
 		FROM `tabEmployee` e
-		LEFT JOIN `tabSales Order` so
-			ON so.name = e.sales_order
 		LEFT JOIN `tabESS Location` esl
 			ON esl.name = e.location
 		-- Fixed ESS Location used ONLY to source PF/ESIC wage bands for
@@ -194,6 +209,7 @@ def _select_employees(where_sql, where_values):
 			conv_expr="COALESCE(e.conveyance_amount, 0)" if frappe.db.has_column("Employee", "conveyance_amount") else "0",
 			tel_expr="COALESCE(e.telephone_amount, 0)" if frappe.db.has_column("Employee", "telephone_amount") else "0",
 			dummy_expr=dummy_expr,
+			business_line_expr=business_line_expr,
 		),
 		where_values,
 		as_dict=True,
@@ -406,7 +422,7 @@ def _build_employee_filter(doc):
 		conditions.append("e.location = %(location)s")
 		values["location"] = doc["location"]
 	if doc.get("business_line"):
-		conditions.append("so.business_line = %(business_line)s")
+		conditions.append("{0} = %(business_line)s".format(_business_line_sql()))
 		values["business_line"] = doc["business_line"]
 	if doc.get("employee"):
 		conditions.append("e.name = %(employee)s")
