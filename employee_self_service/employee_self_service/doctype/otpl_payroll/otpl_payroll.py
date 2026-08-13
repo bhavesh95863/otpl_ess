@@ -46,9 +46,11 @@ SALARY_HOURS_PER_DAY = 8.0
 # In-station duty ends at 19:30 and OT accrues on COMPLETED hours past it: one
 # minute over is not an hour, so the first ₹100 lands at 20:30. A checkout after
 # 23:30 is the max ₹700 (₹500 for the hours + a flat ₹200 late-night addition).
-# Out-of-station (approved Travelling CL) days and worked qualifying holidays
-# are a flat ₹700.
+# A worked qualifying holiday is a flat ₹500. Drivers have no Travelling CL /
+# out-of-station rule anymore, so every non-holiday working day uses the tier.
 DRIVER_OT_FLAT = 700.0
+# Flat OT for a qualifying holiday the driver actually worked.
+DRIVER_HOLIDAY_OT = 500.0
 DRIVER_DUTY_END = time(19, 30)
 # Absolute clock time past which the flat ₹700 applies. Anchored to the rule's
 # own wording ("after 11.30 pm"), not to the hour count, because the ₹200 on top
@@ -306,7 +308,6 @@ def calculate_payroll(doc):
 	# Pull every dependency once, in O(N) grouped queries
 	att_map = _fetch_attendance_aggregates(all_ids, from_date, to_date)
 	lookahead_map = _fetch_lookahead_presentish(all_ids, to_date)
-	travelling_cl_map = _fetch_travelling_cl_dates(all_ids, from_date, to_date)
 	leave_map = _fetch_approved_leaves(all_ids, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(all_emps, from_date, to_date)
 	balance_map = _fetch_leave_balances(all_ids)
@@ -334,7 +335,6 @@ def calculate_payroll(doc):
 			days_in_period=days_in_period,
 			att=att_map.get(emp_id, {}),
 			lookahead_presentish=lookahead_map.get(emp_id, set()),
-			travelling_cl_dates=travelling_cl_map.get(emp_id, set()),
 			leaves=leave_map.get(emp_id, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 			holiday_dates=holidays_by_emp.get(emp_id, set()),
 			balance=balance_map.get(emp_id, {}),
@@ -364,7 +364,6 @@ def calculate_payroll(doc):
 				days_in_period=days_in_period,
 				att=att_map.get(eid, {}),
 				lookahead_presentish=lookahead_map.get(eid, set()),
-				travelling_cl_dates=travelling_cl_map.get(eid, set()),
 				leaves=leave_map.get(eid, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 				holiday_dates=holidays_by_emp.get(eid, set()),
 				balance=balance_map.get(eid, {}),
@@ -535,35 +534,6 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 			bucket["extra_early_exit_count"] += 1
 		bucket["working_hours"] += flt(r.working_hours)
 
-	return out
-
-
-def _fetch_travelling_cl_dates(emp_ids, from_date, to_date):
-	"""Per-employee set of dates covered by an APPROVED Travelling CL within the
-	period. Used for the Driver "out of station" OT rule (flat amount per day).
-	Empty when the Travelling CL doctype is not present on the site."""
-	out = defaultdict(set)
-	if not emp_ids or not frappe.db.table_exists("Travelling CL"):
-		return out
-	rows = frappe.db.sql(
-		"""
-		SELECT employee, from_date, to_date
-		FROM `tabTravelling CL`
-		WHERE employee IN %(emp_ids)s
-		  AND status = 'Approved'
-		  AND from_date <= %(to_date)s
-		  AND to_date   >= %(from_date)s
-		""",
-		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
-		as_dict=True,
-	)
-	for r in rows:
-		start = max(getdate(r.from_date), getdate(from_date))
-		end = min(getdate(r.to_date), getdate(to_date))
-		d = start
-		while d <= end:
-			out[r.employee].add(d)
-			d += timedelta(days=1)
 	return out
 
 
@@ -1022,8 +992,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
                         payable_balance=0.0, al_eligible=False,
                         payable_days_override=None,
                         payable_days_source=None,
-                        lookahead_presentish=None,
-                        travelling_cl_dates=None):
+                        lookahead_presentish=None):
 	gross = flt(emp.get("gross_salary"))
 	basic = flt(emp.get("basic_salary"))
 	staff_type = emp.get("staff_type")
@@ -1141,22 +1110,32 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# Half days count as a full present day here (obs #5); the 0.5-day salary
 	# impact is taken out separately via the Late Deduction column (Col K), so
 	# counting half days as 1 here prevents a 1.5-day net loss for the employee.
-	# Driver rule: out-of-station (approved Travelling CL) days are Present
-	# irrespective of punches, so they count as worked days here.
-	travelling_cl_dates = travelling_cl_dates or set()
 	effective_present_dates = present_dates
-	if is_driver and travelling_cl_dates:
-		effective_present_dates = present_dates | travelling_cl_dates
 
 	non_holiday_present = sum(
 		1 for d in (effective_present_dates | half_day_dates | half_leave_dates)
 		if d not in holiday_dates
 	)
 
-	# Driver rule: a qualified holiday the driver actually WORKED gives ₹700 OT
+	# Driver rule: a qualified holiday the driver actually WORKED gives ₹500 OT
 	# (Col S) and must NOT add to attendance/payable days — exclude it here.
 	driver_worked_qh = (qualifying_holiday_dates & present_dates) if is_driver else set()
-	effective_qualified_holidays = qualified_holidays - len(driver_worked_qh)
+
+	# Non-Driver Work-on-Holiday rule: any holiday the employee is Present (1) or
+	# Half Day (0.5) on earns a Casual Leave (credited by the work-on-holiday CL
+	# job), so that day is NOT also paid. Only the worked portion of a QUALIFYING
+	# holiday is currently in Days Worked, so only that is removed here; a worked
+	# non-qualifying holiday was never paid, so it is credited as CL with no
+	# further deduction.
+	worked_holiday_full = (present_dates & holiday_dates) if not is_driver else set()
+	worked_holiday_half = (half_day_dates & holiday_dates) if not is_driver else set()
+	work_on_holiday = len(worked_holiday_full) + 0.5 * len(worked_holiday_half)
+	worked_qh_paid = (
+		len(worked_holiday_full & qualifying_holiday_dates)
+		+ 0.5 * len(worked_holiday_half & qualifying_holiday_dates)
+	)
+
+	effective_qualified_holidays = qualified_holidays - len(driver_worked_qh) - worked_qh_paid
 
 	days_worked = non_holiday_present + effective_qualified_holidays
 	if is_worker_site:
@@ -1277,19 +1256,15 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	ot_hours = 0.0
 	if is_driver:
 		# Driver OT (hardcoded rupee rule) — REPLACES the hours-based OT:
-		#   * Out-of-station (approved Travelling CL) day       -> flat ₹700
-		#   * Worked qualifying holiday (not out-of-station)     -> flat ₹700
-		#   * In-station working day                             -> checkout tier
+		#   * Worked qualifying holiday   -> flat ₹500
+		#   * Working day                 -> checkout tier
 		checkout_by_date = att.get("checkout_by_date", {})
 		driver_ot = 0.0
-		for d in travelling_cl_dates:
-			driver_ot += DRIVER_OT_FLAT
 		for d in driver_worked_qh:
-			if d not in travelling_cl_dates:
-				driver_ot += DRIVER_OT_FLAT
+			driver_ot += DRIVER_HOLIDAY_OT
 		for d in present_dates:
-			if d in travelling_cl_dates or d in holiday_dates:
-				continue   # out-of-station / holiday handled above
+			if d in holiday_dates:
+				continue   # worked holiday handled above
 			driver_ot += _driver_checkout_ot(checkout_by_date.get(d), d)
 		ot_hra_petrol = driver_ot
 	elif ot_eligible and gross and days_in_month:
@@ -1422,6 +1397,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		# Col H component breakdown (surfaced in the calculation trace UI)
 		"non_holiday_present": non_holiday_present,
 		"qualified_holidays": qualified_holidays,
+		"work_on_holiday": flt(work_on_holiday, 2),
 		"qualified_holidays_strict": qualified_holidays_strict,
 		"false_attendance_count": false_attendance_count,
 		"late_count": late_count,
@@ -1608,7 +1584,6 @@ def get_calculation_trace(doc, employee):
 
 	att_map = _fetch_attendance_aggregates(ids_for_fetch, from_date, to_date)
 	lookahead_map = _fetch_lookahead_presentish(ids_for_fetch, to_date)
-	travelling_cl_map = _fetch_travelling_cl_dates(ids_for_fetch, from_date, to_date)
 	leave_map = _fetch_approved_leaves(ids_for_fetch, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(emps_for_fetch, from_date, to_date)
 	balance_map = _fetch_leave_balances(ids_for_fetch)
@@ -1646,7 +1621,6 @@ def get_calculation_trace(doc, employee):
 			advance=advance_map.get(parent_id, {"full": 0.0, "part": 0.0}),
 			payable_balance=payable_balance_map.get(parent_id, 0.0),
 			al_eligible=(parent_id in al_eligible_emps and parent_emp.get("business_line") in al_eligible_bls),
-			travelling_cl_dates=travelling_cl_map.get(parent_id, set()),
 		)
 		payable_days_override = parent_row["payable_days"]
 
@@ -1660,7 +1634,6 @@ def get_calculation_trace(doc, employee):
 		al_eligible=al_eligible,
 		payable_days_override=payable_days_override,
 		payable_days_source=parent_id,
-		travelling_cl_dates=travelling_cl_map.get(employee, set()),
 	)
 
 	# --- Pretty-print helpers -------------------------------------------------
@@ -1741,6 +1714,11 @@ def get_calculation_trace(doc, employee):
 			"items": [
 				("Attendance Processed (excl. false)", str(len(processed_dates))),
 				("Present days", str(len(present_dates))),
+				("Work on Holiday (CL given, not paid)",
+				 "{0}  —  {1}".format(
+				     _f(row.get("work_on_holiday", 0)),
+				     "holiday(s) worked (Present=1 / Half Day=0.5) → Casual Leave credited instead of pay"
+				     if not is_driver else "N/A (Driver — flat OT instead)")),
 				("Half Days (status = Half Day) — leave half-days only", str(len(half_day_dates))),
 				("Absent days", str(len(absent_dates))),
 				("Late Entry marks", str(row.get("late_entry_count", 0))),
@@ -1773,9 +1751,11 @@ def get_calculation_trace(doc, employee):
 				                      "holidays with a present-ish day in BOTH the 3 days before AND the 3 days after"
 				                      if al_eligible else "0 (AL disabled)")),
 				("(H) Days Worked",
-				 "{dw} = non-holiday present-ish {nhp} + qualifying holidays {qh} − 2×{fc} false attendance"
+				 "{dw} = non-holiday present-ish {nhp} + qualifying holidays {qh} − work on holiday {woh} − 2×{fc} false attendance"
 				 .format(dw=_f(row["days_worked"]), nhp=row["non_holiday_present"],
-				         qh=row["qualified_holidays"], fc=false_count)),
+				         qh=row["qualified_holidays"],
+				         woh=_f(row["non_holiday_present"] + row["qualified_holidays"] - 2 * false_count - row["days_worked"]),
+				         fc=false_count)),
 				("    ↳ non-holiday present-ish ({0})".format(row["non_holiday_present"]),
 				 "present {p} + half-day attendance {h} + approved half-day leave {hl}, de-duplicated by date = {nhp}"
 				 "  (a Half Day counts as a FULL day here; its 0.5-day impact is taken separately in Col K)"
@@ -1834,11 +1814,9 @@ def get_calculation_trace(doc, employee):
 				         days_in_month, _f(row["payable_days"]))),
 				("(S) OT/HRA/Petrol",
 				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
-				                      ("Driver rule (₹): out-of-station (Travelling CL) days × ₹700 + worked qualifying holidays × ₹700 "
-				                       "+ in-station checkout tiers (₹100 per COMPLETED hour after 19:30, so ≤20:30 ₹0 / "
-				                       "≤21:30 ₹100 / ≤22:30 ₹200 / ≤23:30 ₹300; after 23:30 flat ₹700). "
-				                       "Travelling CL days in period = {tcl}"
-				                       .format(tcl=len(travelling_cl_map.get(employee, set())))
+				                      ("Driver rule (₹): worked qualifying holidays × ₹500 "
+				                       "+ checkout tiers (₹100 per COMPLETED hour after 19:30, so ≤20:30 ₹0 / "
+				                       "≤21:30 ₹100 / ≤22:30 ₹200 / ≤23:30 ₹300; after 23:30 flat ₹700)."
 				                       if is_driver else
 				                       "OT hours = [working_hours({0:.2f}) + qualifying-holidays({1}) × 8] − (H({2}) × 8) ; amount = OT × Gross/({3}×8)"
 				                       .format(working_hours, row["qualified_holidays"], _f(row["days_worked"]), days_in_month))

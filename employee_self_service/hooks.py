@@ -125,6 +125,10 @@ doc_events = {
         "after_insert": "employee_self_service.employee_self_service.utils.otpl_attendance.after_employee_checkin_insert",
         "validate": "employee_self_service.employee_self_service.utils.otpl_attendance.validate"
     },
+    "Attendance": {
+        "on_submit": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_attendance_change",
+        "on_cancel": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_attendance_change"
+    },
     "Employee": {
         "on_update": [
             "employee_self_service.employee_self_service.utils.employee.assign_team_leader_role_on_temp_tl",
@@ -148,7 +152,9 @@ doc_events = {
         "on_update": "employee_self_service.employee_self_service.utils.user_role_sync.sync_employee_fields_from_user_roles"
     },
     "Leave Application": {
-        "before_cancel": "employee_self_service.employee_self_service.doctype.otpl_leave.otpl_leave.validate_leave_application_cancel"
+        "before_cancel": "employee_self_service.employee_self_service.doctype.otpl_leave.otpl_leave.validate_leave_application_cancel",
+        "on_submit": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change",
+        "on_cancel": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change"
     },
     "Team Leader Location Log": {
         "after_insert": "employee_self_service.employee_self_service.utils.team_leader_location.after_team_leader_location_update_insert"

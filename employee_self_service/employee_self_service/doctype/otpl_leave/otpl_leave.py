@@ -444,6 +444,44 @@ class OTPLLeave(Document):
 		# marks are recomputed against the now-approved leave's updated timing.
 		self.refresh_processed_attendance_after_approval()
 
+		# Approving / cancelling a leave changes the present-ish picture, which can
+		# add or remove Travelling CL holiday-credit qualification for nearby
+		# holidays. Reconcile those credits (and refresh the affected attendance)
+		# in the background.
+		self.reevaluate_travelling_cl_holiday_credits()
+
+	def reevaluate_travelling_cl_holiday_credits(self):
+		"""On an Approved or Cancelled transition, queue a Travelling CL holiday
+		credit reconciliation over this leave's affected date range. Half-day /
+		short-leave dates matter too — an approved half day counts as present-ish."""
+		if self.get("__islocal"):
+			return
+		doc_before_save = self.get_doc_before_save()
+		if not doc_before_save:
+			return
+		before, after = doc_before_save.status, self.status
+		if after not in ("Approved", "Cancelled") or before == after:
+			return
+
+		dates = [
+			self.from_date, self.to_date,
+			self.get("approved_from_date"), self.get("half_day_date"),
+		]
+		dates = [getdate(d) for d in dates if d]
+		if not dates:
+			return
+
+		try:
+			from employee_self_service.employee_self_service.utils.travelling_cl_credit import (
+				enqueue_reprocess,
+			)
+			enqueue_reprocess(self.employee, min(dates), max(dates))
+		except Exception:
+			frappe.log_error(
+				title="Queue Travelling CL holiday credit re-eval failed: {0}".format(self.name),
+				message=frappe.get_traceback(),
+			)
+
 	def refresh_processed_attendance_after_approval(self):
 		"""Re-run the day's attendance when a Short Leave / Half Day is approved
 		late — i.e. after that day was already processed.

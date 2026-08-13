@@ -37,6 +37,11 @@ class TravellingCL(Document):
 		self.auto_approve_linked_checkins_on_approve()
 		self.auto_reject_linked_checkins_on_reject()
 
+		# An Approved request (possibly approved late) turns its out-of-location
+		# punches into attendance. Re-run attendance for the covered days and
+		# re-evaluate Travelling CL holiday credits in the background.
+		self.reprocess_attendance_and_credits_on_approve()
+
 		# Sync to the remote ERP when the approver is external (same pattern as
 		# Travel Request / OTPL Leave). Guarded so a sync outage never blocks the
 		# request itself.
@@ -112,6 +117,29 @@ class TravellingCL(Document):
 			frappe.db.set_value("Employee Checkin", c.name, "rejected", 1, update_modified=False)
 		if checkins:
 			frappe.db.commit()
+
+	def reprocess_attendance_and_credits_on_approve(self):
+		"""When the request transitions to Approved, queue a background job to
+		re-run attendance for the covered days and reconcile Travelling CL holiday
+		credits (grant newly qualifying holidays, revert ones that no longer
+		qualify)."""
+		if self.get("__islocal"):
+			return
+		before = self.get_doc_before_save()
+		if not (before and before.status != "Approved" and self.status == "Approved"):
+			return
+		if not (self.employee and self.from_date and self.to_date):
+			return
+		try:
+			from employee_self_service.employee_self_service.utils.travelling_cl_credit import (
+				enqueue_reprocess,
+			)
+			enqueue_reprocess(self.employee, self.from_date, self.to_date)
+		except Exception:
+			frappe.log_error(
+				title="Queue Travelling CL attendance/credit reprocess failed: {0}".format(self.name),
+				message=frappe.get_traceback(),
+			)
 
 	def validate_dates(self):
 		# "From Date must be today or later" — only on creation, so approving an
