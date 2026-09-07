@@ -3,10 +3,11 @@
 # For license information, please see license.txt
 """Work-on-holiday CL credit.
 
-When any non-Driver employee is Present (full day) or Half Day on a holiday, that
+When an eligible employee is Present (full day) or Half Day on a holiday, that
 day is credited to their Casual Leave balance: +1 for a full day, +0.5 for a half
 day. The qualifying / "sandwich" rule is NOT used — simply working the holiday
-earns the CL. Drivers are excluded (they earn a flat OT instead, in payroll).
+earns the CL. Drivers are excluded (they earn a flat OT instead, in payroll) and
+so are Field staff.
 
 The credit is reconciled from Attendance: granted when the holiday shows Present /
 Half Day, adjusted if that status changes, and reverted if the day is no longer
@@ -20,12 +21,15 @@ import frappe
 from frappe.utils import getdate, add_days, nowdate, flt
 
 CASUAL_LEAVE = "Casual Leave"
+# Staff types that never earn the work-on-holiday CL: Drivers get a flat holiday
+# OT in payroll instead, and Field staff are excluded by policy.
+EXCLUDED_STAFF_TYPES = ("Driver", "Field")
 LOOKBACK_DAYS = 31    # nightly backstop scans holidays within this many days
 
 
 def credit_travelling_cl_holidays():
 	"""Scheduled entry point (nightly). Reconciles the work-on-holiday CL credit
-	for every non-Driver with Present / Half Day attendance on a holiday in the
+	for every eligible employee with Present / Half Day attendance on a holiday in the
 	recent window."""
 	today = getdate(nowdate())
 	window_start = add_days(today, -LOOKBACK_DAYS)
@@ -144,12 +148,13 @@ def _active_credit(employee, date):
 def _holiday_credit_amount(employee, date):
 	"""CL earned by (employee, date): 1.0 if Present on the holiday, 0.5 if Half
 	Day, else 0.0. Drivers never earn it (they get a flat OT in payroll instead),
-	and it applies only on a holiday of the employee's holiday list."""
+	nor do Field staff, and it applies only on a holiday of the employee's holiday
+	list."""
 	emp = frappe.db.get_value(
 		"Employee", employee,
 		["staff_type", "holiday_list", "company"], as_dict=True,
 	)
-	if not emp or emp.staff_type == "Driver":
+	if not emp or emp.staff_type in EXCLUDED_STAFF_TYPES:
 		return 0.0
 
 	holiday_list = emp.holiday_list or _default_holiday_list(emp.company)
@@ -223,7 +228,16 @@ def _credit_casual_leave(employee, date, amount):
 	"""Add +``amount`` to the employee's Casual Leave via a Leave Ledger Entry
 	attached to their CL allocation, so get_leave_balance_on (and payroll) see the
 	higher balance. Returns the Leave Ledger Entry name, or None if no CL
-	allocation covers the date."""
+	allocation covers the date.
+
+	The entry is stamped from_date = the holiday itself (to_date stays the
+	allocation's end). ERPNext's get_leave_allocation_records only counts a ledger
+	entry whose from_date <= as-on date <= to_date, so this makes the CL appear on
+	the day it was earned and not a day earlier — with the allocation's own
+	from_date the credit would back-date to the start of the allocation period and
+	silently inflate every earlier balance / opening figure. It also lets the
+	leave-balance report count it as an allocation in the period (that report only
+	counts entries whose from_date falls inside the reported range)."""
 	alloc = frappe.db.get_value(
 		"Leave Allocation",
 		{
@@ -246,7 +260,7 @@ def _credit_casual_leave(employee, date, amount):
 		"transaction_type": "Leave Allocation",
 		"transaction_name": alloc.name,
 		"leaves": amount,
-		"from_date": alloc.from_date,
+		"from_date": getdate(date),
 		"to_date": alloc.to_date,
 		"is_carry_forward": 0,
 		"is_expired": 0,
@@ -288,7 +302,9 @@ def _reverse_casual_leave(employee, date, original_lle, amount):
 		)
 		if not alloc:
 			return None
-		alloc_name, from_d, to_d = alloc.name, alloc.from_date, alloc.to_date
+		# Mirror _credit_casual_leave: the reversal is dated from the holiday, so
+		# it cancels the credit from the same day the credit started counting.
+		alloc_name, from_d, to_d = alloc.name, getdate(date), alloc.to_date
 
 	lle = frappe.get_doc({
 		"doctype": "Leave Ledger Entry",
@@ -307,6 +323,57 @@ def _reverse_casual_leave(employee, date, original_lle, amount):
 	lle.insert(ignore_permissions=True)
 	lle.submit()
 	return lle.name
+
+
+@frappe.whitelist()
+def backfill_credit_ledger_dates():
+	"""One-off repair: re-date existing work-on-holiday credit Leave Ledger
+	Entries from the allocation's from_date to the holiday itself.
+
+	Credits granted before the dating fix carry the CL allocation's from_date, so
+	the leave shows up from the start of the allocation period rather than the day
+	it was earned: every balance dated before the holiday is inflated, and the
+	leave-balance report never counts the credit as an allocation of the period.
+
+	A credit and its reversal are re-dated together, so a reverted credit stays
+	net-zero on every date. Idempotent."""
+	moved = 0
+	skipped = 0
+	credits = frappe.get_all(
+		"Travelling CL Holiday Credit",
+		fields=["name", "holiday_date", "status", "leave_ledger_entry", "reversal_leave_ledger_entry"],
+	)
+	for c in credits:
+		holiday = getdate(c.holiday_date)
+		entries = [e for e in (c.leave_ledger_entry, c.reversal_leave_ledger_entry) if e]
+		if c.status == "Reverted" and not c.reversal_leave_ledger_entry:
+			# Moving the credit alone would leave the reversal behind and open a
+			# window where the balance is wrong. Leave the pair untouched.
+			skipped += 1
+			continue
+
+		for name in entries:
+			row = frappe.db.get_value(
+				"Leave Ledger Entry", name, ["from_date", "to_date"], as_dict=True
+			)
+			# Gone (e.g. the allocation was cancelled, which hard-deletes its
+			# ledger entries), already correct, or the holiday falls outside the
+			# entry's own span — nothing safe to do.
+			if not row or getdate(row.from_date) == holiday or not (
+				getdate(row.from_date) <= holiday <= getdate(row.to_date)
+			):
+				continue
+			frappe.db.set_value(
+				"Leave Ledger Entry", name, "from_date", holiday, update_modified=False
+			)
+			moved += 1
+
+	msg = "Work-on-holiday CL credit: re-dated {0} ledger entr(ies), skipped {1} credit(s).".format(
+		moved, skipped
+	)
+	frappe.logger().info(msg)
+	print(msg)
+	return msg
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +450,7 @@ def on_leave_application_change(doc, method=None):
 
 def on_attendance_change(doc, method=None):
 	"""doc_event for Attendance submit / cancel / update: when the day is a holiday
-	for a non-Driver employee, (re)evaluate the work-on-holiday CL credit so a
+	for an eligible employee, (re)evaluate the work-on-holiday CL credit so a
 	holiday marked Present/Half Day is credited and a reverted one is pulled back.
 	Gated on the date actually being a holiday so ordinary working days enqueue
 	nothing."""
@@ -394,7 +461,7 @@ def on_attendance_change(doc, method=None):
 	emp = frappe.db.get_value(
 		"Employee", employee, ["staff_type", "holiday_list", "company"], as_dict=True,
 	)
-	if not emp or emp.staff_type == "Driver":
+	if not emp or emp.staff_type in EXCLUDED_STAFF_TYPES:
 		return
 	holiday_list = emp.holiday_list or _default_holiday_list(emp.company)
 	if not holiday_list or not _is_holiday(holiday_list, getdate(attendance_date)):

@@ -308,10 +308,17 @@ def calculate_payroll(doc):
 	# Pull every dependency once, in O(N) grouped queries
 	att_map = _fetch_attendance_aggregates(all_ids, from_date, to_date)
 	lookahead_map = _fetch_lookahead_presentish(all_ids, to_date)
+	lookbehind_map = _fetch_lookbehind_presentish(all_ids, from_date)
 	leave_map = _fetch_approved_leaves(all_ids, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(all_emps, from_date, to_date)
+	# Same holidays plus a margin either side, used only to bunch consecutive
+	# holidays that run past the period boundary.
+	holiday_margin_by_emp = _fetch_holidays_per_employee(
+		all_emps, from_date - timedelta(days=7), to_date + timedelta(days=7))
 	balance_map = _fetch_leave_balances(all_ids)
 	cl_balance_map = _fetch_cl_balances(all_ids, from_date)
+	cl_generated_map = _fetch_holiday_cl_credits(all_ids, from_date, to_date)
+	lwp_map = _fetch_lwp_leave_dates(all_ids, from_date, to_date)
 	tds_map = _fetch_tds(all_ids, from_date)
 	advance_map = _fetch_advance_balances(all_ids, from_date, to_date)
 	payable_balance_map = _fetch_payroll_payable_balance(all_ids, to_date)
@@ -335,10 +342,14 @@ def calculate_payroll(doc):
 			days_in_period=days_in_period,
 			att=att_map.get(emp_id, {}),
 			lookahead_presentish=lookahead_map.get(emp_id, set()),
+			lookbehind_presentish=lookbehind_map.get(emp_id, set()),
 			leaves=leave_map.get(emp_id, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 			holiday_dates=holidays_by_emp.get(emp_id, set()),
 			balance=balance_map.get(emp_id, {}),
 			cl_balance=cl_balance_map.get(emp_id, 0.0),
+			cl_generated=cl_generated_map.get(emp_id, 0.0),
+			lwp_dates=lwp_map.get(emp_id, set()),
+			neighbour_holidays=holiday_margin_by_emp.get(emp_id, set()),
 			tds=tds_map.get(emp_id, 0.0),
 			advance=advance_map.get(emp_id, {"full": 0.0, "part": 0.0}),
 			payable_balance=payable_balance_map.get(emp_id, 0.0),
@@ -364,10 +375,14 @@ def calculate_payroll(doc):
 				days_in_period=days_in_period,
 				att=att_map.get(eid, {}),
 				lookahead_presentish=lookahead_map.get(eid, set()),
+				lookbehind_presentish=lookbehind_map.get(eid, set()),
 				leaves=leave_map.get(eid, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 				holiday_dates=holidays_by_emp.get(eid, set()),
 				balance=balance_map.get(eid, {}),
 				cl_balance=cl_balance_map.get(eid, 0.0),
+				cl_generated=cl_generated_map.get(eid, 0.0),
+				lwp_dates=lwp_map.get(eid, set()),
+				neighbour_holidays=holiday_margin_by_emp.get(eid, set()),
 				tds=tds_map.get(eid, 0.0),
 				advance=advance_map.get(eid, {"full": 0.0, "part": 0.0}),
 				payable_balance=payable_balance_map.get(eid, 0.0),
@@ -545,19 +560,42 @@ def _fetch_lookahead_presentish(emp_ids, to_date):
 	month, so the attendance for those next-month days is needed to decide
 	whether the holiday qualifies (Col G / Col H).
 
+	Returns dict employee -> set[date] (dates strictly after ``to_date``).
+	"""
+	return _fetch_presentish_in_window(
+		emp_ids, to_date + timedelta(days=1), to_date + timedelta(days=3)
+	)
+
+
+def _fetch_lookbehind_presentish(emp_ids, from_date):
+	"""Present-ish dates in the 3 calendar days BEFORE ``from_date``.
+
+	The mirror image of ``_fetch_lookahead_presentish``: a holiday at (or near)
+	the START of the payroll period has its "3 days preceding" window in the
+	previous month, so without this the employee's late-previous-month
+	attendance is invisible and the holiday is wrongly disqualified (Col G /
+	Col H).
+
+	Returns dict employee -> set[date] (dates strictly before ``from_date``).
+	"""
+	return _fetch_presentish_in_window(
+		emp_ids, from_date - timedelta(days=3), from_date - timedelta(days=1)
+	)
+
+
+def _fetch_presentish_in_window(emp_ids, window_start, window_end):
+	"""Present-ish dates for each employee within [window_start, window_end].
+
 	Mirrors the ``presentish_dates`` composition in the main calc
 	(Present + Half Day attendance + approved half-day leaves); full-day
 	leaves are intentionally excluded so a holiday sandwiched in leave does
 	not qualify.
 
-	Returns dict employee -> set[date] (dates strictly after ``to_date``).
+	Returns dict employee -> set[date].
 	"""
 	out = defaultdict(set)
 	if not emp_ids:
 		return out
-
-	window_start = to_date + timedelta(days=1)
-	window_end = to_date + timedelta(days=3)
 
 	# Present / Half Day attendance (excluding false attendance)
 	rows = frappe.db.sql(
@@ -714,6 +752,44 @@ def _fetch_approved_leaves(emp_ids, from_date, to_date):
 	return out
 
 
+def _fetch_lwp_leave_dates(emp_ids, from_date, to_date):
+	"""Dates in the period covered by an approved Leave Without Pay application.
+
+	A full-day leave is normally added back to payable days out of the CL / AL
+	balance (Col M / N). Leave Without Pay is by definition unpaid — OTPL Leave
+	itself splits an application into CL + LWP once the CL balance runs out — so
+	adjusting an LWP day from CL would both pay a day that was decided as unpaid
+	and consume a CL the employee never spent. These dates are therefore removed
+	from the adjustment count (they stay full-day leaves everywhere else).
+
+	Returns dict employee -> set[date].
+	"""
+	out = defaultdict(set)
+	if not emp_ids:
+		return out
+	rows = frappe.db.sql(
+		"""
+		SELECT la.employee, la.from_date, la.to_date
+		FROM `tabLeave Application` la
+		INNER JOIN `tabLeave Type` lt ON lt.name = la.leave_type
+		WHERE la.employee IN %(emp_ids)s
+		  AND la.docstatus = 1
+		  AND COALESCE(lt.is_lwp, 0) = 1
+		  AND la.from_date <= %(to_date)s
+		  AND la.to_date   >= %(from_date)s
+		""",
+		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
+		as_dict=True,
+	)
+	for r in rows:
+		d = max(getdate(r.from_date), getdate(from_date))
+		end = min(getdate(r.to_date), getdate(to_date))
+		while d <= end:
+			out[r.employee].add(d)
+			d += timedelta(days=1)
+	return out
+
+
 def _fetch_holidays_per_employee(employees, from_date, to_date):
 	"""Returns dict employee -> set of holiday dates.
 
@@ -789,6 +865,40 @@ def _fetch_leave_balances(emp_ids):
 	return {r.employee: dict(r) for r in rows}
 
 
+def _fetch_holiday_cl_credits(emp_ids, from_date, to_date):
+	"""Work-on-holiday Casual Leave credited to each employee WITHIN the period.
+
+	``_fetch_cl_balances`` reads the balance as on the period's from_date, so CL
+	earned by working a holiday mid-period is not in it — the credit ledger entry
+	is dated on the holiday itself, and only shows up from the next period. This
+	is the CL counterpart of ``al_generated``: it is added to Col O (Balance CL)
+	so the leave earned this month is visible this month.
+
+	Reverted credits are excluded. Returns dict employee -> leaves (1.0 per full
+	day worked, 0.5 per half day).
+	"""
+	out = {e: 0.0 for e in emp_ids}
+	if not emp_ids:
+		return out
+	if not frappe.db.table_exists("Travelling CL Holiday Credit"):
+		return out
+	rows = frappe.db.sql(
+		"""
+		SELECT employee, SUM(leaves) AS leaves
+		FROM `tabTravelling CL Holiday Credit`
+		WHERE employee IN %(emp_ids)s
+		  AND status != 'Reverted'
+		  AND holiday_date BETWEEN %(from_date)s AND %(to_date)s
+		GROUP BY employee
+		""",
+		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
+		as_dict=True,
+	)
+	for r in rows:
+		out[r.employee] = flt(r.leaves)
+	return out
+
+
 def _fetch_cl_balances(emp_ids, as_on_date):
 	"""Casual Leave balance per employee, as of ``as_on_date``.
 
@@ -819,7 +929,6 @@ def _fetch_cl_balances(emp_ids, as_on_date):
 				leave_type="Casual Leave",
 				date=as_on_date,
 			) or 0
-			frappe.msgprint("CL balance for {emp} as of {as_on_date}: {bal}".format(emp=emp, as_on_date=as_on_date, bal=bal))
 			out[emp] = flt(bal)
 		except Exception:
 			out[emp] = 0.0
@@ -988,11 +1097,14 @@ def _fetch_al_eligible_business_lines():
 def _calculate_employee(emp, from_date, to_date, days_in_period,
                         att, leaves, holiday_dates,
                         balance, tds, advance,
-                        cl_balance=0.0,
+                        cl_balance=0.0, cl_generated=0.0,
                         payable_balance=0.0, al_eligible=False,
                         payable_days_override=None,
                         payable_days_source=None,
-                        lookahead_presentish=None):
+                        lookahead_presentish=None,
+                        lookbehind_presentish=None,
+                        lwp_dates=None,
+                        neighbour_holidays=None):
 	gross = flt(emp.get("gross_salary"))
 	basic = flt(emp.get("basic_salary"))
 	staff_type = emp.get("staff_type")
@@ -1011,6 +1123,12 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# AL is gated by BOTH: employee has a row in OTPL Employee Leave Balance
 	# AND the employee's Business Line has al_eligible=1 (observation #12).
 	al_enabled = bool(is_worker_site and al_eligible)
+
+	# Field staff earn AL a different way: one AL per holiday they actually WORK
+	# (the qualifying / sandwich rule is not used), and the balance is forfeited
+	# the moment they take leave. No OTPL Employee Leave Balance row or AL-eligible
+	# Business Line is required — the row is created on submit if missing.
+	field_al_enabled = (staff_type == "Field")
 
 	# Attendance aggregates -----------------------------------------------------
 	present_dates = att.get("present_dates", set())
@@ -1049,35 +1167,78 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# (half day counts as present, both from attendance and approved half leave).
 	# Dates from the first few days of the NEXT month are folded in via
 	# ``lookahead_presentish`` so that a holiday at (or near) the end of the
-	# period can still qualify off attendance that lands in the next month.
+	# period can still qualify off attendance that lands in the next month, and
+	# the last few days of the PREVIOUS month via ``lookbehind_presentish`` so a
+	# holiday at (or near) the start of the period can qualify off attendance
+	# that lands in the previous month.
 	presentish_dates = (
 		present_dates
 		| half_day_dates
 		| half_leave_dates
 		| (lookahead_presentish or set())
+		| (lookbehind_presentish or set())
 	)
 
 	# ---- Qualified holidays --------------------------------------------------
-	# Two rules:
-	#   * OR rule  (Days Worked, Col H): holiday qualifies if the employee is
-	#     "present-ish" in ANY of the 3 days preceding OR following.
-	#   * AND rule (AL Generated, Col G): holiday qualifies only if the
-	#     employee is "present-ish" in ANY of the 3 days preceding AND ANY
-	#     of the 3 days following. A holiday sandwiched inside a leave
-	#     block (e.g. employee on full leave both sides) therefore does
-	#     NOT generate AL.
+	# CONSECUTIVE holidays are judged together as ONE block. The block qualifies
+	# when the employee is present on AT LEAST ONE of the 3 days before its FIRST
+	# holiday AND on AT LEAST ONE of the 3 days after its LAST holiday. Every
+	# holiday in the block then qualifies, or none of them does.
 	#
-	# Period-boundary relaxation: attendance/leave are only known within
-	# [from_date, to_date]. For a holiday on the first/last day of the
-	# period, one side of the window has no observable data, so that side
-	# cannot be checked — the AND rule then falls back to the side that IS
-	# observable. Example: a Sunday on the last day of the month (e.g.
-	# 31-May) qualifies on the "before" side alone, since there are no
-	# in-period days after it to evaluate.
-	qualified_holidays = 0          # OR rule, used for Col H
-	qualified_holidays_strict = 0   # AND rule, used for Col G
-	qualifying_holiday_dates = set()   # OR-rule holiday dates, used to net Col L
+	# e.g. 15th + 16th are consecutive: the windows are 12/13/14 and 17/18/19.
+	# One present day on each side is enough — not every day.
+	#
+	# Without the bunching each holiday of a run would be judged on its own and
+	# find only its neighbouring holidays in the window, so a run of 2+ holidays
+	# could never qualify however much the employee worked around it.
+	#
+	# "Present" here is present-ish: Present or Half Day attendance, or an
+	# approved half-day leave (the other half was worked). An Absent, a full-day
+	# leave or a day with no attendance record is simply not presence — none of
+	# them actively disqualifies, they just fail to support. Days either side
+	# that fall outside the payroll period come from lookbehind_presentish /
+	# lookahead_presentish, so a block at the edge of the month is judged on
+	# real data.
+	#
+	# This one rule drives BOTH Col H (Days Worked) and Col G (AL Generated).
+
+	# Holidays just outside the period are folded in ONLY to form the blocks (they
+	# are never counted), so a run straddling the period boundary is not cut in
+	# half and judged against a window that lands on its own continuation.
+	def _holiday_blocks(dates):
+		blocks = []
+		for d in sorted(dates):
+			if blocks and (d - blocks[-1][-1]).days == 1:
+				blocks[-1].append(d)
+			else:
+				blocks.append([d])
+		return blocks
+
+	qualifying_block_dates = set()
+	for _blk in _holiday_blocks(holiday_dates | (neighbour_holidays or set())):
+		_first, _last = _blk[0], _blk[-1]
+		_before = any((_first - timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
+		_after = any((_last + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
+		if _before and _after:
+			qualifying_block_dates.update(_blk)
+
+	def _holiday_window_qualifies(h):
+		return h in qualifying_block_dates
+
+	# A holiday can only be judged once the employee's attendance has actually
+	# been processed that far, so the count stops at their last processed day.
+	# Without this every remaining holiday of the month would qualify by default
+	# in a mid-period run: the days around it have no attendance record yet, and
+	# unknown days are ignored by the window check above. Taken per employee
+	# rather than company-wide, so one employee's stray future-dated attendance
+	# cannot pull everyone else's cutoff forward.
+	holiday_cutoff = max(processed_dates) if processed_dates else None
+
+	qualified_holidays = 0
+	qualifying_holiday_dates = set()   # used to net Col L
 	for h in holiday_dates:
+		if holiday_cutoff is None or h > holiday_cutoff:
+			continue
 		# If the employee was on approved (full-day) leave on the holiday itself,
 		# the holiday is neither "earned" nor worked: it must NOT generate AL
 		# (Col G) and must NOT count as a worked holiday (Col H). It is already
@@ -1086,25 +1247,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		# in payable_days.
 		if h in full_leave_dates:
 			continue
-		before = any((h - timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
-		after = any((h + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
-		if before or after:
+		if _holiday_window_qualifies(h):
 			qualified_holidays += 1
 			qualifying_holiday_dates.add(h)
-		# If the day immediately before/after the holiday lies outside the
-		# payroll period, that side is unobservable -> treat it as satisfied
-		# so a boundary holiday is not unfairly disqualified.
-		has_before_in_period = (h - timedelta(days=1)) >= from_date
-		has_after_in_period = (h + timedelta(days=1)) <= to_date
-		strict_before = before or not has_before_in_period
-		strict_after = after or not has_after_in_period
-		if strict_before and strict_after:
-			qualified_holidays_strict += 1
 
 	# ---- Col G: AL Generated --------------------------------------------------
-	# AL is generated for each holiday that has a present-ish day on BOTH
-	# sides. Only counted when AL is enabled for this employee/business line.
-	al_generated = qualified_holidays_strict if al_enabled else 0
+	# One AL per qualifying holiday. Only counted when AL is enabled for this
+	# employee/business line.
+	al_generated = qualified_holidays if al_enabled else 0
 
 	# ---- Col H: Days Worked (Worked / Holidays / Leave Adjustment) -----------
 	# Half days count as a full present day here (obs #5); the 0.5-day salary
@@ -1117,25 +1267,40 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		if d not in holiday_dates
 	)
 
-	# Driver rule: a qualified holiday the driver actually WORKED gives ₹500 OT
-	# (Col S) and must NOT add to attendance/payable days — exclude it here.
-	driver_worked_qh = (qualifying_holiday_dates & present_dates) if is_driver else set()
+	# Driver rule: a holiday the driver actually WORKED gives a flat ₹500 OT
+	# (Col S) instead of pay for the day.
+	#
+	# Gated on being PRESENT, not on the holiday qualifying. The qualifying
+	# (sandwich) rule decides whether an UNWORKED holiday is earned; a day the
+	# driver actually drove is earned by the work itself. This mirrors the
+	# non-Driver side, where working a holiday credits CL with no qualifying
+	# test (see utils/travelling_cl_credit.py).
+	driver_worked_qh = (present_dates & holiday_dates) if is_driver else set()
 
-	# Non-Driver Work-on-Holiday rule: any holiday the employee is Present (1) or
-	# Half Day (0.5) on earns a Casual Leave (credited by the work-on-holiday CL
-	# job), so that day is NOT also paid. Only the worked portion of a QUALIFYING
-	# holiday is currently in Days Worked, so only that is removed here; a worked
-	# non-qualifying holiday was never paid, so it is credited as CL with no
-	# further deduction.
+	# Non-Driver Work-on-Holiday: a holiday the employee is Present (1) or Half Day
+	# (0.5) on. Reported for information, and it drives the CL credit granted by the
+	# work-on-holiday job, but it is NOT deducted from Days Worked.
+	#
+	# A monthly-salaried employee's holidays already sit inside the month's pay, so
+	# deducting a worked holiday removed pay they would have received by staying at
+	# home — working the day left them worse off by one day's salary per holiday
+	# worked. The CL credit is a comp-off ON TOP of normal pay, not a substitute
+	# for it.
 	worked_holiday_full = (present_dates & holiday_dates) if not is_driver else set()
 	worked_holiday_half = (half_day_dates & holiday_dates) if not is_driver else set()
 	work_on_holiday = len(worked_holiday_full) + 0.5 * len(worked_holiday_half)
-	worked_qh_paid = (
-		len(worked_holiday_full & qualifying_holiday_dates)
-		+ 0.5 * len(worked_holiday_half & qualifying_holiday_dates)
-	)
 
-	effective_qualified_holidays = qualified_holidays - len(driver_worked_qh) - worked_qh_paid
+	# Drivers are still netted: a qualifying holiday the driver actually drove is
+	# paid as a flat OT in Col S instead of as a day here.
+	# Field staff: AL is earned by WORKING the holiday, not by the qualifying rule,
+	# so Col G is the work-on-holiday count (1 per full day, 0.5 per half day).
+	if field_al_enabled:
+		al_generated = work_on_holiday
+
+	effective_qualified_holidays = (
+		qualified_holidays
+		- len(driver_worked_qh & qualifying_holiday_dates)
+	)
 
 	days_worked = non_holiday_present + effective_qualified_holidays
 	if is_worker_site:
@@ -1203,31 +1368,78 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# the employee has CL/AL balance for whenever they also have absences in the
 	# same month. Col L is still deducted on its own in the payable_days formula.
 	cl_balance = flt(cl_balance)
+	cl_generated = flt(cl_generated)
+
+	# Field staff are AL-only: their comp-off for working a holiday is AL, and they
+	# neither draw on nor report Casual Leave. Zeroed here so Col M and Col O stay
+	# empty even for a Field employee who still has a standing CL allocation.
+	if field_al_enabled:
+		cl_balance = 0.0
+		cl_generated = 0.0
 	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
 
-	effective_al = al_balance if al_enabled else 0
-	adjusted_leaves = approved_leaves_count
+	# CL available to absorb THIS period's leave = the opening balance plus any
+	# work-on-holiday CL earned during the period. The opening balance alone is
+	# taken as on from_date, so CL earned mid-month (its ledger entry is dated on
+	# the holiday) would otherwise sit unusable until the next payroll.
+	cl_available = cl_balance + cl_generated
+
+	# Field staff draw on opening AL PLUS the AL earned this period — a comp-off
+	# earned by working a Sunday must be usable for leave taken in the same month.
+	if al_enabled:
+		effective_al = al_balance
+	elif field_al_enabled:
+		effective_al = al_balance + al_generated
+	else:
+		effective_al = 0
+	# Leave Without Pay is never adjusted from CL / AL — it was decided as unpaid.
+	adjusted_leaves = len(full_leave_dates - (lwp_dates or set()))
+
+	# Field staff only: their AL is a comp-off for holidays worked, so it pays ANY
+	# approved full-day leave — Leave Without Pay included. (Everywhere else LWP is
+	# excluded from the adjustment: it was decided as unpaid because no balance was
+	# left. A Field employee who banked days by working Sundays does have a balance,
+	# so those LWP days are paid out of it.)
+	al_adjustable_leaves = len(full_leave_dates) if field_al_enabled else adjusted_leaves
 
 	# Col N: Adjusted from AL
-	if al_enabled:
-		adj_al = adjusted_leaves if effective_al >= adjusted_leaves else effective_al
-		closing_al = al_balance + al_generated - adj_al
+	if al_enabled or field_al_enabled:
+		adj_al = (al_adjustable_leaves if effective_al >= al_adjustable_leaves
+		          else effective_al)
+		if field_al_enabled:
+			# Use-it-or-lose-it: taking ANY approved leave in the period — Leave
+			# Without Pay included — wipes the whole Field AL balance, not just the
+			# days consumed.
+			applied_for_leave = bool(full_leave_dates or half_leave_dates)
+			closing_al = 0.0 if applied_for_leave else (effective_al - adj_al)
+		else:
+			closing_al = al_balance + al_generated - adj_al
 	else:
 		adj_al = 0
 		closing_al = 0
 
-	# Col M: Adjusted from CL
-	if adjusted_leaves > effective_al:
-		uncovered = adjusted_leaves - effective_al
+	# Col M: Adjusted from CL — whatever AL did not already cover.
+	# For Field staff AL may have been spent on LWP days, so the CL side is judged
+	# against the AL actually consumed, not the whole AL balance.
+	al_used_against_leave = adj_al if field_al_enabled else effective_al
+	if field_al_enabled:
+		# AL-only: no CL adjustment for Field staff, whatever leave remains.
+		adj_cl = 0
+	elif adjusted_leaves > al_used_against_leave:
+		uncovered = adjusted_leaves - al_used_against_leave
 		if uncovered >= 2:
-			adj_cl = 2 if cl_balance >= 2 else max(cl_balance, 0)
+			adj_cl = 2 if cl_available >= 2 else max(cl_available, 0)
 		else:
-			adj_cl = uncovered if cl_balance > 0 else 0
+			adj_cl = uncovered if cl_available > 0 else 0
 	else:
 		adj_cl = 0
 
 	# ---- Col O / P: Balances --------------------------------------------------
-	balance_cl = cl_balance - adj_cl
+	# CL earned by working a holiday during THIS period is added back here, the
+	# same way Col P adds al_generated. Without it the credit only surfaces from
+	# the next period, since the opening balance is taken as on from_date and the
+	# credit ledger entry is dated on the holiday.
+	balance_cl = cl_available - adj_cl
 
 	# ---- Col Q: Payable Days -------------------------------------------------
 	# Per observation #23 do NOT clamp negative values.
@@ -1398,7 +1610,6 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"non_holiday_present": non_holiday_present,
 		"qualified_holidays": qualified_holidays,
 		"work_on_holiday": flt(work_on_holiday, 2),
-		"qualified_holidays_strict": qualified_holidays_strict,
 		"false_attendance_count": false_attendance_count,
 		"late_count": late_count,
 		"late_entry_count": late_entry_count,
@@ -1416,6 +1627,8 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"adjusted_from_cl": flt(adj_cl, 2),
 		"adjusted_from_al": flt(adj_al, 2),
 		"balance_cl": flt(balance_cl, 2),
+		# Work-on-holiday CL earned within the period (surfaced in the trace UI)
+		"cl_generated": flt(cl_generated, 2),
 		"closing_al": flt(closing_al, 2),
 		"payable_days": flt(payable_days, 2),
 		"salary_amount": flt(salary_amount, 2),
@@ -1525,7 +1738,20 @@ def _persist_leave_balances(doc):
 			"OTPL Employee Leave Balance", {"employee": r.employee}, "name"
 		)
 		if not bal_name:
-			continue
+			# Field staff earn AL without being seeded in this table, so create the
+			# row on first submit — otherwise their closing AL could never become
+			# next period's opening.
+			if r.staff_type != "Field":
+				continue
+			bal = frappe.get_doc({
+				"doctype": "OTPL Employee Leave Balance",
+				"employee": r.employee,
+				"employee_name": r.employee_name,
+				"al_balance": 0,
+			})
+			bal.flags.ignore_permissions = True
+			bal.insert(ignore_permissions=True)
+			bal_name = bal.name
 		frappe.db.set_value(
 			"OTPL Employee Leave Balance",
 			bal_name,
@@ -1584,10 +1810,15 @@ def get_calculation_trace(doc, employee):
 
 	att_map = _fetch_attendance_aggregates(ids_for_fetch, from_date, to_date)
 	lookahead_map = _fetch_lookahead_presentish(ids_for_fetch, to_date)
+	lookbehind_map = _fetch_lookbehind_presentish(ids_for_fetch, from_date)
 	leave_map = _fetch_approved_leaves(ids_for_fetch, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(emps_for_fetch, from_date, to_date)
+	holiday_margin_by_emp = _fetch_holidays_per_employee(
+		emps_for_fetch, from_date - timedelta(days=7), to_date + timedelta(days=7))
 	balance_map = _fetch_leave_balances(ids_for_fetch)
 	cl_balance_map = _fetch_cl_balances(ids_for_fetch, from_date)
+	cl_generated_map = _fetch_holiday_cl_credits(ids_for_fetch, from_date, to_date)
+	lwp_map = _fetch_lwp_leave_dates(ids_for_fetch, from_date, to_date)
 	tds_map = _fetch_tds(ids_for_fetch, from_date)
 	advance_map = _fetch_advance_balances(ids_for_fetch, from_date, to_date)
 	payable_balance_map = _fetch_payroll_payable_balance(ids_for_fetch, to_date)
@@ -1599,6 +1830,8 @@ def get_calculation_trace(doc, employee):
 	holiday_dates = holidays_by_emp.get(employee, set())
 	balance = balance_map.get(employee, {})
 	cl_bal = cl_balance_map.get(employee, 0.0)
+	cl_gen = cl_generated_map.get(employee, 0.0)
+	lwp = lwp_map.get(employee, set())
 	tds = tds_map.get(employee, 0.0)
 	advance = advance_map.get(employee, {"full": 0.0, "part": 0.0})
 	payable_balance = payable_balance_map.get(employee, 0.0)
@@ -1613,10 +1846,14 @@ def get_calculation_trace(doc, employee):
 			days_in_period=days_in_period,
 			att=att_map.get(parent_id, {}),
 			lookahead_presentish=lookahead_map.get(parent_id, set()),
+			lookbehind_presentish=lookbehind_map.get(parent_id, set()),
 			leaves=leave_map.get(parent_id, {"full_leave_dates": set(), "half_leave_dates": set(), "short_leave_count": 0}),
 			holiday_dates=holidays_by_emp.get(parent_id, set()),
 			balance=balance_map.get(parent_id, {}),
 			cl_balance=cl_balance_map.get(parent_id, 0.0),
+			cl_generated=cl_generated_map.get(parent_id, 0.0),
+			lwp_dates=lwp_map.get(parent_id, set()),
+			neighbour_holidays=holiday_margin_by_emp.get(parent_id, set()),
 			tds=tds_map.get(parent_id, 0.0),
 			advance=advance_map.get(parent_id, {"full": 0.0, "part": 0.0}),
 			payable_balance=payable_balance_map.get(parent_id, 0.0),
@@ -1628,8 +1865,10 @@ def get_calculation_trace(doc, employee):
 		emp, from_date=from_date, to_date=to_date,
 		days_in_period=days_in_period, att=att, leaves=leaves,
 		lookahead_presentish=lookahead_map.get(employee, set()),
+		lookbehind_presentish=lookbehind_map.get(employee, set()),
 		holiday_dates=holiday_dates, balance=balance, tds=tds,
-		advance=advance, cl_balance=cl_bal,
+		advance=advance, cl_balance=cl_bal, cl_generated=cl_gen, lwp_dates=lwp,
+		neighbour_holidays=holiday_margin_by_emp.get(employee, set()),
 		payable_balance=payable_balance,
 		al_eligible=al_eligible,
 		payable_days_override=payable_days_override,
@@ -1639,6 +1878,10 @@ def get_calculation_trace(doc, employee):
 	# --- Pretty-print helpers -------------------------------------------------
 	def _f(v):
 		return "{0:.2f}".format(flt(v))
+
+	# Whatever Col H subtracted beyond the additive terms (Drivers only now).
+	_h_resid = (row["non_holiday_present"] + row["qualified_holidays"]
+	            - 2 * flt(att.get("false_attendance_count", 0)) - row["days_worked"])
 
 	staff_type = emp.get("staff_type")
 	location = emp.get("location")
@@ -1671,6 +1914,7 @@ def get_calculation_trace(doc, employee):
 	full_adv = flt(advance.get("full", 0.0))
 	part_adv = flt(advance.get("part", 0.0))
 
+	is_field_al = (staff_type == "Field")
 	al_reason = []
 	if not is_worker_site:
 		al_reason.append("not Worker@Site")
@@ -1706,7 +1950,10 @@ def get_calculation_trace(doc, employee):
 				         _f(balance.get("year_opening_al") or 0),
 				         _f(al_balance))),
 				("Holiday list dates in period", str(len(holiday_dates))),
-				("AL Calculation", "ENABLED" if al_eligible else ("DISABLED — " + ", ".join(al_reason))),
+				("AL Calculation",
+				 "ENABLED (Field staff rule: AL per holiday worked, forfeited on any leave)"
+				 if is_field_al else
+				 ("ENABLED" if al_eligible else "DISABLED — " + ", ".join(al_reason))),
 			],
 		},
 		{
@@ -1714,10 +1961,14 @@ def get_calculation_trace(doc, employee):
 			"items": [
 				("Attendance Processed (excl. false)", str(len(processed_dates))),
 				("Present days", str(len(present_dates))),
-				("Work on Holiday (CL given, not paid)",
+				("Work on Holiday (CL credited, pay unaffected)",
 				 "{0}  —  {1}".format(
 				     _f(row.get("work_on_holiday", 0)),
-				     "holiday(s) worked (Present=1 / Half Day=0.5) → Casual Leave credited instead of pay"
+				     ("holiday(s) worked (Present=1 / Half Day=0.5). NOT deducted from Days Worked — "
+				      "the day is paid as part of the month; the Casual Leave credit is a comp-off on top"
+				      if staff_type != "Field" else
+				      "holiday(s) worked (Present=1 / Half Day=0.5). Field staff earn NO work-on-holiday "
+				      "Casual Leave; the day is paid as part of the month")
 				     if not is_driver else "N/A (Driver — flat OT instead)")),
 				("Half Days (status = Half Day) — leave half-days only", str(len(half_day_dates))),
 				("Absent days", str(len(absent_dates))),
@@ -1732,6 +1983,8 @@ def get_calculation_trace(doc, employee):
 				("Total working hours (Attendance.working_hours)", "{0:.2f}".format(working_hours)),
 				("Present-ish in next month (first ≤3 days, for end-of-period holidays)",
 				 str(len(lookahead_map.get(employee, set())))),
+				("Present-ish in previous month (last ≤3 days, for start-of-period holidays)",
+				 str(len(lookbehind_map.get(employee, set())))),
 				("False attendances", str(false_count) + " (deducts 2 days each)"),
 			],
 		},
@@ -1747,23 +2000,34 @@ def get_calculation_trace(doc, employee):
 			"section": "Computed Columns",
 			"items": [
 				("(G) AL Generated",
-				 "{0}  —  {1}".format(row["al_generated"],
-				                      "holidays with a present-ish day in BOTH the 3 days before AND the 3 days after"
-				                      if al_eligible else "0 (AL disabled)")),
+				 "{0}  —  {1}".format(
+				     row["al_generated"],
+				     "Field staff: one AL per holiday WORKED (Present=1 / Half Day=0.5); "
+				     "the qualifying/sandwich rule is not used"
+				     if is_field_al else
+				     ("one per qualifying holiday (same rule as Col H)"
+				      if al_eligible else "0 (AL disabled)"))),
 				("(H) Days Worked",
-				 "{dw} = non-holiday present-ish {nhp} + qualifying holidays {qh} − work on holiday {woh} − 2×{fc} false attendance"
+				 "{dw} = non-holiday present-ish {nhp} + qualifying holidays {qh}{drv} − 2×{fc} false attendance"
 				 .format(dw=_f(row["days_worked"]), nhp=row["non_holiday_present"],
 				         qh=row["qualified_holidays"],
-				         woh=_f(row["non_holiday_present"] + row["qualified_holidays"] - 2 * false_count - row["days_worked"]),
+				         drv=(" − driver holidays paid as flat OT {0}".format(_f(_h_resid))
+				              if _h_resid else ""),
 				         fc=false_count)),
 				("    ↳ non-holiday present-ish ({0})".format(row["non_holiday_present"]),
 				 "present {p} + half-day attendance {h} + approved half-day leave {hl}, de-duplicated by date = {nhp}"
 				 "  (a Half Day counts as a FULL day here; its 0.5-day impact is taken separately in Col K)"
 				 .format(p=nh_present, h=nh_half, hl=nh_half_leave, nhp=row["non_holiday_present"])),
 				("    ↳ qualifying holidays ({0})".format(row["qualified_holidays"]),
-				 "{qh} of {th} holiday(s) qualify — present-ish in ANY of the 3 days BEFORE or AFTER "
-				 "(next-month days are included when the period ends on/near a holiday)"
-				 .format(qh=row["qualified_holidays"], th=len(holiday_dates))),
+				 "{qh} of {th} holiday(s) qualify — CONSECUTIVE holidays are bunched into one block, and the "
+				 "employee must be present on AT LEAST ONE of the 3 days BEFORE the block's first holiday AND "
+				 "on AT LEAST ONE of the 3 days AFTER its last (Present / Half Day, or an approved half-day "
+				 "leave; days in the adjacent month are included). The whole block qualifies together. "
+				 "This employee's attendance is processed up to {cut}, so holidays after that date are not "
+				 "counted at all."
+				 .format(qh=row["qualified_holidays"], th=len(holiday_dates),
+				         cut=(max(processed_dates).strftime("%d-%b-%Y")
+				              if processed_dates else "(nothing processed)"))),
 				("(I) Late + Early marks (drives the count rule)",
 				 "{tot} = Late Entry {le} + Early Exit {ee}  →  rule (half≥{h}, full≥{f}, +0.5 beyond {t}) = {lmv} day(s)"
 				 .format(tot=row.get("late_early_total", 0),
@@ -1788,18 +2052,43 @@ def get_calculation_trace(doc, employee):
 				 "{0}  —  Absent (excl. false) − qualifying holidays on absent days ({1})".format(
 				     row["absent_no_info_days"], row.get("absent_on_qualifying_holiday", 0))),
 				("(M) Adjusted from CL",
-				 "{0}  —  approved={1}, AL Bal={2}, CL Bal={3}; CL covers up to 2 of (approved−AL Bal). Absent (Col L) is NOT netted here."
-				 .format(_f(row["adjusted_from_cl"]), approved_full,
-				         _f(al_balance if al_eligible else 0), _f(cl_balance))),
+				 "0.00  —  Field staff are AL-only: no Casual Leave is drawn or reported"
+				 if is_field_al else
+				 ("{0}  —  adjustable={1} (approved full-day {2} − Leave Without Pay {3}), AL Bal={4}, "
+				  "CL available={5} (opening {6} + earned this period {7}); CL covers up to 2 of "
+				  "(adjustable−AL Bal). Absent (Col L) is NOT netted here."
+				  .format(_f(row["adjusted_from_cl"]), approved_full - len(lwp & full_leave_dates),
+				          approved_full, len(lwp & full_leave_dates),
+				          _f(al_balance if al_eligible else 0),
+				          _f(cl_balance + row.get("cl_generated", 0)), _f(cl_balance),
+				          _f(row.get("cl_generated", 0))))),
 				("(N) Adjusted from AL",
-				 "{0}  —  {1}".format(_f(row["adjusted_from_al"]),
-				                      "min(AL Bal {0}, approved {1})".format(_f(al_balance), approved_full)
-				                      if al_eligible else "0 (AL disabled)")),
-				("(O) Balance CL", "{0} = {1} − {2}".format(_f(row["balance_cl"]), _f(cl_balance), _f(row["adjusted_from_cl"]))),
+				 "{0}  —  {1}".format(
+				     _f(row["adjusted_from_al"]),
+				     "min(AL available {0} = opening {1} + earned {2}, leave days {3} incl. LWP)".format(
+				         _f(flt(al_balance) + flt(row["al_generated"])), _f(al_balance),
+				         row["al_generated"], approved_full)
+				     if is_field_al else
+				     ("min(AL Bal {0}, approved {1})".format(_f(al_balance), approved_full)
+				      if al_eligible else "0 (AL disabled)"))),
+				("(O) Balance CL",
+				 "0.00  —  Field staff are AL-only: no Casual Leave balance is carried"
+				 if is_field_al else
+				 "{0} = opening {1} + work-on-holiday CL earned this period {2} − adjusted {3}"
+				 .format(_f(row["balance_cl"]), _f(cl_balance),
+				         _f(row.get("cl_generated", 0)), _f(row["adjusted_from_cl"]))),
 				("(P) Closing AL",
-				 "{0}  —  {1}".format(_f(row["closing_al"]),
-				                      "{0} + {1} − {2}".format(_f(al_balance), row["al_generated"], _f(row["adjusted_from_al"]))
-				                      if al_eligible else "0 (AL disabled)")),
+				 "{0}  —  {1}".format(
+				     _f(row["closing_al"]),
+				     ("0.00 — Field staff forfeit the WHOLE AL balance in any period they take "
+				      "approved leave (use-it-or-lose-it); opening {0} + earned {1} was available"
+				      .format(_f(al_balance), row["al_generated"])
+				      if (leaves.get("full_leave_dates") or leaves.get("half_leave_dates"))
+				      else "{0} + {1} − {2} (no leave taken, balance carries forward)".format(
+				          _f(al_balance), row["al_generated"], _f(row["adjusted_from_al"])))
+				     if is_field_al else
+				     ("{0} + {1} − {2}".format(_f(al_balance), row["al_generated"], _f(row["adjusted_from_al"]))
+				      if al_eligible else "0 (AL disabled)"))),
 				("(Q) Payable Days",
 				 "{0}  —  {1}".format(_f(row["payable_days"]),
 				                       "TAKEN FROM PARENT employee {0} (this employee is set as that employee's dummy_employee)".format(parent_id)
@@ -1814,7 +2103,7 @@ def get_calculation_trace(doc, employee):
 				         days_in_month, _f(row["payable_days"]))),
 				("(S) OT/HRA/Petrol",
 				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
-				                      ("Driver rule (₹): worked qualifying holidays × ₹500 "
+				                      ("Driver rule (₹): holidays actually worked × ₹500 "
 				                       "+ checkout tiers (₹100 per COMPLETED hour after 19:30, so ≤20:30 ₹0 / "
 				                       "≤21:30 ₹100 / ≤22:30 ₹200 / ≤23:30 ₹300; after 23:30 flat ₹700)."
 				                       if is_driver else
