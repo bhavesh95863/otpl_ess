@@ -2557,29 +2557,26 @@ def create_salary_entries(payroll):
 			continue
 		by_vertical[row.business_line].append(row)
 
-	# Fail before creating anything if any vertical or sales order is unconfigured.
-	base_data_by_vertical = _preflight_verticals(sorted(by_vertical.keys()))
+	# Fail before creating anything if any sales order lacks a Cost Center.
 	_preflight_cost_centers(by_vertical, alloc_by_emp, default_so)
 
-	# Expense head follows the sales order's own vertical, not the employee's.
-	order_expense = _fetch_order_expense_accounts(
+	# Cost follows the sales order's own vertical, not the employee's.
+	order_vertical = _fetch_order_verticals(
 		{so for parts in alloc_by_emp.values() for so, _a, _d, _c in parts}
 		| {row.sales_order for rows in by_vertical.values() for row in rows if row.sales_order}
-		| ({default_so} if default_so else set())
 	)
+	# Every vertical that will bear cost needs its own accounts, not just the
+	# ones the employees sit under.
+	bearing = set(by_vertical) | {
+		v for so, v in order_vertical.items() if so != default_so
+	}
+	base_data_by_vertical = _preflight_verticals(sorted(bearing))
 
-	created = []
 	fallback_used = []
-	for vertical, rows in sorted(by_vertical.items()):
-		base = frappe.db.get_value(
-			"Employee Salary Base Data", base_data_by_vertical[vertical],
-			["dr_ledger", "cr_ledger", "employee_in_dr_or_cr_or_both"], as_dict=1,
-		)
-		jv = _build_vertical_journal_entry(
-			doc, vertical, rows, base, alloc_by_emp, settings, default_so,
-			posting_date, fallback_used, order_expense,
-		)
-		created.append(jv)
+	created = _build_journal_entries(
+		doc, by_vertical, alloc_by_emp, settings, default_so, posting_date,
+		fallback_used, order_vertical, base_data_by_vertical,
+	)
 
 	if not created:
 		frappe.throw(_("Nothing to book: no employee had a positive Total Salary Due."))
@@ -2830,15 +2827,13 @@ def _cancel_payroll_bookings(doc):
 
 
 
-def _fetch_order_expense_accounts(sales_orders):
-	"""Salary expense head per sales order, keyed off the ORDER's business line.
+def _fetch_order_verticals(sales_orders):
+	"""{sales_order: business_line} for the orders a payroll touches.
 
 	An employee can work orders belonging to another vertical during the month
-	(a USFD worker spending days on PAUT orders). The wages must land on the
-	expense head of the vertical that owns the ORDER, not the one the employee
-	sits under, otherwise that vertical's P&L carries someone else's cost.
-	Returns {sales_order: expense_account}; orders that cannot be resolved are
-	absent and fall back to the employee's own vertical.
+	(a USFD worker spending days on PAUT orders). The wages, the payable and the
+	voucher itself all follow the vertical that owns the ORDER, so that
+	vertical's P&L carries its own cost and no one else's.
 	"""
 	if not sales_orders:
 		return {}
@@ -2846,18 +2841,7 @@ def _fetch_order_expense_accounts(sales_orders):
 		"""SELECT name, business_line FROM `tabSales Order` WHERE name IN %(so)s""",
 		{"so": tuple(sales_orders)}, as_dict=True,
 	)
-	account_by_vertical = {}
-	for vertical in {r.business_line for r in rows if r.business_line}:
-		base_name, _error = _resolve_salary_due_base_data(vertical)
-		if base_name:
-			account_by_vertical[vertical] = frappe.db.get_value(
-				"Employee Salary Base Data", base_name, "dr_ledger")
-	out = {}
-	for r in rows:
-		account = account_by_vertical.get(r.business_line)
-		if account:
-			out[r.name] = account
-	return out
+	return {r.name: r.business_line for r in rows if r.business_line}
 
 
 def _location_cost_center(location, settings):
@@ -2900,66 +2884,129 @@ def _employee_order_parts(row, alloc_by_emp, default_so, fallback_used):
 	return parts
 
 
-def _build_vertical_journal_entry(doc, vertical, rows, base, alloc_by_emp, settings,
-                                  default_so, posting_date, fallback_used, order_expense):
-	"""One voucher for a vertical: salary by cost center, payable by employee,
-	PF/ESIC on the same entry."""
+def _expense_vertical_for(sales_order, employee_vertical, order_vertical, default_so):
+	"""Which vertical bears this slice of an employee's wages.
+
+	The vertical that owns the SALES ORDER, because that is whose work was done.
+	Two cases fall back to the employee's own vertical: an order with no business
+	line of its own, and the settings-level catch-all order, which stands in for
+	"no order at all" - an employee with no order is their own vertical's
+	overhead, and charging them to whichever vertical that placeholder order
+	happens to belong to would move real cost between P&Ls.
+	"""
+	if not sales_order or sales_order == default_so:
+		return employee_vertical
+	return order_vertical.get(sales_order) or employee_vertical
+
+
+def _build_journal_entries(doc, by_vertical, alloc_by_emp, settings, default_so,
+                           posting_date, fallback_used, order_vertical, base_data_by_vertical):
+	"""One voucher per business vertical, internally consistent.
+
+	Grouping is by the vertical that BEARS the cost, not the one the employee
+	sits under, so a voucher tagged PAUT contains only PAUT's expense head, only
+	PAUT's payable, and only PAUT's cost centers. An employee who worked orders
+	across two verticals therefore appears on two vouchers - each carrying that
+	vertical's share of their wages and, pro-rata, of their PF and ESIC.
+	"""
+	# vertical -> what that vertical's voucher owes
+	expense = defaultdict(lambda: defaultdict(float))    # vertical -> (cc) -> amount
+	credit = defaultdict(lambda: defaultdict(float))     # vertical -> employee -> amount
+	pf_share = defaultdict(lambda: defaultdict(float))   # vertical -> employee -> pf
+	esic_share = defaultdict(lambda: defaultdict(float))
+	main_cc = defaultdict(dict)                          # vertical -> employee -> cost center
+	order_rows = []
+	employee_verticals = {}
+
+	for employee_vertical, rows in by_vertical.items():
+		for row in rows:
+			parts = _employee_order_parts(row, alloc_by_emp, default_so, fallback_used)
+			location_cc = _location_cost_center(row.location, settings)
+			employee_verticals[row.employee] = employee_vertical
+
+			# Split this employee's wages across the verticals that bear them.
+			per_vertical = defaultdict(float)
+			for sales_order, amount, cost_center in parts:
+				cc = cost_center or location_cc
+				vertical = _expense_vertical_for(
+					sales_order, employee_vertical, order_vertical, default_so)
+				if vertical not in base_data_by_vertical:
+					vertical = employee_vertical
+				expense[vertical][cc] += amount
+				per_vertical[vertical] += amount
+				main_cc[vertical].setdefault(row.employee, cc)
+				order_rows.append((row.employee, sales_order, amount, cc, vertical))
+
+			due = flt(row.total_salary_due, 2)
+			for vertical, amount in per_vertical.items():
+				credit[vertical][row.employee] += amount
+
+			# PF and ESIC follow the wages that attracted them, so each voucher
+			# carries the deduction belonging to the cost it booked.
+			verticals = sorted(per_vertical, key=lambda v: (-per_vertical[v], v))
+			ratios = [per_vertical[v] / due for v in verticals] if due else []
+			for label, total, target in (("pf", flt(row.pf_employee_share, 2), pf_share),
+			                             ("esic", flt(row.esic_employee_share, 2), esic_share)):
+				if total <= 0 or not ratios:
+					continue
+				for vertical, part in zip(verticals, _split_amount(total, ratios)):
+					if part:
+						target[vertical][row.employee] += part
+
+	created = []
+	for vertical in sorted(set(expense) | set(credit)):
+		name = _build_one_journal_entry(
+			doc, vertical, base_data_by_vertical[vertical], expense[vertical],
+			credit[vertical], pf_share[vertical], esic_share[vertical],
+			main_cc[vertical], settings, posting_date)
+		created.append(name)
+		_stamp_order_allocations(
+			doc, [r for r in order_rows if r[4] == vertical], name)
+	return created
+
+
+def _build_one_journal_entry(doc, vertical, base_data_name, expense_by_cc, credit_by_emp,
+                             pf_by_emp, esic_by_emp, main_cc, settings, posting_date):
+	base = frappe.db.get_value(
+		"Employee Salary Base Data", base_data_name,
+		["dr_ledger", "cr_ledger"], as_dict=1)
 	expense_account = base.dr_ledger
 	payable_account = base.cr_ledger
 
-	# PF/ESIC follow the vertical, matching the previous per-vertical behaviour.
 	is_haridwar = vertical == "ATW"
 	statutory_cc = settings.get("haridwar_cost_center" if is_haridwar else "noida_cost_center")
 	epf_expense = settings.get("epf_haridwar" if is_haridwar else "epf_noida")
 	esic_expense = settings.get("esic_haridwar" if is_haridwar else "esic_noida")
 
-	salary_by_key = defaultdict(float)   # (expense account, cost center) -> amount
-	order_rows = []
-	credit_lines = []
-	epf_lines, esic_lines = [], []
-	epf_total = esic_total = 0.0
-
-	for row in rows:
-		parts = _employee_order_parts(row, alloc_by_emp, default_so, fallback_used)
-		location_cc = _location_cost_center(row.location, settings)
-		for sales_order, amount, cost_center in parts:
-			cc = cost_center or location_cc
-			account = order_expense.get(sales_order) or expense_account
-			salary_by_key[(account, cc)] += amount
-			order_rows.append((row.employee, sales_order, amount, cc))
-
-		# Largest order's cost centre represents the employee on the payable side.
-		main_cc = max(parts, key=lambda p: abs(p[1]))[2] or location_cc
-		credit_lines.append({
+	accounts = [
+		{"account": expense_account, "debit_in_account_currency": flt(amount, 2), "cost_center": cc}
+		for cc, amount in sorted(expense_by_cc.items(), key=lambda kv: str(kv[0]))
+		if flt(amount, 2)
+	]
+	for employee, amount in sorted(credit_by_emp.items()):
+		if not flt(amount, 2):
+			continue
+		accounts.append({
 			"account": payable_account,
-			"credit_in_account_currency": flt(row.total_salary_due, 2),
-			"party_type": "Employee",
-			"party": row.employee,
-			"cost_center": main_cc,
+			"credit_in_account_currency": flt(amount, 2),
+			"party_type": "Employee", "party": employee,
+			"cost_center": main_cc.get(employee),
 		})
 
-		pf = flt(row.pf_employee_share, 2)
-		if pf > 0:
-			epf_total += pf
-			epf_lines.append({
-				"account": payable_account, "debit_in_account_currency": pf,
-				"party_type": "Employee", "party": row.employee, "cost_center": main_cc,
-			})
-		esic = flt(row.esic_employee_share, 2)
-		if esic > 0:
-			esic_total += esic
-			esic_lines.append({
-				"account": payable_account, "debit_in_account_currency": esic,
-				"party_type": "Employee", "party": row.employee, "cost_center": main_cc,
-			})
+	epf_total = esic_total = 0.0
+	for employee, amount in sorted(pf_by_emp.items()):
+		epf_total += flt(amount, 2)
+		accounts.append({
+			"account": payable_account, "debit_in_account_currency": flt(amount, 2),
+			"party_type": "Employee", "party": employee, "cost_center": main_cc.get(employee),
+		})
+	for employee, amount in sorted(esic_by_emp.items()):
+		esic_total += flt(amount, 2)
+		accounts.append({
+			"account": payable_account, "debit_in_account_currency": flt(amount, 2),
+			"party_type": "Employee", "party": employee, "cost_center": main_cc.get(employee),
+		})
 
-	accounts = [
-		{"account": account, "debit_in_account_currency": flt(amount, 2), "cost_center": cc}
-		for (account, cc), amount in sorted(salary_by_key.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))
-	]
-	accounts += credit_lines + epf_lines + esic_lines
-
-	# Employer contributions, on the same ratios the previous code used.
 	if epf_total > 0:
 		employer = flt((epf_total / 12) * 13, 2)
 		accounts.append({"account": epf_expense, "debit_in_account_currency": employer,
@@ -2992,8 +3039,6 @@ def _build_vertical_journal_entry(doc, vertical, rows, base, alloc_by_emp, setti
 	jv.flags.ignore_permissions = True
 	jv.insert()
 	jv.submit()
-
-	_stamp_order_allocations(doc, order_rows, jv.name)
 	return jv.name
 
 
@@ -3003,7 +3048,7 @@ def _stamp_order_allocations(doc, order_rows, jv_name):
 	index = {}
 	for a in doc.get("order_allocations") or []:
 		index.setdefault((a.employee, a.sales_order), a)
-	for employee, sales_order, _amount, cost_center in order_rows:
+	for employee, sales_order, _amount, cost_center, _vertical in order_rows:
 		alloc = index.get((employee, sales_order))
 		if not alloc:
 			continue
