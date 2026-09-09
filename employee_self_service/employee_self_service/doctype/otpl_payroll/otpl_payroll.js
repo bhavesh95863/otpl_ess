@@ -25,7 +25,18 @@ frappe.ui.form.on('OTPL Payroll', {
 			frm.add_custom_button(__('Retry Salary Entry'), () => create_salary_entries(frm))
 				.addClass('btn-primary');
 		}
+		if (frm.doc.docstatus === 1) {
+			frm.add_custom_button(__('Process TDS Entry'), () => process_tds_entries(frm));
+		}
 		if (frm.doc.docstatus === 1 && frm.doc.salary_entries_created) {
+			frm.add_custom_button(__('TDS Entry'), () => {
+				// TDS vouchers belong to the OTPL TDS register, not to this
+				// payroll, so they are found by the month they were posted in.
+				frappe.set_route('List', 'Journal Entry', {
+					otpl_ref_doctype: 'OTPL TDS',
+					posting_date: frm.doc.to_date,
+				});
+			}, __('View'));
 			frm.add_custom_button(__('Journal Entry'), () => {
 				frappe.set_route('List', 'Journal Entry', {
 					otpl_ref_doctype: 'OTPL Payroll',
@@ -253,6 +264,36 @@ function create_salary_entries(frm) {
 					}
 					frappe.msgprint({ title: __('Salary Entries Created'), message: msg, indicator: 'green' });
 					frm.reload_doc();
+				},
+			});
+		}
+	);
+}
+
+function process_tds_entries(frm) {
+	const month = frappe.datetime.str_to_obj(frm.doc.to_date).toLocaleString('en-US', { month: 'long' });
+	frappe.confirm(
+		__('Post the TDS journal entries for {0} for every employee in this payroll that has an OTPL TDS record?', [month]),
+		() => {
+			frappe.call({
+				method: 'employee_self_service.employee_self_service.doctype.otpl_payroll.otpl_payroll.create_tds_entries',
+				args: { payroll: frm.doc.name },
+				freeze: true,
+				freeze_message: __('Processing TDS Entries...'),
+				callback(r) {
+					if (!r.message) return;
+					const { created = [], skipped = [], month: booked_month } = r.message;
+					const links = created
+						.map((c) => `${c.employee_name || c.employee}: ${format_currency(c.amount)} — `
+							+ `<a href="#Form/Journal Entry/${encodeURIComponent(c.journal_entry)}">${c.journal_entry}</a>`)
+						.join('<br>');
+					let msg = __('Posted {0} TDS entries for {1}:', [created.length, booked_month])
+						+ '<br>' + links;
+					if (skipped.length) {
+						msg += '<br><br><b>' + __('Already posted ({0}):', [skipped.length]) + '</b><br>'
+							+ skipped.join('<br>');
+					}
+					frappe.msgprint({ title: __('TDS Entries'), message: msg, indicator: 'green' });
 				},
 			});
 		}

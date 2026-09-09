@@ -29,6 +29,7 @@ from frappe.utils import cint, cstr, flt, getdate, get_last_day, get_datetime
 from employee_self_service.employee_self_service.utils.daily_attendance import (
 	normalize_half_day_period,
 )
+from employee_self_service.employee_self_service.doctype.otpl_tds.otpl_tds import MONTHS
 
 
 # Constants from the salary spec
@@ -130,8 +131,10 @@ class OTPLPayroll(Document):
 		and drop the draft payment requests raised from it."""
 		# The vouchers point back here via otpl_ref_name, which would otherwise
 		# block cancelling the payroll itself.
-		self.ignore_linked_doctypes = ("Journal Entry", "Salary Payable Request", "GL Entry")
+		self.ignore_linked_doctypes = ("Journal Entry", "Salary Payable Request", "GL Entry",
+		                               "OTPL TDS", "OTPL TDS Detail")
 		_cancel_payroll_bookings(self)
+		_cancel_payroll_tds_entries(self)
 
 
 # -----------------------------------------------------------------------------
@@ -271,6 +274,28 @@ def _fetch_latest_gross_salary(emp_ids, as_on_date):
 	return out
 
 
+
+def _apply_gross_override(employees, gross_override_map):
+	"""Apply Employee Gross Salary records over the Employee-master figures.
+
+	Basic salary has to move with the gross. The Employee Gross Salary form
+	records only a gross amount, and the master's own convention is basic =
+	gross / 2 (it holds for every active employee), so an override that raised
+	the gross used to leave basic behind at the stale master figure. Basic is
+	not merely displayed: it is the PF and ESIC base (within the ESS Location
+	wage bands, and unless the employee carries no_validation), so a stale
+	basic silently mis-states those deductions as well as the breakdown.
+	"""
+	for e in employees:
+		if not e:
+			continue
+		override = gross_override_map.get(e["employee"])
+		if not override:
+			continue
+		e["gross_salary"] = override["amount"]
+		e["basic_salary"] = flt(override["amount"]) / 2.0
+
+
 @frappe.whitelist()
 def calculate_payroll(doc):
 	"""Run the full salary calculation for the doc's filters.
@@ -312,10 +337,7 @@ def calculate_payroll(doc):
 	# Gross salary override: prefer the latest Employee Gross Salary record with
 	# date <= from_date; otherwise keep the Employee-level figure.
 	gross_override_map = _fetch_latest_gross_salary(all_ids, from_date)
-	for e in all_emps:
-		ov = gross_override_map.get(e["employee"])
-		if ov:
-			e["gross_salary"] = ov["amount"]
+	_apply_gross_override(all_emps, gross_override_map)
 
 	# Pull every dependency once, in O(N) grouped queries
 	att_map = _fetch_attendance_aggregates(all_ids, from_date, to_date)
@@ -1995,10 +2017,7 @@ def get_calculation_trace(doc, employee):
 	# Gross salary override (same rule as calculate_payroll): latest Employee
 	# Gross Salary record with date <= from_date, else the Employee field.
 	gross_override_map = _fetch_latest_gross_salary(ids_for_fetch, from_date)
-	for e in emps_for_fetch:
-		ov = gross_override_map.get(e["employee"]) if e else None
-		if ov:
-			e["gross_salary"] = ov["amount"]
+	_apply_gross_override(emps_for_fetch, gross_override_map)
 
 	att_map = _fetch_attendance_aggregates(ids_for_fetch, from_date, to_date)
 	lookahead_map = _fetch_lookahead_presentish(ids_for_fetch, to_date)
@@ -2130,7 +2149,12 @@ def get_calculation_trace(doc, employee):
 					"from Employee Gross Salary dated {0}".format(gross_override_map[employee]["date"].strftime("%d-%b-%Y"))
 					if gross_override_map.get(employee)
 					else "from Employee master (no Employee Gross Salary on/before {0})".format(from_date.strftime("%d-%b-%Y")))),
-				("Basic Salary", _f(emp.get("basic_salary"))),
+				("Basic Salary",
+				 "{0}  —  {1}".format(
+					_f(emp.get("basic_salary")),
+					"half of the Employee Gross Salary amount"
+					if gross_override_map.get(employee)
+					else "from Employee master")),
 				("Wage Bands (ESS Location)",
 				 "Min Wages {0} | Max Wage PF {1} | Max Wage ESIC {2}"
 				 .format(_f(emp.get("min_wages")), _f(emp.get("max_wage_pf")), _f(emp.get("max_wage_esic")))),
@@ -2537,6 +2561,13 @@ def create_salary_entries(payroll):
 	base_data_by_vertical = _preflight_verticals(sorted(by_vertical.keys()))
 	_preflight_cost_centers(by_vertical, alloc_by_emp, default_so)
 
+	# Expense head follows the sales order's own vertical, not the employee's.
+	order_expense = _fetch_order_expense_accounts(
+		{so for parts in alloc_by_emp.values() for so, _a, _d, _c in parts}
+		| {row.sales_order for rows in by_vertical.values() for row in rows if row.sales_order}
+		| ({default_so} if default_so else set())
+	)
+
 	created = []
 	fallback_used = []
 	for vertical, rows in sorted(by_vertical.items()):
@@ -2546,12 +2577,17 @@ def create_salary_entries(payroll):
 		)
 		jv = _build_vertical_journal_entry(
 			doc, vertical, rows, base, alloc_by_emp, settings, default_so,
-			posting_date, fallback_used,
+			posting_date, fallback_used, order_expense,
 		)
 		created.append(jv)
 
 	if not created:
 		frappe.throw(_("Nothing to book: no employee had a positive Total Salary Due."))
+
+	# TDS is deliberately NOT posted here. It stays a manual step - the
+	# Process TDS Entry button, or a voucher keyed by hand - so the payroll
+	# never books a deduction on the user's behalf. The payment request keeps
+	# up regardless: it re-reads the ledger on every save and at submit.
 
 	# Payment side: draft only. Releasing money needs the approval role, the
 	# bucket and the PE naming series, which are human decisions by design.
@@ -2582,6 +2618,191 @@ def create_salary_entries(payroll):
 
 
 
+# -----------------------------------------------------------------------------
+# TDS entries (posted from the OTPL TDS register, separate from the salary JE)
+# -----------------------------------------------------------------------------
+TDS_PURPOSE = "TDS Due"
+
+
+@frappe.whitelist()
+def create_tds_entries(payroll):
+	"""Post the month's TDS for every employee that has an OTPL TDS record.
+
+	The month comes from the payroll's To Date; the amount and the posting date
+	(the last day of that month) come from that month's row on the employee's
+	OTPL TDS document. Employees with no TDS record - or no amount for the month
+	- are simply passed over, and a month already posted is left alone, so the
+	button can be pressed again safely.
+	"""
+	doc = frappe.get_doc("OTPL Payroll", payroll) if isinstance(payroll, str) else payroll
+	if doc.docstatus != 1:
+		frappe.throw(_("Submit the payroll before posting TDS entries."))
+
+	result = _post_tds_entries(doc)
+
+	# Re-read the ledger into the payment requests: TDS debits the same payable
+	# the salary entry credited, so anything already raised is now out of date.
+	result["refreshed"] = _refresh_payable_requests(doc)
+
+	if not result["created"] and not result["skipped"]:
+		frappe.throw(_("No employee in this payroll has an OTPL TDS amount for {0} {1}.")
+		             .format(result["month"], result["fiscal_year"]))
+	return result
+
+
+def _post_tds_entries(doc):
+	"""Post this month's TDS vouchers for the payroll's employees.
+
+	Returns quietly when nobody has a TDS amount, so the payroll submit can call
+	it unconditionally; the button wraps this and complains instead.
+	"""
+	posting_date = getdate(doc.to_date)
+	month = MONTHS[posting_date.month - 1]
+	fiscal_year = _fiscal_year_for(posting_date)
+	settings = frappe.get_doc("OTPL Accounting Settings", "OTPL Accounting Settings")
+
+	created, skipped = [], []
+	for row in doc.employees:
+		tds_name = frappe.db.get_value(
+			"OTPL TDS", {"employee": row.employee, "fiscal_year": fiscal_year}, "name")
+		if not tds_name:
+			continue
+
+		tds_doc = frappe.get_doc("OTPL TDS", tds_name)
+		detail = next((d for d in tds_doc.tds_details
+		               if d.month == month and flt(d.amount) > 0), None)
+		if not detail:
+			continue
+		if _je_is_live(detail.journal_entry):
+			skipped.append(_("{0}: {1} already posted in {2}").format(
+				row.employee, month, detail.journal_entry))
+			continue
+
+		jv = _build_tds_journal_entry(
+			doc, tds_doc, row, detail, getdate(detail.posting_date or doc.to_date), settings)
+		detail.db_set("otpl_payroll", doc.name, update_modified=False)
+		detail.db_set("journal_entry", jv, update_modified=False)
+		created.append({
+			"employee": row.employee,
+			"employee_name": row.employee_name,
+			"amount": flt(detail.amount, 2),
+			"journal_entry": jv,
+		})
+
+	return {"month": month, "fiscal_year": fiscal_year,
+	        "created": created, "skipped": skipped}
+
+
+def _refresh_payable_requests(doc):
+	"""Re-read the ledger into this payroll's draft payment requests.
+
+	Submitted requests are left alone: their payment entries are already out.
+	"""
+	refreshed = []
+	for d in frappe.get_all("Salary Payable Request",
+	                        {"otpl_payroll": doc.name, "docstatus": 0}, ["name"]):
+		try:
+			spr = frappe.get_doc("Salary Payable Request", d.name)
+			spr.flags.ignore_permissions = True
+			spr.refresh_from_ledger()
+			refreshed.append(d.name)
+		except Exception:
+			frappe.log_error(
+				title="OTPL Payroll {0}: could not refresh {1}".format(doc.name, d.name),
+				message=frappe.get_traceback(),
+			)
+	return refreshed
+
+
+def _build_tds_journal_entry(doc, tds_doc, row, detail, posting_date, settings):
+	"""One standalone voucher: the employee's payable debited, TDS payable
+	credited. Accounts come from Employee Salary Base Data exactly as Employee
+	Salary picks them - the vertical's "TDS Due" row - and the cost center from
+	the employee's sales order, falling back to their location.
+	"""
+	base = frappe.db.get_value(
+		"Employee Salary Base Data",
+		{"business_vertical": row.business_line, "purpose": TDS_PURPOSE},
+		["dr_ledger", "cr_ledger", "employee_in_dr_or_cr_or_both"], as_dict=1,
+	)
+	if not base:
+		frappe.throw(_("No '{0}' Employee Salary Base Data for {1} (employee {2}).").format(
+			TDS_PURPOSE, row.business_line or _("(no business line)"), row.employee))
+
+	cost_center = None
+	if row.sales_order:
+		cost_center = frappe.db.get_value("Cost Center", {"sales_order": row.sales_order}, "name")
+	if not cost_center:
+		cost_center = _location_cost_center(row.location, settings)
+
+	amount = flt(detail.amount, 2)
+	debit = {"account": base.dr_ledger, "debit_in_account_currency": amount,
+	         "cost_center": cost_center}
+	credit = {"account": base.cr_ledger, "credit_in_account_currency": amount,
+	          "cost_center": cost_center}
+	if base.employee_in_dr_or_cr_or_both in ("Dr", "Both"):
+		debit["party_type"] = "Employee"
+		debit["party"] = row.employee
+	if base.employee_in_dr_or_cr_or_both in ("Cr", "Both"):
+		credit["party_type"] = "Employee"
+		credit["party"] = row.employee
+
+	jv = frappe.new_doc("Journal Entry")
+	jv.posting_date = posting_date
+	jv.voucher_type = "Journal Entry"
+	jv.company = frappe.db.get_value("Global Defaults", "Global Defaults", "default_company")
+	jv.business_vertical = row.business_line
+	jv.purpose = TDS_PURPOSE
+	jv.user_remark = _("TDS for {0} - {1} ({2})").format(
+		detail.month, row.employee_name or "", row.employee)
+	jv.otpl_ref_doctype = tds_doc.doctype
+	jv.otpl_ref_name = tds_doc.name
+	jv.append("accounts", debit)
+	jv.append("accounts", credit)
+	jv.flags.ignore_mandatory = True
+	jv.flags.ignore_permissions = True
+	jv.insert()
+	jv.submit()
+	return jv.name
+
+
+def _fiscal_year_for(posting_date):
+	fy = frappe.db.sql(
+		"""SELECT name FROM `tabFiscal Year`
+		   WHERE %(d)s BETWEEN year_start_date AND year_end_date LIMIT 1""",
+		{"d": posting_date},
+	)
+	if not fy:
+		frappe.throw(_("No Fiscal Year covers {0}.").format(posting_date))
+	return fy[0][0]
+
+
+def _je_is_live(journal_entry):
+	"""True while the voucher exists and is not cancelled."""
+	if not journal_entry:
+		return False
+	docstatus = frappe.db.get_value("Journal Entry", journal_entry, "docstatus")
+	return docstatus is not None and cint(docstatus) != 2
+
+
+def _cancel_payroll_tds_entries(doc):
+	"""TDS debits the same payable the salary entry credited, so the vouchers
+	this payroll posted cannot outlive it. The rows are freed for a re-run."""
+	rows = frappe.db.sql(
+		"""SELECT name, journal_entry FROM `tabOTPL TDS Detail`
+		   WHERE otpl_payroll = %s AND IFNULL(journal_entry, '') != ''""",
+		doc.name, as_dict=True,
+	)
+	for row in rows:
+		if _je_is_live(row.journal_entry):
+			jv = frappe.get_doc("Journal Entry", row.journal_entry)
+			jv.flags.ignore_permissions = True
+			jv.ignore_linked_doctypes = ("GL Entry", "Stock Ledger Entry", "Payment Ledger Entry")
+			jv.cancel()
+		frappe.db.set_value("OTPL TDS Detail", row.name, "journal_entry", None,
+		                    update_modified=False)
+
+
 def _cancel_payroll_bookings(doc):
 	"""Cancel every journal entry this payroll posted, and remove any payment
 	request still sitting in draft against it."""
@@ -2606,6 +2827,37 @@ def _cancel_payroll_bookings(doc):
 			.format(", ".join(d.name for d in submitted))
 		)
 	doc.db_set("salary_entries_created", 0)
+
+
+
+def _fetch_order_expense_accounts(sales_orders):
+	"""Salary expense head per sales order, keyed off the ORDER's business line.
+
+	An employee can work orders belonging to another vertical during the month
+	(a USFD worker spending days on PAUT orders). The wages must land on the
+	expense head of the vertical that owns the ORDER, not the one the employee
+	sits under, otherwise that vertical's P&L carries someone else's cost.
+	Returns {sales_order: expense_account}; orders that cannot be resolved are
+	absent and fall back to the employee's own vertical.
+	"""
+	if not sales_orders:
+		return {}
+	rows = frappe.db.sql(
+		"""SELECT name, business_line FROM `tabSales Order` WHERE name IN %(so)s""",
+		{"so": tuple(sales_orders)}, as_dict=True,
+	)
+	account_by_vertical = {}
+	for vertical in {r.business_line for r in rows if r.business_line}:
+		base_name, _error = _resolve_salary_due_base_data(vertical)
+		if base_name:
+			account_by_vertical[vertical] = frappe.db.get_value(
+				"Employee Salary Base Data", base_name, "dr_ledger")
+	out = {}
+	for r in rows:
+		account = account_by_vertical.get(r.business_line)
+		if account:
+			out[r.name] = account
+	return out
 
 
 def _location_cost_center(location, settings):
@@ -2649,7 +2901,7 @@ def _employee_order_parts(row, alloc_by_emp, default_so, fallback_used):
 
 
 def _build_vertical_journal_entry(doc, vertical, rows, base, alloc_by_emp, settings,
-                                  default_so, posting_date, fallback_used):
+                                  default_so, posting_date, fallback_used, order_expense):
 	"""One voucher for a vertical: salary by cost center, payable by employee,
 	PF/ESIC on the same entry."""
 	expense_account = base.dr_ledger
@@ -2661,7 +2913,7 @@ def _build_vertical_journal_entry(doc, vertical, rows, base, alloc_by_emp, setti
 	epf_expense = settings.get("epf_haridwar" if is_haridwar else "epf_noida")
 	esic_expense = settings.get("esic_haridwar" if is_haridwar else "esic_noida")
 
-	salary_by_cc = defaultdict(float)
+	salary_by_key = defaultdict(float)   # (expense account, cost center) -> amount
 	order_rows = []
 	credit_lines = []
 	epf_lines, esic_lines = [], []
@@ -2672,7 +2924,8 @@ def _build_vertical_journal_entry(doc, vertical, rows, base, alloc_by_emp, setti
 		location_cc = _location_cost_center(row.location, settings)
 		for sales_order, amount, cost_center in parts:
 			cc = cost_center or location_cc
-			salary_by_cc[cc] += amount
+			account = order_expense.get(sales_order) or expense_account
+			salary_by_key[(account, cc)] += amount
 			order_rows.append((row.employee, sales_order, amount, cc))
 
 		# Largest order's cost centre represents the employee on the payable side.
@@ -2701,8 +2954,8 @@ def _build_vertical_journal_entry(doc, vertical, rows, base, alloc_by_emp, setti
 			})
 
 	accounts = [
-		{"account": expense_account, "debit_in_account_currency": flt(amount, 2), "cost_center": cc}
-		for cc, amount in sorted(salary_by_cc.items(), key=lambda kv: str(kv[0]))
+		{"account": account, "debit_in_account_currency": flt(amount, 2), "cost_center": cc}
+		for (account, cc), amount in sorted(salary_by_key.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))
 	]
 	accounts += credit_lines + epf_lines + esic_lines
 
@@ -2775,12 +3028,16 @@ def _create_salary_payable_requests(doc, verticals, posting_date):
 			# salary back by exact posting_date.
 			spr.date_till_salary_to_calculate = posting_date
 			spr.otpl_payroll = doc.name
-			spr.due_greater_then_zero = 1
+			# Every employee the payroll covered should appear, including those
+			# with nothing to pay this month; filtering by payout was dropping
+			# people the payroll had booked.
+			spr.due_greater_then_zero = 0
 			spr.flags.ignore_permissions = True
 			spr.populate_details()
 			if not spr.get("salary_payable_request_details"):
 				continue
 			spr.insert()
+			spr.populate_details()
 			made.append(spr.name)
 		return made, None
 	except Exception:

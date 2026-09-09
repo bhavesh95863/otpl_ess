@@ -1,0 +1,75 @@
+{
+ "creation": "2026-09-09 12:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "month",
+  "amount",
+  "posting_date",
+  "journal_entry",
+  "otpl_payroll",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "fieldname": "month",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Month",
+   "options": "\nJanuary\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "description": "Frozen once the Journal Entry is made.",
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "TDS Amount",
+   "reqd": 1
+  },
+  {
+   "columns": 2,
+   "description": "Last day of the month, from the Fiscal Year - the date the entry posts on.",
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Posting Date",
+   "read_only": 1
+  },
+  {
+   "columns": 3,
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Journal Entry",
+   "no_copy": 1,
+   "options": "Journal Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "otpl_payroll",
+   "fieldtype": "Link",
+   "label": "OTPL Payroll",
+   "no_copy": 1,
+   "options": "OTPL Payroll",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "istable": 1,
+ "modified": "2026-09-09 12:00:00",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL TDS Detail",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}
