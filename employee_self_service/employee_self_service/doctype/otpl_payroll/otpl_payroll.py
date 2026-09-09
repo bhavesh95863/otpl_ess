@@ -19,6 +19,7 @@ from __future__ import unicode_literals
 from collections import defaultdict
 from calendar import monthrange
 from datetime import timedelta, datetime, time
+from decimal import Decimal
 
 import frappe
 from frappe import _
@@ -114,12 +115,23 @@ class OTPLPayroll(Document):
 			_recompute_row_nets(row)
 
 		_set_totals(self)
+		_sync_order_allocations(self)
 
 	def on_submit(self):
 		"""Persist the closing AL/CL into OTPL Employee Leave Balance so it
-		becomes the opening for the next payroll run.
+		becomes the opening for the next payroll run, then book the payroll
+		into accounting.
 		"""
 		_persist_leave_balances(self)
+		create_salary_entries(self)
+
+	def on_cancel(self):
+		"""Reverse the booking: cancel the journal entries this payroll posted
+		and drop the draft payment requests raised from it."""
+		# The vouchers point back here via otpl_ref_name, which would otherwise
+		# block cancelling the payroll itself.
+		self.ignore_linked_doctypes = ("Journal Entry", "Salary Payable Request", "GL Entry")
+		_cancel_payroll_bookings(self)
 
 
 # -----------------------------------------------------------------------------
@@ -398,7 +410,12 @@ def calculate_payroll(doc):
 			)
 			log_lines.append("{0}: ERROR (see Error Log)".format(emp["employee"]))
 
-	return {"rows": rows, "log": log_lines}
+	# Sales-order wise split of each row's payable days / salary, driven by
+	# the order stamped on each day's Employee Checkin.
+	order_days_map = _fetch_order_days(emp_ids, from_date, to_date)
+	allocations = _build_order_allocations(rows, order_days_map, log_lines)
+
+	return {"rows": rows, "log": log_lines, "allocations": allocations}
 
 
 def _fetch_dummy_parents(emp_ids):
@@ -1094,6 +1111,181 @@ def _fetch_al_eligible_business_lines():
 # -----------------------------------------------------------------------------
 # Per-employee calculation
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Sales-order wise allocation
+# -----------------------------------------------------------------------------
+# Employee Salary Details carries this many sales_order_N / gross_salary_N pairs.
+MAX_ORDER_SLOTS = 10
+
+
+def _fetch_order_days(emp_ids, from_date, to_date):
+	"""Return {employee: {sales_order: worked_days}} for the period.
+
+	The per-day sales order lives on Employee Checkin (`order`), which is
+	stamped on the IN punch. A date is counted once per order even if the
+	employee punched several times, and a date split across two orders
+	contributes half a day to each so the per-employee total still equals
+	the number of distinct days actually worked.
+	"""
+	if not emp_ids:
+		return {}
+	if not frappe.db.has_column("Employee Checkin", "order"):
+		return {}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT employee, DATE(time) AS att_date, `order` AS sales_order
+		FROM `tabEmployee Checkin`
+		WHERE employee IN %(ids)s
+		  AND DATE(time) BETWEEN %(from_date)s AND %(to_date)s
+		  AND IFNULL(`order`, '') != ''
+		GROUP BY employee, DATE(time), `order`
+		""",
+		{"ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
+		as_dict=True,
+	)
+
+	# employee -> date -> set(orders), so a day shared by two orders splits.
+	by_emp_date = defaultdict(lambda: defaultdict(set))
+	for r in rows:
+		by_emp_date[r.employee][r.att_date].add(r.sales_order)
+
+	out = {}
+	for emp, dates in by_emp_date.items():
+		tally = defaultdict(float)
+		for _dt, orders in dates.items():
+			share = 1.0 / len(orders)
+			for so in orders:
+				tally[so] += share
+		out[emp] = dict(tally)
+	return out
+
+
+def _fetch_cost_centers_for_orders(sales_orders):
+	"""Return {sales_order: cost_center} using the Cost Center.sales_order link."""
+	if not sales_orders or not frappe.db.has_column("Cost Center", "sales_order"):
+		return {}
+	rows = frappe.db.sql(
+		"""SELECT sales_order, name FROM `tabCost Center`
+		   WHERE sales_order IN %(so)s AND IFNULL(sales_order, '') != ''""",
+		{"so": tuple(sales_orders)},
+		as_dict=True,
+	)
+	return {r.sales_order: r.name for r in rows}
+
+
+def _split_amount(total, ratios):
+	"""Split ``total`` across ``ratios`` (a list of floats summing to 1.0),
+	rounded to 2dp, with the rounding remainder pushed onto the largest
+	share so the parts always add back to ``total`` exactly.
+
+	Exactness matters: Employee Salary.validate_total rejects a row whose
+	order-wise gross amounts do not sum to the row's total.
+	"""
+	total = flt(total, 2)
+	if not ratios:
+		return []
+	parts = [flt(total * r, 2) for r in ratios]
+	drift = flt(total - sum(parts), 2)
+	if drift:
+		biggest = max(range(len(parts)), key=lambda i: abs(ratios[i]))
+		parts[biggest] = flt(parts[biggest] + drift, 2)
+	return parts
+
+
+def _build_order_allocations(rows, order_days_map, log_lines=None):
+	"""Turn each payroll row into one or more sales-order allocations.
+
+	Payable days include paid leave and holidays, which belong to no single
+	order, so the whole payable figure is apportioned in the same ratio as
+	the days the employee actually checked in against each order. When
+	there is no checkin order data at all, the employee's default sales
+	order (Employee.sales_order) takes the full amount.
+	"""
+	# Resolve cost centers for every order we are about to reference.
+	wanted = set()
+	for r in rows:
+		wanted.update(order_days_map.get(r["employee"], {}).keys())
+		if r.get("sales_order"):
+			wanted.add(r["sales_order"])
+	cc_map = _fetch_cost_centers_for_orders(wanted)
+
+	allocations = []
+	for r in rows:
+		emp = r["employee"]
+		payable_days = flt(r.get("payable_days"))
+		due = flt(r.get("total_salary_due"))
+		salary_amount = flt(r.get("salary_amount"))
+
+		day_tally = dict(order_days_map.get(emp) or {})
+		# Drop non-positive tallies defensively.
+		day_tally = {so: d for so, d in day_tally.items() if flt(d) > 0}
+
+		if not day_tally:
+			default_so = r.get("sales_order")
+			if not default_so:
+				if log_lines is not None:
+					log_lines.append(
+						"{0}: no checkin sales order and no default on Employee "
+						"master - salary not allocated to any order.".format(emp)
+					)
+				continue
+			allocations.append({
+				"employee": emp,
+				"employee_name": r.get("employee_name"),
+				"sales_order": default_so,
+				"cost_center": cc_map.get(default_so),
+				"worked_days": 0.0,
+				"allocated_days": flt(payable_days, 2),
+				"allocation_ratio": 100.0,
+				"salary_amount": flt(salary_amount, 2),
+				"total_salary_due": flt(due, 2),
+				"slot": 1,
+				"source": "Employee Default",
+			})
+			continue
+
+		ordered = sorted(day_tally.items(), key=lambda kv: (-kv[1], kv[0]))
+		folded = False
+		if len(ordered) > MAX_ORDER_SLOTS:
+			# Keep the busiest orders; the tail's days are folded into them
+			# pro-rata below, so no amount is lost.
+			dropped = ordered[MAX_ORDER_SLOTS:]
+			ordered = ordered[:MAX_ORDER_SLOTS]
+			folded = True
+			if log_lines is not None:
+				log_lines.append(
+					"{0}: worked on {1} sales orders, only {2} slots available - "
+					"{3} folded pro-rata into the largest.".format(
+						emp, len(day_tally), MAX_ORDER_SLOTS,
+						", ".join(so for so, _ in dropped),
+					)
+				)
+
+		total_days = sum(d for _so, d in ordered)
+		ratios = [d / total_days for _so, d in ordered]
+		due_parts = _split_amount(due, ratios)
+		salary_parts = _split_amount(salary_amount, ratios)
+		day_parts = _split_amount(payable_days, ratios)
+
+		for i, (so, worked) in enumerate(ordered):
+			allocations.append({
+				"employee": emp,
+				"employee_name": r.get("employee_name"),
+				"sales_order": so,
+				"cost_center": cc_map.get(so),
+				"worked_days": flt(worked, 2),
+				"allocated_days": day_parts[i],
+				"allocation_ratio": flt(ratios[i] * 100.0, 2),
+				"salary_amount": salary_parts[i],
+				"total_salary_due": due_parts[i],
+				"slot": i + 1,
+				"source": "Folded" if folded else "Checkin",
+			})
+
+	return allocations
+
+
 def _calculate_employee(emp, from_date, to_date, days_in_period,
                         att, leaves, holiday_dates,
                         balance, tds, advance,
@@ -2156,3 +2348,534 @@ def get_calculation_trace(doc, employee):
 	]
 	return {"steps": steps}
 
+
+# -----------------------------------------------------------------------------
+# Hand-off to accounting (Employee Salary -> Journal Entries)
+# -----------------------------------------------------------------------------
+def _sync_order_allocations(doc):
+	"""Refresh the order allocation table so it always matches the rows.
+
+	Kept in validate (rather than only at Calculate time) because the user
+	may hand-edit salary figures afterwards; the JEs must follow whatever
+	the sheet actually says.
+	"""
+	if not doc.get("employees"):
+		doc.set("order_allocations", [])
+		return
+
+	emp_ids = [r.employee for r in doc.employees if r.employee]
+	order_days_map = _fetch_order_days(emp_ids, getdate(doc.from_date), getdate(doc.to_date))
+	rows = [
+		{
+			"employee": r.employee,
+			"employee_name": r.employee_name,
+			"sales_order": r.sales_order,
+			"payable_days": r.payable_days,
+			"salary_amount": r.salary_amount,
+			"total_salary_due": r.total_salary_due,
+		}
+		for r in doc.employees
+	]
+	allocations = _build_order_allocations(rows, order_days_map)
+
+	doc.set("order_allocations", [])
+	for a in allocations:
+		doc.append("order_allocations", a)
+
+
+def _resolve_salary_due_base_data(business_vertical):
+	"""Find the Employee Salary Base Data row that books salary expense.
+
+	A vertical has several "Salary Due" base rows (earnest money, inter-company
+	transfers, ...). The one that posts wages is the one crediting that
+	vertical's Payroll Payable from a "Salary and Wages" expense head, which is
+	also the pair Salary Payable Request later reads back off the ledger.
+
+	Returns (base_data_name, error_message); exactly one is set.
+	"""
+	payroll_payable = frappe.db.get_value("Business Line", business_vertical, "payroll_payable")
+	if not payroll_payable:
+		return None, _("Business Line {0} has no Payroll Payable account set.").format(business_vertical)
+
+	name = frappe.db.get_value(
+		"Employee Salary Base Data",
+		{
+			"business_vertical": business_vertical,
+			"purpose": "Salary Due",
+			"cr_ledger": payroll_payable,
+			"dr_ledger": ("like", "Salary and Wages%"),
+		},
+		"name",
+	)
+	if not name:
+		return None, _(
+			"No 'Salary Due' Employee Salary Base Data for {0} crediting {1} "
+			"from a 'Salary and Wages' account."
+		).format(business_vertical, payroll_payable)
+	return name, None
+
+
+def _preflight_cost_centers(by_vertical, alloc_by_emp, default_so):
+	"""Every sales order about to be booked must resolve to a Cost Center.
+
+	The cost centre is fetched from the sales order, via Cost Center.sales_order
+	(Sales Order itself carries no cost centre field). When an order has none,
+	the journal entry would silently fall back to the employee's location or,
+	for Site and Lucknow staff, to the company default - booking site wages to a
+	Noida unit with no warning. Blocking here forces the missing Cost Centers to
+	be created instead of quietly mis-costing the payroll.
+	"""
+	wanted = set()
+	for rows in by_vertical.values():
+		for row in rows:
+			parts = alloc_by_emp.get(row.employee)
+			if parts:
+				wanted.update(so for so, _amt, _d, _cc in parts)
+			elif row.sales_order:
+				wanted.add(row.sales_order)
+	# The settings-level catch-all is deliberately exempt: employees who worked
+	# no order at all are office overhead, and their wages belong on their
+	# location's cost center, not on whichever project that default points at.
+	wanted.discard(default_so)
+	if not wanted:
+		return
+
+	covered = {
+		r.sales_order for r in frappe.db.sql(
+			"""SELECT DISTINCT sales_order FROM `tabCost Center`
+			   WHERE sales_order IN %(so)s AND IFNULL(sales_order, '') != ''""",
+			{"so": tuple(wanted)}, as_dict=True,
+		)
+	}
+	missing = sorted(wanted - covered)
+	if missing:
+		frappe.throw(
+			_("Cost Center not available for the sales order:")
+			+ "<br><br>" + "<br>".join("\u2022 " + so for so in missing),
+			title=_("Cost Center Not Available"),
+		)
+
+
+def _preflight_verticals(verticals):
+	"""Resolve every vertical's base data up front.
+
+	Booking is all-or-nothing: discovering a misconfigured vertical halfway
+	through would leave some verticals posted and the rest not, on a payroll
+	already marked as booked. Collect every problem and report them together so
+	the whole configuration can be fixed in one pass.
+	"""
+	resolved = {}
+	problems = []
+	for vertical in verticals:
+		name, error = _resolve_salary_due_base_data(vertical)
+		if error:
+			problems.append(error)
+		else:
+			resolved[vertical] = name
+	if problems:
+		frappe.throw(
+			_("Cannot book this payroll until these are configured:")
+			+ "<br><br>" + "<br>".join("\u2022 " + p for p in problems),
+			title=_("Salary Accounts Not Configured"),
+		)
+	return resolved
+
+
+@frappe.whitelist()
+def create_salary_entries(payroll):
+	"""Book a submitted payroll straight into the ledger.
+
+	One Journal Entry per business vertical carries the whole month: salary
+	expense debited per cost center (so the sales-order wise split lands on the
+	right order), the payable credited per employee, and the PF/ESIC employee
+	and employer legs on the same voucher. Booking employee-by-employee produced
+	hundreds of near-identical vouchers for a single payroll run; this keeps one
+	reviewable document per vertical.
+
+	Salary Payable Request then reads the balance back off the ledger exactly as
+	before - it matches on party, posting date, the payroll payable account and
+	purpose 'Salary Due', all of which these vouchers still carry.
+
+	Called automatically from on_submit; also exposed as a button so a run that
+	failed on configuration can be retried once the configuration is fixed.
+	"""
+	doc = frappe.get_doc("OTPL Payroll", payroll) if isinstance(payroll, str) else payroll
+	if doc.docstatus != 1:
+		frappe.throw(_("Submit the payroll before creating salary entries."))
+	if doc.get("salary_entries_created"):
+		frappe.throw(
+			_("Salary entries already created for this payroll: {0}").format(
+				doc.get("employee_salary_entries") or "")
+		)
+
+	posting_date = getdate(doc.to_date)
+	settings = frappe.get_doc("OTPL Accounting Settings", "OTPL Accounting Settings")
+	default_so = settings.get("default_sales_order")
+
+	# employee -> [(sales_order, amount, worked_days, cost_center), ...]
+	alloc_by_emp = defaultdict(list)
+	for a in doc.get("order_allocations") or []:
+		if a.sales_order and flt(a.total_salary_due):
+			alloc_by_emp[a.employee].append(
+				(a.sales_order, flt(a.total_salary_due, 2), flt(a.worked_days), a.cost_center)
+			)
+
+	by_vertical = defaultdict(list)
+	skipped = []
+	for row in doc.employees:
+		due = flt(row.total_salary_due, 2)
+		if due <= 0:
+			# Nothing to book: these employees owe the company for the period.
+			skipped.append("{0} (due {1})".format(row.employee, due))
+			continue
+		if not row.business_line:
+			skipped.append("{0} (no business line)".format(row.employee))
+			continue
+		by_vertical[row.business_line].append(row)
+
+	# Fail before creating anything if any vertical or sales order is unconfigured.
+	base_data_by_vertical = _preflight_verticals(sorted(by_vertical.keys()))
+	_preflight_cost_centers(by_vertical, alloc_by_emp, default_so)
+
+	created = []
+	fallback_used = []
+	for vertical, rows in sorted(by_vertical.items()):
+		base = frappe.db.get_value(
+			"Employee Salary Base Data", base_data_by_vertical[vertical],
+			["dr_ledger", "cr_ledger", "employee_in_dr_or_cr_or_both"], as_dict=1,
+		)
+		jv = _build_vertical_journal_entry(
+			doc, vertical, rows, base, alloc_by_emp, settings, default_so,
+			posting_date, fallback_used,
+		)
+		created.append(jv)
+
+	if not created:
+		frappe.throw(_("Nothing to book: no employee had a positive Total Salary Due."))
+
+	# Payment side: draft only. Releasing money needs the approval role, the
+	# bucket and the PE naming series, which are human decisions by design.
+	payable_requests, payable_error = _create_salary_payable_requests(
+		doc, sorted(by_vertical.keys()), posting_date)
+
+	log = [_("Journal Entries: {0}").format(", ".join(created))]
+	if payable_requests:
+		log.append(_("Salary Payable Request (draft): {0}").format(", ".join(payable_requests)))
+	if payable_error:
+		log.append(_("Salary Payable Request not created: {0}").format(payable_error))
+	if skipped:
+		log.append(_("Skipped: {0}").format(", ".join(skipped)))
+	if fallback_used:
+		log.append(_("Booked to the default sales order (no attendance order, no "
+		             "Employee master order): {0}").format(", ".join(fallback_used)))
+
+	doc.db_set("salary_entries_created", 1)
+	doc.db_set("employee_salary_entries", "\n".join(log))
+
+	return {
+		"created": created,
+		"payable_requests": payable_requests,
+		"payable_error": payable_error,
+		"skipped": skipped,
+		"fallback_used": fallback_used,
+	}
+
+
+
+def _cancel_payroll_bookings(doc):
+	"""Cancel every journal entry this payroll posted, and remove any payment
+	request still sitting in draft against it."""
+	for d in frappe.get_all("Salary Payable Request",
+	                        {"otpl_payroll": doc.name, "docstatus": 0}, ["name"]):
+		frappe.delete_doc("Salary Payable Request", d.name, force=1, ignore_permissions=True)
+
+	for d in frappe.get_all("Journal Entry",
+	                        {"otpl_ref_doctype": doc.doctype, "otpl_ref_name": doc.name,
+	                         "docstatus": 1}, ["name"]):
+		jv = frappe.get_doc("Journal Entry", d.name)
+		jv.flags.ignore_permissions = True
+		jv.ignore_linked_doctypes = ("GL Entry", "Stock Ledger Entry", "Payment Ledger Entry")
+		jv.cancel()
+
+	submitted = frappe.get_all("Salary Payable Request",
+	                           {"otpl_payroll": doc.name, "docstatus": 1}, ["name"])
+	if submitted:
+		frappe.msgprint(
+			_("These Salary Payable Requests were already submitted and were left "
+			  "untouched; cancel them separately if the payments must be reversed: {0}")
+			.format(", ".join(d.name for d in submitted))
+		)
+	doc.db_set("salary_entries_created", 0)
+
+
+def _location_cost_center(location, settings):
+	"""Cost center for costs that belong to no sales order (office overhead).
+
+	Only Noida and Haridwar have one; anything else returns None and ERPNext
+	falls back to the company default at submit.
+	"""
+	if location == "Noida":
+		return settings.get("noida_cost_center")
+	if location == "Haridwar":
+		return settings.get("haridwar_cost_center")
+	return None
+
+
+def _employee_order_parts(row, alloc_by_emp, default_so, fallback_used):
+	"""[(sales_order, amount, cost_center)] for one employee, reconciled to the
+	row's Total Salary Due."""
+	due = flt(row.total_salary_due, 2)
+	parts = [(so, amt, cc) for so, amt, _wd, cc in (alloc_by_emp.get(row.employee) or [])]
+	if not parts:
+		fallback = row.sales_order or default_so
+		if not fallback:
+			frappe.throw(
+				_("Employee {0} has no sales order from attendance, no default on the "
+				  "Employee master, and no Default Sales Order in OTPL Accounting "
+				  "Settings.").format(row.employee)
+			)
+		if not row.sales_order:
+			fallback_used.append("{0} -> {1}".format(row.employee, fallback))
+		cc = frappe.db.get_value("Cost Center", {"sales_order": fallback}, "name")
+		parts = [(fallback, due, cc)]
+
+	# The allocation splits Total Salary Due exactly, but a hand-edit after
+	# Calculate can leave a gap; push it onto the largest part.
+	drift = flt(due - sum(p[1] for p in parts), 2)
+	if drift:
+		i = max(range(len(parts)), key=lambda k: abs(parts[k][1]))
+		parts[i] = (parts[i][0], flt(parts[i][1] + drift, 2), parts[i][2])
+	return parts
+
+
+def _build_vertical_journal_entry(doc, vertical, rows, base, alloc_by_emp, settings,
+                                  default_so, posting_date, fallback_used):
+	"""One voucher for a vertical: salary by cost center, payable by employee,
+	PF/ESIC on the same entry."""
+	expense_account = base.dr_ledger
+	payable_account = base.cr_ledger
+
+	# PF/ESIC follow the vertical, matching the previous per-vertical behaviour.
+	is_haridwar = vertical == "ATW"
+	statutory_cc = settings.get("haridwar_cost_center" if is_haridwar else "noida_cost_center")
+	epf_expense = settings.get("epf_haridwar" if is_haridwar else "epf_noida")
+	esic_expense = settings.get("esic_haridwar" if is_haridwar else "esic_noida")
+
+	salary_by_cc = defaultdict(float)
+	order_rows = []
+	credit_lines = []
+	epf_lines, esic_lines = [], []
+	epf_total = esic_total = 0.0
+
+	for row in rows:
+		parts = _employee_order_parts(row, alloc_by_emp, default_so, fallback_used)
+		location_cc = _location_cost_center(row.location, settings)
+		for sales_order, amount, cost_center in parts:
+			cc = cost_center or location_cc
+			salary_by_cc[cc] += amount
+			order_rows.append((row.employee, sales_order, amount, cc))
+
+		# Largest order's cost centre represents the employee on the payable side.
+		main_cc = max(parts, key=lambda p: abs(p[1]))[2] or location_cc
+		credit_lines.append({
+			"account": payable_account,
+			"credit_in_account_currency": flt(row.total_salary_due, 2),
+			"party_type": "Employee",
+			"party": row.employee,
+			"cost_center": main_cc,
+		})
+
+		pf = flt(row.pf_employee_share, 2)
+		if pf > 0:
+			epf_total += pf
+			epf_lines.append({
+				"account": payable_account, "debit_in_account_currency": pf,
+				"party_type": "Employee", "party": row.employee, "cost_center": main_cc,
+			})
+		esic = flt(row.esic_employee_share, 2)
+		if esic > 0:
+			esic_total += esic
+			esic_lines.append({
+				"account": payable_account, "debit_in_account_currency": esic,
+				"party_type": "Employee", "party": row.employee, "cost_center": main_cc,
+			})
+
+	accounts = [
+		{"account": expense_account, "debit_in_account_currency": flt(amount, 2), "cost_center": cc}
+		for cc, amount in sorted(salary_by_cc.items(), key=lambda kv: str(kv[0]))
+	]
+	accounts += credit_lines + epf_lines + esic_lines
+
+	# Employer contributions, on the same ratios the previous code used.
+	if epf_total > 0:
+		employer = flt((epf_total / 12) * 13, 2)
+		accounts.append({"account": epf_expense, "debit_in_account_currency": employer,
+		                 "cost_center": statutory_cc})
+		accounts.append({"account": settings.get("epf_payable"),
+		                 "credit_in_account_currency": flt(epf_total + employer, 2),
+		                 "cost_center": statutory_cc})
+	if esic_total > 0:
+		employer = flt((esic_total / 0.75) * 3.25, 2)
+		accounts.append({"account": esic_expense, "debit_in_account_currency": employer,
+		                 "cost_center": statutory_cc})
+		accounts.append({"account": settings.get("esic_payable"),
+		                 "credit_in_account_currency": flt(esic_total + employer, 2),
+		                 "cost_center": statutory_cc})
+
+	jv = frappe.new_doc("Journal Entry")
+	jv.posting_date = posting_date
+	jv.voucher_type = "Journal Entry"
+	jv.company = frappe.db.get_value("Global Defaults", "Global Defaults", "default_company")
+	jv.business_vertical = vertical
+	# Salary Payable Request keys off this purpose when reading the salary back.
+	jv.purpose = "Salary Due"
+	jv.user_remark = _("Salary for {0} to {1} ({2}) - {3}").format(
+		doc.from_date, doc.to_date, vertical, doc.name)
+	jv.otpl_ref_doctype = doc.doctype
+	jv.otpl_ref_name = doc.name
+	for line in accounts:
+		jv.append("accounts", line)
+	jv.flags.ignore_mandatory = True
+	jv.flags.ignore_permissions = True
+	jv.insert()
+	jv.submit()
+
+	_stamp_order_allocations(doc, order_rows, jv.name)
+	return jv.name
+
+
+def _stamp_order_allocations(doc, order_rows, jv_name):
+	"""Write the voucher and the cost centre actually used back onto the order
+	allocation rows, so the payroll shows where each order's salary was booked."""
+	index = {}
+	for a in doc.get("order_allocations") or []:
+		index.setdefault((a.employee, a.sales_order), a)
+	for employee, sales_order, _amount, cost_center in order_rows:
+		alloc = index.get((employee, sales_order))
+		if not alloc:
+			continue
+		alloc.db_set("journal_entry", jv_name, update_modified=False)
+		if cost_center and alloc.cost_center != cost_center:
+			alloc.db_set("cost_center", cost_center, update_modified=False)
+
+
+def _create_salary_payable_requests(doc, verticals, posting_date):
+	"""Raise a draft Salary Payable Request per vertical.
+
+	Best effort: the journal entries are the point of this run, so a payment
+	request that cannot be built (missing base data, say) is reported rather
+	than allowed to roll the whole posting back.
+	"""
+	made = []
+	try:
+		for vertical in verticals:
+			spr = frappe.new_doc("Salary Payable Request")
+			spr.business_vertical = vertical
+			# Must match the journal entries' posting date: get_from_jv reads the
+			# salary back by exact posting_date.
+			spr.date_till_salary_to_calculate = posting_date
+			spr.otpl_payroll = doc.name
+			spr.due_greater_then_zero = 1
+			spr.flags.ignore_permissions = True
+			spr.populate_details()
+			if not spr.get("salary_payable_request_details"):
+				continue
+			spr.insert()
+			made.append(spr.name)
+		return made, None
+	except Exception:
+		frappe.log_error(
+			title="OTPL Payroll {0}: Salary Payable Request failed".format(doc.name),
+			message=frappe.get_traceback(),
+		)
+		return made, _("see Error Log")
+
+
+# -----------------------------------------------------------------------------
+# Salary sheet download
+# -----------------------------------------------------------------------------
+_SKIP_FIELDTYPES = ("Section Break", "Column Break", "Tab Break", "HTML", "Button")
+
+
+def _sheet_columns(doctype):
+	"""(fieldname, label) for every real column of a child doctype, in the
+	order the form shows them, so the export tracks the doctype definition."""
+	return [
+		(f.fieldname, f.label or f.fieldname)
+		for f in frappe.get_meta(doctype).fields
+		if f.fieldtype not in _SKIP_FIELDTYPES
+	]
+
+
+def _write_sheet(ws, columns, rows, numeric_from=None):
+	from openpyxl.styles import Font, PatternFill
+	from openpyxl.utils import get_column_letter
+
+	header_fill = PatternFill("solid", fgColor="D9E1F2")
+	bold = Font(bold=True)
+
+	for c_idx, (_fn, label) in enumerate(columns, 1):
+		cell = ws.cell(row=1, column=c_idx, value=label)
+		cell.font = bold
+		cell.fill = header_fill
+	ws.freeze_panes = "A2"
+
+	for r_idx, row in enumerate(rows, 2):
+		for c_idx, (fn, _label) in enumerate(columns, 1):
+			value = row.get(fn)
+			if isinstance(value, Decimal):
+				value = float(value)
+			ws.cell(row=r_idx, column=c_idx, value=value)
+
+	# Totals for the numeric columns, so the sheet foots.
+	if rows and numeric_from:
+		total_row = len(rows) + 2
+		ws.cell(row=total_row, column=1, value="TOTAL").font = bold
+		for c_idx, (fn, _label) in enumerate(columns, 1):
+			if fn in numeric_from:
+				col = get_column_letter(c_idx)
+				cell = ws.cell(row=total_row, column=c_idx,
+				               value="=SUM({0}2:{0}{1})".format(col, total_row - 1))
+				cell.font = bold
+
+	for c_idx, (_fn, label) in enumerate(columns, 1):
+		width = max(10, min(32, len(str(label)) + 4))
+		ws.column_dimensions[get_column_letter(c_idx)].width = width
+
+
+@frappe.whitelist()
+def download_salary_sheet(payroll):
+	"""Emit the salary register as a two-sheet workbook: the per-employee
+	sheet, and the sales-order wise split behind it."""
+	from openpyxl import Workbook
+	from io import BytesIO
+
+	doc = frappe.get_doc("OTPL Payroll", payroll)
+	doc.check_permission("read")
+
+	wb = Workbook()
+
+	detail_cols = _sheet_columns("OTPL Payroll Detail")
+	numeric = {
+		fn for fn, _l in detail_cols
+		if frappe.get_meta("OTPL Payroll Detail").get_field(fn).fieldtype
+		in ("Currency", "Float", "Int", "Percent")
+	}
+	ws = wb.active
+	ws.title = "Salary Sheet"
+	_write_sheet(ws, detail_cols, [r.as_dict() for r in doc.employees], numeric)
+
+	alloc_cols = _sheet_columns("OTPL Payroll Order Allocation")
+	alloc_numeric = {"worked_days", "allocated_days", "salary_amount", "total_salary_due"}
+	ws2 = wb.create_sheet("Order Wise")
+	_write_sheet(ws2, alloc_cols,
+	             [r.as_dict() for r in (doc.get("order_allocations") or [])],
+	             alloc_numeric)
+
+	out = BytesIO()
+	wb.save(out)
+
+	frappe.response["type"] = "binary"
+	frappe.response["filecontent"] = out.getvalue()
+	frappe.response["filename"] = "Salary Sheet {0} {1} to {2}.xlsx".format(
+		doc.name, doc.from_date, doc.to_date)

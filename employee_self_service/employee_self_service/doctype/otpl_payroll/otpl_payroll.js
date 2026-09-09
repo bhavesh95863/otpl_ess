@@ -10,6 +10,33 @@ frappe.ui.form.on('OTPL Payroll', {
 		}
 		frm.add_custom_button(__('View Calculation'), () => view_calculation(frm));
 
+		if (!frm.is_new()) {
+			frm.add_custom_button(__('Download Salary Sheet'), () => {
+				open_url_post(frappe.request.url, {
+					cmd: 'employee_self_service.employee_self_service.doctype.otpl_payroll.otpl_payroll.download_salary_sheet',
+					payroll: frm.doc.name,
+				});
+			});
+		}
+
+		if (frm.doc.docstatus === 1 && !frm.doc.salary_entries_created) {
+			// Normally done automatically on submit; this is the retry path
+			// after fixing whatever configuration made it fail.
+			frm.add_custom_button(__('Retry Salary Entry'), () => create_salary_entries(frm))
+				.addClass('btn-primary');
+		}
+		if (frm.doc.docstatus === 1 && frm.doc.salary_entries_created) {
+			frm.add_custom_button(__('Journal Entry'), () => {
+				frappe.set_route('List', 'Journal Entry', {
+					otpl_ref_doctype: 'OTPL Payroll',
+					otpl_ref_name: frm.doc.name,
+				});
+			}, __('View'));
+			frm.add_custom_button(__('Salary Payable Request'), () => {
+				frappe.set_route('List', 'Salary Payable Request', { otpl_payroll: frm.doc.name });
+			}, __('View'));
+		}
+
 		if (frm.doc.from_date && frm.doc.to_date) {
 			const d = frappe.datetime;
 			const days = d.get_diff(frm.doc.to_date, frm.doc.from_date) + 1;
@@ -72,12 +99,19 @@ function calculate_salary(frm) {
 		freeze_message: __('Calculating Salary...'),
 		callback(r) {
 			if (!r.message) return;
-			const { rows = [], log = [] } = r.message;
+			const { rows = [], log = [], allocations = [] } = r.message;
 			frm.clear_table('employees');
 			rows.forEach((row) => {
 				const child = frm.add_child('employees');
 				Object.assign(child, row);
 			});
+			// Previewed here; validate() recomputes them authoritatively on save.
+			frm.clear_table('order_allocations');
+			allocations.forEach((alloc) => {
+				const child = frm.add_child('order_allocations');
+				Object.assign(child, alloc);
+			});
+			frm.refresh_field('order_allocations');
 			frm.refresh_field('employees');
 			if (log && log.length) {
 				frm.set_value('processing_log', log.join('\n'));
@@ -193,3 +227,34 @@ if (row && row.employee) view_calculation(frm, row.employee);
 });
 },
 });
+
+function create_salary_entries(frm) {
+	frappe.confirm(
+		__('Post the salary journal entries (one per business vertical) for this payroll?'),
+		() => {
+			frappe.call({
+				method: 'employee_self_service.employee_self_service.doctype.otpl_payroll.otpl_payroll.create_salary_entries',
+				args: { payroll: frm.doc.name },
+				freeze: true,
+				freeze_message: __('Creating Salary Entries...'),
+				callback(r) {
+					if (!r.message) return;
+					const { created = [], skipped = [], fallback_used = [] } = r.message;
+					const links = created
+						.map((n) => `<a href="/app/journal-entry/${encodeURIComponent(n)}">${n}</a>`)
+						.join('<br>');
+					let msg = __('Posted {0} Journal Entries:', [created.length]) + '<br>' + links;
+					if (skipped.length) {
+						msg += '<br><br><b>' + __('Skipped {0}:', [skipped.length]) + '</b><br>' + skipped.join('<br>');
+					}
+					if (fallback_used.length) {
+						msg += '<br><br><b>' + __('Booked to the default sales order ({0}) - no attendance order and no Employee master order:', [fallback_used.length])
+							+ '</b><br>' + fallback_used.join('<br>');
+					}
+					frappe.msgprint({ title: __('Salary Entries Created'), message: msg, indicator: 'green' });
+					frm.reload_doc();
+				},
+			});
+		}
+	);
+}
