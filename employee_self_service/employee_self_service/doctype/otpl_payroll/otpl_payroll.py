@@ -44,6 +44,23 @@ STD_HOURS_PER_DAY = 8.0
 # Salary hours used to compute the per-hour rate for OT.
 SALARY_HOURS_PER_DAY = 8.0
 
+# --- Holiday qualifying ("sandwich") rule -----------------------------------
+# A holiday is earned when the employee was present around it. The window is
+# counted in WORKING days, NOT calendar days: OTHER HOLIDAYS are stepped over
+# rather than consuming a slot, so the walk always lands on three days the
+# employee was rostered to work.
+#
+# Holidays are the ONLY thing skipped. A day of leave is a working day the
+# employee did not work: it uses up one of the three slots and does not count as
+# presence — so three straight days of leave next to a holiday disqualify it.
+QUALIFY_WORKING_DAYS = 3
+# Hard cap on how far (in calendar days) the walk may travel to collect those
+# working days. It doubles as the margin of neighbouring-month attendance and
+# holiday data that is fetched, so a holiday at the edge of the period is still
+# judged against real data rather than an empty window. Only holidays are
+# skipped, so this only has to clear the longest run of consecutive holidays.
+QUALIFY_MARGIN_DAYS = 21
+
 # --- Driver OT rule (hardcoded per business spec) --------------------------
 # In-station duty ends at 19:30 and OT accrues on COMPLETED hours past it: one
 # minute over is not an hour, so the first ₹100 lands at 20:30. A checkout after
@@ -345,10 +362,13 @@ def calculate_payroll(doc):
 	lookbehind_map = _fetch_lookbehind_presentish(all_ids, from_date)
 	leave_map = _fetch_approved_leaves(all_ids, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(all_emps, from_date, to_date)
-	# Same holidays plus a margin either side, used only to bunch consecutive
-	# holidays that run past the period boundary.
+	# Same holidays plus a margin either side. The qualifying walk steps OVER
+	# holidays, so it must know about the ones just outside the period too —
+	# otherwise a neighbouring-month holiday is mistaken for a working day.
 	holiday_margin_by_emp = _fetch_holidays_per_employee(
-		all_emps, from_date - timedelta(days=7), to_date + timedelta(days=7))
+		all_emps,
+		from_date - timedelta(days=QUALIFY_MARGIN_DAYS),
+		to_date + timedelta(days=QUALIFY_MARGIN_DAYS))
 	balance_map = _fetch_leave_balances(all_ids)
 	cl_balance_map = _fetch_cl_balances(all_ids, from_date)
 	cl_generated_map = _fetch_holiday_cl_credits(all_ids, from_date, to_date)
@@ -592,33 +612,37 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 
 
 def _fetch_lookahead_presentish(emp_ids, to_date):
-	"""Present-ish dates in the 3 calendar days AFTER ``to_date``.
+	"""Present-ish dates in the ``QUALIFY_MARGIN_DAYS`` calendar days AFTER ``to_date``.
 
 	Used only to qualify holidays that fall at (or near) the end of the
-	payroll period: their "3 days following" window spills into the next
+	payroll period: their "3 working days following" window spills into the next
 	month, so the attendance for those next-month days is needed to decide
 	whether the holiday qualifies (Col G / Col H).
+
+	The margin is wider than the 3 working days the rule asks for because the
+	walk STEPS OVER holidays — a run of consecutive holidays right after the
+	period pushes the third working day past the third calendar day.
 
 	Returns dict employee -> set[date] (dates strictly after ``to_date``).
 	"""
 	return _fetch_presentish_in_window(
-		emp_ids, to_date + timedelta(days=1), to_date + timedelta(days=3)
+		emp_ids, to_date + timedelta(days=1), to_date + timedelta(days=QUALIFY_MARGIN_DAYS)
 	)
 
 
 def _fetch_lookbehind_presentish(emp_ids, from_date):
-	"""Present-ish dates in the 3 calendar days BEFORE ``from_date``.
+	"""Present-ish dates in the ``QUALIFY_MARGIN_DAYS`` calendar days BEFORE ``from_date``.
 
 	The mirror image of ``_fetch_lookahead_presentish``: a holiday at (or near)
-	the START of the payroll period has its "3 days preceding" window in the
-	previous month, so without this the employee's late-previous-month
+	the START of the payroll period has its "3 working days preceding" window in
+	the previous month, so without this the employee's late-previous-month
 	attendance is invisible and the holiday is wrongly disqualified (Col G /
 	Col H).
 
 	Returns dict employee -> set[date] (dates strictly before ``from_date``).
 	"""
 	return _fetch_presentish_in_window(
-		emp_ids, from_date - timedelta(days=3), from_date - timedelta(days=1)
+		emp_ids, from_date - timedelta(days=QUALIFY_MARGIN_DAYS), from_date - timedelta(days=1)
 	)
 
 
@@ -1394,50 +1418,67 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	)
 
 	# ---- Qualified holidays --------------------------------------------------
-	# CONSECUTIVE holidays are judged together as ONE block. The block qualifies
-	# when the employee is present on AT LEAST ONE of the 3 days before its FIRST
-	# holiday AND on AT LEAST ONE of the 3 days after its LAST holiday. Every
-	# holiday in the block then qualifies, or none of them does.
-	#
-	# e.g. 15th + 16th are consecutive: the windows are 12/13/14 and 17/18/19.
+	# A holiday qualifies when the employee was present on AT LEAST ONE of the 3
+	# WORKING days BEFORE it AND on AT LEAST ONE of the 3 WORKING days AFTER it.
 	# One present day on each side is enough — not every day.
 	#
-	# Without the bunching each holiday of a run would be judged on its own and
-	# find only its neighbouring holidays in the window, so a run of 2+ holidays
-	# could never qualify however much the employee worked around it.
+	# The window is counted in WORKING days, not calendar days, and OTHER
+	# HOLIDAYS are the ONLY thing stepped over: walking outwards from the
+	# holiday, a date that is itself a holiday does not consume one of the three
+	# slots, so the walk always lands on three days the employee was rostered to
+	# work.
+	#
+	# e.g. Sat 15th is a holiday and so is Sun 16th: the three working days after
+	# the 15th are Mon 17th, Tue 18th and Wed 19th.
+	#
+	# EVERY other day spends a slot, leave included. A day of approved leave is a
+	# working day the employee did not work — it is not presence, and it is not
+	# skipped either. So if all three working days on one side are leave days,
+	# the holiday does NOT qualify; one present day among them is enough.
+	#
+	# Skipping holidays also makes the old "bunch consecutive holidays into one
+	# block" step unnecessary: every holiday in a run steps over the rest of the
+	# run and lands on exactly the same three working days either side, so a run
+	# still qualifies (or fails) as one.
 	#
 	# "Present" here is present-ish: Present or Half Day attendance, or an
 	# approved half-day leave (the other half was worked). An Absent, a full-day
-	# leave or a day with no attendance record is simply not presence — none of
-	# them actively disqualifies, they just fail to support. Days either side
-	# that fall outside the payroll period come from lookbehind_presentish /
-	# lookahead_presentish, so a block at the edge of the month is judged on
-	# real data.
+	# leave, or a day with no attendance record all spend a slot without being
+	# presence — none of them actively disqualifies, they just fail to support.
+	#
+	# Dates either side that fall outside the payroll period come from
+	# lookbehind_presentish / lookahead_presentish, and the holidays to skip out
+	# there from neighbour_holidays, so a holiday at the edge of the month is
+	# judged on real data.
 	#
 	# This one rule drives BOTH Col H (Days Worked) and Col G (AL Generated).
+	holidays_to_skip = holiday_dates | (neighbour_holidays or set())
 
-	# Holidays just outside the period are folded in ONLY to form the blocks (they
-	# are never counted), so a run straddling the period boundary is not cut in
-	# half and judged against a window that lands on its own continuation.
-	def _holiday_blocks(dates):
-		blocks = []
-		for d in sorted(dates):
-			if blocks and (d - blocks[-1][-1]).days == 1:
-				blocks[-1].append(d)
-			else:
-				blocks.append([d])
-		return blocks
+	def _working_days_around(h, step):
+		"""The next ``QUALIFY_WORKING_DAYS`` working dates from ``h``, walking
+		backwards (step=-1) or forwards (step=+1) over holidays.
 
-	qualifying_block_dates = set()
-	for _blk in _holiday_blocks(holiday_dates | (neighbour_holidays or set())):
-		_first, _last = _blk[0], _blk[-1]
-		_before = any((_first - timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
-		_after = any((_last + timedelta(days=k)) in presentish_dates for k in (1, 2, 3))
-		if _before and _after:
-			qualifying_block_dates.update(_blk)
+		The walk gives up after ``QUALIFY_MARGIN_DAYS`` calendar days — the span
+		for which neighbouring holiday / attendance data was fetched — and
+		returns whatever it found, so it can never run off into dates it has no
+		data for.
+		"""
+		found = []
+		d = h
+		for _ in range(QUALIFY_MARGIN_DAYS):
+			d = d + timedelta(days=step)
+			if d in holidays_to_skip:
+				continue
+			found.append(d)
+			if len(found) == QUALIFY_WORKING_DAYS:
+				break
+		return found
 
 	def _holiday_window_qualifies(h):
-		return h in qualifying_block_dates
+		before = _working_days_around(h, -1)
+		after = _working_days_around(h, 1)
+		return (any(d in presentish_dates for d in before)
+		        and any(d in presentish_dates for d in after))
 
 	# A holiday can only be judged once the employee's attendance has actually
 	# been processed that far, so the count stops at their last processed day.
@@ -2025,7 +2066,9 @@ def get_calculation_trace(doc, employee):
 	leave_map = _fetch_approved_leaves(ids_for_fetch, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(emps_for_fetch, from_date, to_date)
 	holiday_margin_by_emp = _fetch_holidays_per_employee(
-		emps_for_fetch, from_date - timedelta(days=7), to_date + timedelta(days=7))
+		emps_for_fetch,
+		from_date - timedelta(days=QUALIFY_MARGIN_DAYS),
+		to_date + timedelta(days=QUALIFY_MARGIN_DAYS))
 	balance_map = _fetch_leave_balances(ids_for_fetch)
 	cl_balance_map = _fetch_cl_balances(ids_for_fetch, from_date)
 	cl_generated_map = _fetch_holiday_cl_credits(ids_for_fetch, from_date, to_date)
@@ -2235,13 +2278,18 @@ def get_calculation_trace(doc, employee):
 				 "  (a Half Day counts as a FULL day here; its 0.5-day impact is taken separately in Col K)"
 				 .format(p=nh_present, h=nh_half, hl=nh_half_leave, nhp=row["non_holiday_present"])),
 				("    ↳ qualifying holidays ({0})".format(row["qualified_holidays"]),
-				 "{qh} of {th} holiday(s) qualify — CONSECUTIVE holidays are bunched into one block, and the "
-				 "employee must be present on AT LEAST ONE of the 3 days BEFORE the block's first holiday AND "
-				 "on AT LEAST ONE of the 3 days AFTER its last (Present / Half Day, or an approved half-day "
-				 "leave; days in the adjacent month are included). The whole block qualifies together. "
+				 "{qh} of {th} holiday(s) qualify — the employee must be present on AT LEAST ONE of the "
+				 "{n} WORKING days BEFORE the holiday AND on AT LEAST ONE of the {n} WORKING days AFTER it "
+				 "(Present / Half Day, or an approved half-day leave; days in the adjacent month are "
+				 "included). The window counts WORKING days: other HOLIDAYS are SKIPPED OVER and do not use "
+				 "up a slot, so the walk lands on the next {n} days the employee was rostered to work. "
+				 "Holidays are the ONLY thing skipped — a leave day, an Absent day, or a day with no "
+				 "attendance marked all USE UP a slot without counting as presence, so {n} straight leave "
+				 "days on one side disqualify the holiday. "
 				 "This employee's attendance is processed up to {cut}, so holidays after that date are not "
 				 "counted at all."
 				 .format(qh=row["qualified_holidays"], th=len(holiday_dates),
+				         n=QUALIFY_WORKING_DAYS,
 				         cut=(max(processed_dates).strftime("%d-%b-%Y")
 				              if processed_dates else "(nothing processed)"))),
 				("(I) Late + Early marks (drives the count rule)",

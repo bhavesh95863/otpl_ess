@@ -1,0 +1,39 @@
+{
+ "creation": "2026-09-10 12:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "employee",
+  "employee_name",
+  "current_balance",
+  "new_balance",
+  "adjustment",
+  "leave_taken_after",
+  "balance_after",
+  "allocation_from_date",
+  "allocation_to_date",
+  "remarks"
+ ],
+ "fields": [
+  {"fieldname": "employee", "fieldtype": "Link", "options": "Employee", "label": "Employee", "reqd": 1, "in_list_view": 1, "columns": 1},
+  {"fieldname": "employee_name", "fieldtype": "Data", "label": "Employee Name", "read_only": 1, "in_list_view": 1, "columns": 2},
+  {"fieldname": "current_balance", "fieldtype": "Float", "label": "Current Balance", "precision": "2", "read_only": 1, "in_list_view": 1, "columns": 1, "description": "Casual Leave balance the system currently shows as on the effective date, before any leave dated on/after it."},
+  {"fieldname": "new_balance", "fieldtype": "Float", "label": "New Balance", "precision": "2", "in_list_view": 1, "columns": 1, "description": "Opening Casual Leave balance the employee should have as on the effective date."},
+  {"fieldname": "adjustment", "fieldtype": "Float", "label": "Adjustment", "precision": "2", "read_only": 1, "in_list_view": 1, "columns": 1, "description": "New Balance - Current Balance. Posted to the leave ledger on submit."},
+  {"fieldname": "leave_taken_after", "fieldtype": "Float", "label": "CL Taken On/After", "precision": "2", "read_only": 1, "in_list_view": 1, "columns": 1, "description": "Casual Leave days already booked on/after the effective date. Untouched by this tool."},
+  {"fieldname": "balance_after", "fieldtype": "Float", "label": "Balance Today", "precision": "2", "read_only": 1, "in_list_view": 1, "columns": 1, "description": "New Balance - CL Taken On/After: what the system will show once this document is submitted."},
+  {"fieldname": "allocation_from_date", "fieldtype": "Date", "label": "Allocation From", "read_only": 1, "hidden": 1},
+  {"fieldname": "allocation_to_date", "fieldtype": "Date", "label": "Allocation To", "read_only": 1, "hidden": 1},
+  {"fieldname": "remarks", "fieldtype": "Small Text", "label": "Remarks"}
+ ],
+ "modified": "2026-09-10 12:00:00",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Casual Leave Adjustment Detail",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

@@ -5,14 +5,15 @@ from frappe.utils import getdate, get_first_day, get_last_day, date_diff, add_da
 
 # Detection / repair window (inclusive). Casual Leave applications whose
 # from_date falls in this range are examined.
-FROM_DATE = "2026-01-01"
-TO_DATE = "2026-12-31"
+FROM_DATE = "2026-08-01"
+TO_DATE = "2026-08-31"
 
 MONTHLY_CL_CAP = 2.0
 AUTO_STAMP_PREFIX = "Auto-created from OTPL Leave:"
 
 
 def execute():
+    return
     """Re-split already-approved leaves that exceed the 2-Casual-Leave-days-per-
     calendar-month cap.
 
