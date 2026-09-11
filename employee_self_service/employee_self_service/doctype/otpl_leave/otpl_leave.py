@@ -814,11 +814,55 @@ class OTPLLeave(Document):
 		if half_day and half_day_date:
 			leave_app.half_day_date = half_day_date
 
+		self._allow_ledger_only_allocation(leave_app)
+
 		leave_app.insert(ignore_permissions=True)
 		leave_app.submit()
 
 		# Store reference to created leave application
 		self.add_leave_application_reference(leave_app.name)
+
+	def _allow_ledger_only_allocation(self, leave_app):
+		"""Let a Leave Application through when the balance exists as a Leave Ledger
+		Entry but no Leave Allocation document covers the dates.
+
+		ERPNext's validate_dates_across_allocation() demands a submitted Leave
+		Allocation spanning the application dates. An employee whose Casual Leave
+		balance was granted by OTPL Casual Leave Adjustment has that balance in the
+		ledger ONLY — the adjustment deliberately posts a Leave Ledger Entry instead
+		of a Leave Allocation, because ERPNext refuses an allocation overlapping an
+		existing one. Without this, such an employee could never be given Casual
+		Leave: every day would fall through to Leave Without Pay even though the
+		balance is real and payroll honours it.
+
+		The bypass is deliberately narrow — it applies only when NO allocation covers
+		either end of the application (the exact case ERPNext rejects as "outside
+		leave allocation period") AND the ledger balance actually covers the days
+		requested. Every other validation, the balance check included, still runs.
+		"""
+		if leave_app.leave_type == "Leave Without Pay":
+			return
+		if frappe.db.get_value("Leave Type", leave_app.leave_type, "allow_negative"):
+			return   # ERPNext skips the check itself in this case
+
+		def _allocation_on(date):
+			return frappe.db.sql("""select name from `tabLeave Allocation`
+				where employee=%s and leave_type=%s and docstatus=1
+				and %s between from_date and to_date""",
+				(leave_app.employee, leave_app.leave_type, date))
+
+		if _allocation_on(leave_app.from_date) or _allocation_on(leave_app.to_date):
+			return   # a real allocation exists; leave ERPNext's check alone
+
+		balance = flt(get_leave_balance_on(
+			employee=leave_app.employee,
+			leave_type=leave_app.leave_type,
+			date=getdate(leave_app.from_date),
+			consider_all_leaves_in_the_allocation_period=True
+		) or 0)
+		if balance >= flt(leave_app.total_leave_days):
+			# Shadows the bound method on this instance only.
+			leave_app.validate_dates_across_allocation = lambda: None
 
 	def add_leave_application_reference(self, leave_app_name):
 		"""Add leave application reference to the list"""

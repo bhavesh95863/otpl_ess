@@ -62,36 +62,55 @@ QUALIFY_WORKING_DAYS = 3
 QUALIFY_MARGIN_DAYS = 21
 
 # --- Driver OT rule (hardcoded per business spec) --------------------------
-# In-station duty ends at 19:30 and OT accrues on COMPLETED hours past it: one
-# minute over is not an hour, so the first ₹100 lands at 20:30. A checkout after
-# 23:30 is the max ₹700 (₹500 for the hours + a flat ₹200 late-night addition).
-# A worked qualifying holiday is a flat ₹500. Drivers have no Travelling CL /
-# out-of-station rule anymore, so every non-holiday working day uses the tier.
+# Duty ends at 19:30 and OT is banded by the hour the driver PUNCHES OUT in —
+# the hour is paid as soon as it is entered, not once it is completed. So a
+# checkout at 19:31 already earns the first ₹100, where the old
+# completed-hours rule paid nothing until 20:30.
+#
+#     19:30 – 20:30 -> ₹100
+#     20:30 – 21:30 -> ₹200
+#     21:30 – 22:30 -> ₹300
+#     22:30 – 23:30 -> ₹400
+#     after 23:30   -> ₹700 flat, and the hourly bands do NOT apply on top
+#
+# The bands apply whether the driver was local or out of station. A holiday the
+# driver actually worked is a flat ₹700 instead of the day's bands, again local
+# or out of station.
 DRIVER_OT_FLAT = 700.0
-# Flat OT for a qualifying holiday the driver actually worked.
-DRIVER_HOLIDAY_OT = 500.0
+# Flat OT for a holiday the driver actually worked. NOTE: this is paid for EVERY
+# worked holiday, not only the ones that pass the qualifying (sandwich) rule —
+# longstanding behaviour, unchanged here. Only the QUALIFYING ones are netted
+# back out of Days Worked, since only those were counted into it.
+DRIVER_HOLIDAY_OT = 700.0
+# Value of each hourly band entered past the duty end.
+DRIVER_OT_PER_HOUR = 100.0
+# Flat allowance for a WORKING day the driver spent out of station. It is an
+# allowance for being away, not overtime, so it stacks ON TOP of whatever the
+# checkout earned that day — including the flat ₹700 for a post-23:30 punch-out
+# (the "after 11.30 pm" rule cancels the hourly bands, not this). Holidays are
+# out of scope: a worked holiday already pays its own flat rate, local or away.
+DRIVER_OUT_OF_STATION_OT = 200.0
 DRIVER_DUTY_END = time(19, 30)
-# Absolute clock time past which the flat ₹700 applies. Anchored to the rule's
-# own wording ("after 11.30 pm"), not to the hour count, because the ₹200 on top
-# is a late-night addition rather than another hour of OT.
+# Absolute clock time past which the flat ₹700 applies, replacing the bands.
 DRIVER_OT_MAX_AFTER = time(23, 30)
+# Upper edge of each hourly band, in order. Entering a band pays for it.
+DRIVER_OT_BAND_ENDS = (time(20, 30), time(21, 30), time(22, 30), time(23, 30))
 
 
 def _driver_checkout_ot(checkout_dt, att_date):
-	"""In-station Driver OT for a single day's checkout time (hardcoded tiers).
+	"""Driver OT for a single day's checkout time (hardcoded bands).
 
-	OT is earned per COMPLETED hour after the 19:30 duty end, so a checkout at
-	19:31 — or 19:30:48 — earns nothing; the first ₹100 needs a full hour:
+	₹100 for each hourly band the punch-out falls in, counted from the 19:30
+	duty end. The hour is paid on ENTRY, not on completion:
 
-	    <= 20:30 -> ₹0      (under an hour past duty end)
-	    <= 21:30 -> ₹100    (1 completed hour)
-	    <= 22:30 -> ₹200    (2)
-	    <= 23:30 -> ₹300    (3)
-	    >  23:30 -> ₹700    (flat max: ₹500 for the hours + ₹200 late night)
+	    <= 19:30 -> ₹0      (not past duty end)
+	    <= 20:30 -> ₹100    (punched out in the first hour)
+	    <= 21:30 -> ₹200
+	    <= 22:30 -> ₹300
+	    <= 23:30 -> ₹400
+	    >  23:30 -> ₹700    (flat; the bands do not apply as well)
 
-	The ₹700 stays anchored to "after 23:30", so the ₹400 step the old
-	hour-STARTED banding produced no longer occurs — 23:30 goes straight to the
-	flat max.
+	Applies to local and out-of-station days alike.
 
 	Boundaries are computed as datetimes on ``att_date`` so a checkout after
 	midnight (next-day timestamp) correctly lands in the after-23:30 band."""
@@ -106,13 +125,12 @@ def _driver_checkout_ot(checkout_dt, att_date):
 	# Tested first: a next-day (post-midnight) timestamp is past every boundary.
 	if c > at(DRIVER_OT_MAX_AFTER):
 		return DRIVER_OT_FLAT
-	if c <= at(time(20, 30)):
+	if c <= at(DRIVER_DUTY_END):
 		return 0.0
-	if c <= at(time(21, 30)):
-		return 100.0
-	if c <= at(time(22, 30)):
-		return 200.0
-	return 300.0
+	for i, band_end in enumerate(DRIVER_OT_BAND_ENDS):
+		if c <= at(band_end):
+			return DRIVER_OT_PER_HOUR * (i + 1)
+	return DRIVER_OT_PER_HOUR * len(DRIVER_OT_BAND_ENDS)
 
 
 # -----------------------------------------------------------------------------
@@ -361,6 +379,7 @@ def calculate_payroll(doc):
 	lookahead_map = _fetch_lookahead_presentish(all_ids, to_date)
 	lookbehind_map = _fetch_lookbehind_presentish(all_ids, from_date)
 	leave_map = _fetch_approved_leaves(all_ids, from_date, to_date)
+	travelling_map = _fetch_travelling_dates(all_ids, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(all_emps, from_date, to_date)
 	# Same holidays plus a margin either side. The qualifying walk steps OVER
 	# holidays, so it must know about the ones just outside the period too —
@@ -404,6 +423,7 @@ def calculate_payroll(doc):
 			cl_generated=cl_generated_map.get(emp_id, 0.0),
 			lwp_dates=lwp_map.get(emp_id, set()),
 			neighbour_holidays=holiday_margin_by_emp.get(emp_id, set()),
+			travelling_dates=travelling_map.get(emp_id, set()),
 			tds=tds_map.get(emp_id, 0.0),
 			advance=advance_map.get(emp_id, {"full": 0.0, "part": 0.0}),
 			payable_balance=payable_balance_map.get(emp_id, 0.0),
@@ -437,6 +457,7 @@ def calculate_payroll(doc):
 				cl_generated=cl_generated_map.get(eid, 0.0),
 				lwp_dates=lwp_map.get(eid, set()),
 				neighbour_holidays=holiday_margin_by_emp.get(eid, set()),
+				travelling_dates=travelling_map.get(eid, set()),
 				tds=tds_map.get(eid, 0.0),
 				advance=advance_map.get(eid, {"full": 0.0, "part": 0.0}),
 				payable_balance=payable_balance_map.get(eid, 0.0),
@@ -644,6 +665,45 @@ def _fetch_lookbehind_presentish(emp_ids, from_date):
 	return _fetch_presentish_in_window(
 		emp_ids, from_date - timedelta(days=QUALIFY_MARGIN_DAYS), from_date - timedelta(days=1)
 	)
+
+
+def _fetch_travelling_dates(emp_ids, from_date, to_date):
+	"""Dates in the period on which each employee was out of station, taken from
+	approved Travelling CL requests (a request covers from_date..to_date).
+
+	Only the Driver out-of-station allowance reads this today. A request that is
+	still Pending — or was Rejected / Cancelled — is not out-of-station time: the
+	allowance is paid on approval, like every other approved-leave-driven number
+	in this file.
+
+	Returns dict employee -> set[date].
+	"""
+	out = defaultdict(set)
+	if not emp_ids:
+		return out
+
+	rows = frappe.db.sql(
+		"""
+		SELECT employee, from_date, to_date
+		FROM `tabTravelling CL`
+		WHERE employee IN %(emp_ids)s
+		  AND status = 'Approved'
+		  AND from_date IS NOT NULL
+		  AND to_date IS NOT NULL
+		  AND from_date <= %(to_date)s
+		  AND to_date   >= %(from_date)s
+		""",
+		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
+		as_dict=True,
+	)
+	for r in rows:
+		d = max(getdate(r.from_date), from_date)
+		end = min(getdate(r.to_date), to_date)
+		while d <= end:
+			out[r.employee].add(d)
+			d += timedelta(days=1)
+
+	return out
 
 
 def _fetch_presentish_in_window(emp_ids, window_start, window_end):
@@ -1342,7 +1402,8 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
                         lookahead_presentish=None,
                         lookbehind_presentish=None,
                         lwp_dates=None,
-                        neighbour_holidays=None):
+                        neighbour_holidays=None,
+                        travelling_dates=None):
 	gross = flt(emp.get("gross_salary"))
 	basic = flt(emp.get("basic_salary"))
 	staff_type = emp.get("staff_type")
@@ -1721,11 +1782,14 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# worked, so it must not inflate OT hours either.
 	ot_hra_petrol = 0.0
 	ot_hours = 0.0
+	driver_out_of_station_days = 0
 	if is_driver:
 		# Driver OT (hardcoded rupee rule) — REPLACES the hours-based OT:
-		#   * Worked qualifying holiday   -> flat ₹500
-		#   * Working day                 -> checkout tier
+		#   * Worked holiday  -> flat ₹700 (local or out of station)
+		#   * Working day     -> checkout band (local or out of station),
+		#                        plus ₹200 if the day was spent out of station
 		checkout_by_date = att.get("checkout_by_date", {})
+		travel_dates = travelling_dates or set()
 		driver_ot = 0.0
 		for d in driver_worked_qh:
 			driver_ot += DRIVER_HOLIDAY_OT
@@ -1733,6 +1797,12 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 			if d in holiday_dates:
 				continue   # worked holiday handled above
 			driver_ot += _driver_checkout_ot(checkout_by_date.get(d), d)
+			# Out of station: a flat allowance on top of whatever the punch-out
+			# earned. Holidays are excluded — they took the flat holiday rate
+			# above, which already covers local and out-of-station alike.
+			if d in travel_dates:
+				driver_ot += DRIVER_OUT_OF_STATION_OT
+				driver_out_of_station_days += 1
 		ot_hra_petrol = driver_ot
 	elif ot_eligible and gross and days_in_month:
 		ot_hours = (
@@ -1865,6 +1935,8 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		"non_holiday_present": non_holiday_present,
 		"qualified_holidays": qualified_holidays,
 		"work_on_holiday": flt(work_on_holiday, 2),
+		# Driver out-of-station working days (surfaced in the calculation trace UI)
+		"driver_out_of_station_days": driver_out_of_station_days,
 		"false_attendance_count": false_attendance_count,
 		"late_count": late_count,
 		"late_entry_count": late_entry_count,
@@ -2064,6 +2136,7 @@ def get_calculation_trace(doc, employee):
 	lookahead_map = _fetch_lookahead_presentish(ids_for_fetch, to_date)
 	lookbehind_map = _fetch_lookbehind_presentish(ids_for_fetch, from_date)
 	leave_map = _fetch_approved_leaves(ids_for_fetch, from_date, to_date)
+	travelling_map = _fetch_travelling_dates(ids_for_fetch, from_date, to_date)
 	holidays_by_emp = _fetch_holidays_per_employee(emps_for_fetch, from_date, to_date)
 	holiday_margin_by_emp = _fetch_holidays_per_employee(
 		emps_for_fetch,
@@ -2108,6 +2181,7 @@ def get_calculation_trace(doc, employee):
 			cl_generated=cl_generated_map.get(parent_id, 0.0),
 			lwp_dates=lwp_map.get(parent_id, set()),
 			neighbour_holidays=holiday_margin_by_emp.get(parent_id, set()),
+			travelling_dates=travelling_map.get(parent_id, set()),
 			tds=tds_map.get(parent_id, 0.0),
 			advance=advance_map.get(parent_id, {"full": 0.0, "part": 0.0}),
 			payable_balance=payable_balance_map.get(parent_id, 0.0),
@@ -2123,6 +2197,7 @@ def get_calculation_trace(doc, employee):
 		holiday_dates=holiday_dates, balance=balance, tds=tds,
 		advance=advance, cl_balance=cl_bal, cl_generated=cl_gen, lwp_dates=lwp,
 		neighbour_holidays=holiday_margin_by_emp.get(employee, set()),
+		travelling_dates=travelling_map.get(employee, set()),
 		payable_balance=payable_balance,
 		al_eligible=al_eligible,
 		payable_days_override=payable_days_override,
@@ -2229,6 +2304,13 @@ def get_calculation_trace(doc, employee):
 				      "holiday(s) worked (Present=1 / Half Day=0.5). Field staff earn NO work-on-holiday "
 				      "Casual Leave; the day is paid as part of the month")
 				     if not is_driver else "N/A (Driver — flat OT instead)")),
+				("Out of station (approved Travelling CL)",
+				 "{0}  —  {1}".format(
+				     row.get("driver_out_of_station_days", 0),
+				     "working day(s) spent out of station; each adds a flat ₹{0:.0f} on top of that day's "
+				     "checkout band (worked holidays excluded — they take the flat holiday rate)"
+				     .format(DRIVER_OUT_OF_STATION_OT)
+				     if is_driver else "N/A (Driver rule only)")),
 				("Half Days (status = Half Day) — leave half-days only", str(len(half_day_dates))),
 				("Absent days", str(len(absent_dates))),
 				("Late Entry marks", str(row.get("late_entry_count", 0))),
@@ -2367,9 +2449,15 @@ def get_calculation_trace(doc, employee):
 				         days_in_month, _f(row["payable_days"]))),
 				("(S) OT/HRA/Petrol",
 				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
-				                      ("Driver rule (₹): holidays actually worked × ₹500 "
-				                       "+ checkout tiers (₹100 per COMPLETED hour after 19:30, so ≤20:30 ₹0 / "
-				                       "≤21:30 ₹100 / ≤22:30 ₹200 / ≤23:30 ₹300; after 23:30 flat ₹700)."
+				                      ("Driver rule (₹): holidays actually worked × ₹{hol:.0f} "
+				                       "+ checkout bands (₹{hr:.0f} per hour ENTERED after 19:30, so ≤19:30 ₹0 / "
+				                       "≤20:30 ₹100 / ≤21:30 ₹200 / ≤22:30 ₹300 / ≤23:30 ₹400; after 23:30 "
+				                       "flat ₹{flat:.0f} with no bands on top) — all of that local or out of "
+				                       "station alike — + ₹{oos:.0f} × {oosd} out-of-station working day(s), "
+				                       "stacked on top of the band."
+				                       .format(hol=DRIVER_HOLIDAY_OT, hr=DRIVER_OT_PER_HOUR,
+				                               flat=DRIVER_OT_FLAT, oos=DRIVER_OUT_OF_STATION_OT,
+				                               oosd=row.get("driver_out_of_station_days", 0))
 				                       if is_driver else
 				                       "OT hours = [working_hours({0:.2f}) + qualifying-holidays({1}) × 8] − (H({2}) × 8) ; amount = OT × Gross/({3}×8)"
 				                       .format(working_hours, row["qualified_holidays"], _f(row["days_worked"]), days_in_month))
