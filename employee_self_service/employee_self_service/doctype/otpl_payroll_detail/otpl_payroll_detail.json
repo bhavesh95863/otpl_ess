@@ -48,7 +48,8 @@
   "net_amount_to_pay",
   "staff_type",
   "location",
-  "department"
+  "department",
+  "work_on_holiday"
  ],
  "fields": [
   {"fieldname": "employee", "fieldtype": "Link", "label": "Employee", "options": "Employee", "in_list_view": 1, "reqd": 1, "columns": 1},
@@ -61,6 +62,7 @@
   {"fieldname": "basic_salary", "fieldtype": "Currency", "label": "Basic Salary", "read_only": 1, "hidden": 1},
   {"fieldname": "al_generated", "fieldtype": "Float", "label": "No. of AL Generated", "read_only": 1, "precision": "2"},
   {"fieldname": "days_worked", "fieldtype": "Float", "label": "No. of days (Worked/Holidays/Leave Adjustment)", "read_only": 1, "precision": "2", "columns": 1},
+  {"fieldname": "work_on_holiday", "fieldtype": "Float", "label": "Work on Holiday (CL given)", "read_only": 1, "precision": "2"},
   {"fieldname": "late_count", "fieldtype": "Int", "label": "No. of Late Marked (L)", "read_only": 1},
   {"fieldname": "approved_half_days", "fieldtype": "Int", "label": "Approved Half Days (Leave)", "read_only": 1, "hidden": 1},
   {"fieldname": "extra_late_half_days", "fieldtype": "Float", "label": "Half Days due to Late Entry / Early Exit", "read_only": 1, "precision": "2"},
@@ -96,7 +98,7 @@
   {"fieldname": "location", "fieldtype": "Data", "label": "Location", "read_only": 1, "hidden": 1},
   {"fieldname": "department", "fieldtype": "Data", "label": "Department", "read_only": 1, "hidden": 1}
  ],
- "modified": "2026-05-17 12:00:00",
+ "modified": "2026-08-11 13:00:00",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Payroll Detail",

@@ -1,0 +1,233 @@
+{
+ "allow_rename": 1,
+ "autoname": "LAMEND.#####",
+ "creation": "2026-07-15 12:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "applicant_mobile_no",
+  "column_break_1",
+  "original_leave",
+  "original_from_date",
+  "original_to_date",
+  "section_break_amend",
+  "amended_from_date",
+  "amended_to_date",
+  "number_of_days",
+  "column_break_amend",
+  "reason",
+  "section_break_status",
+  "status",
+  "amended_leave",
+  "column_break_status",
+  "section_break_approver",
+  "report_to",
+  "approver_name",
+  "approver_mobile_no",
+  "column_break_approver",
+  "has_external_report_to",
+  "external_report_to",
+  "section_break_remarks",
+  "remarks"
+ ],
+ "fields": [
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Employee",
+   "options": "Employee",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "employee.employee_name",
+   "fieldname": "employee_name",
+   "fieldtype": "Read Only",
+   "label": "Employee Name"
+  },
+  {
+   "fieldname": "applicant_mobile_no",
+   "fieldtype": "Data",
+   "label": "Applicant Mobile No"
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "original_leave",
+   "fieldtype": "Link",
+   "label": "Original Leave",
+   "options": "OTPL Leave",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "original_leave.approved_from_date",
+   "fieldname": "original_from_date",
+   "fieldtype": "Date",
+   "label": "Original From Date",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "original_leave.approved_to_date",
+   "fieldname": "original_to_date",
+   "fieldtype": "Date",
+   "label": "Original To Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_amend",
+   "fieldtype": "Section Break",
+   "label": "Amended Leave"
+  },
+  {
+   "fieldname": "amended_from_date",
+   "fieldtype": "Date",
+   "label": "Amended From Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "amended_to_date",
+   "fieldtype": "Date",
+   "label": "Amended To Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "number_of_days",
+   "fieldtype": "Int",
+   "label": "Number of Days",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_amend",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason for Amendment"
+  },
+  {
+   "fieldname": "section_break_status",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nApproved\nRejected"
+  },
+  {
+   "description": "The new OTPL Leave created for the amended range on approval.",
+   "fieldname": "amended_leave",
+   "fieldtype": "Link",
+   "label": "Amended Leave (created)",
+   "options": "OTPL Leave",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_status",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_approver",
+   "fieldtype": "Section Break",
+   "label": "Approver"
+  },
+  {
+   "fieldname": "report_to",
+   "fieldtype": "Link",
+   "label": "Report To",
+   "options": "Employee",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approver_name",
+   "fieldtype": "Data",
+   "label": "Approver Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "approver_mobile_no",
+   "fieldtype": "Data",
+   "label": "Approver Mobile No",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_approver",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "has_external_report_to",
+   "fieldtype": "Check",
+   "label": "Has External Report To",
+   "read_only": 1
+  },
+  {
+   "fieldname": "external_report_to",
+   "fieldtype": "Data",
+   "label": "External Report To",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_remarks",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Remarks"
+  }
+ ],
+ "modified": "2026-07-28 01:03:46.850132",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Leave Amendment",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Employee",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

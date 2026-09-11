@@ -1,0 +1,76 @@
+{
+ "autoname": "naming_series:",
+ "creation": "2026-09-10 12:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "is_submittable": 1,
+ "track_changes": 1,
+ "field_order": [
+  "naming_series",
+  "company",
+  "title",
+  "column_break_h1",
+  "effective_date",
+  "allocation_to_date",
+  "section_break_filters",
+  "staff_type",
+  "location",
+  "column_break_f1",
+  "employee",
+  "section_break_actions",
+  "get_employees",
+  "refresh_balances",
+  "section_break_emp",
+  "employees",
+  "section_break_totals",
+  "total_employees",
+  "column_break_t1",
+  "total_adjustment",
+  "section_break_log",
+  "processing_log",
+  "amended_from"
+ ],
+ "fields": [
+  {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "OTPL-CLADJ-.YYYY.-", "default": "OTPL-CLADJ-.YYYY.-", "reqd": 1},
+  {"fieldname": "company", "fieldtype": "Link", "label": "Company", "options": "Company", "reqd": 1},
+  {"fieldname": "title", "fieldtype": "Data", "label": "Title", "read_only": 1, "no_copy": 1},
+  {"fieldname": "column_break_h1", "fieldtype": "Column Break"},
+  {"fieldname": "effective_date", "fieldtype": "Date", "label": "Effective Date", "default": "2026-08-01", "reqd": 1, "description": "Balances below are the OPENING balance as on this date. Leave dated on/after it is deducted from the new balance as usual."},
+  {"fieldname": "allocation_to_date", "fieldtype": "Date", "label": "Valid Till", "default": "2026-12-31", "reqd": 1, "description": "End of the period the adjusted balance stays valid for. Used only where the employee has no existing allocation covering the effective date."},
+
+  {"fieldname": "section_break_filters", "fieldtype": "Section Break", "label": "Get Employees Filters"},
+  {"fieldname": "staff_type", "fieldtype": "Select", "label": "Staff Type", "in_standard_filter": 1, "options": "\nManager\nWorker\nStaff\nField\nDirector\nNot Applicable\nConsultant\nDriver"},
+  {"fieldname": "location", "fieldtype": "Select", "label": "Location", "in_standard_filter": 1, "options": "\nNoida\nHaridwar\nSite\nLucknow"},
+  {"fieldname": "column_break_f1", "fieldtype": "Column Break"},
+  {"fieldname": "employee", "fieldtype": "Link", "label": "Employee", "options": "Employee", "description": "Leave blank to pull every active employee matching the filters."},
+
+  {"fieldname": "section_break_actions", "fieldtype": "Section Break"},
+  {"fieldname": "get_employees", "fieldtype": "Button", "label": "Get Employees"},
+  {"fieldname": "refresh_balances", "fieldtype": "Button", "label": "Refresh Balances"},
+
+  {"fieldname": "section_break_emp", "fieldtype": "Section Break", "label": "Balances"},
+  {"fieldname": "employees", "fieldtype": "Table", "label": "Employees", "options": "OTPL Casual Leave Adjustment Detail"},
+
+  {"fieldname": "section_break_totals", "fieldtype": "Section Break", "label": "Totals"},
+  {"fieldname": "total_employees", "fieldtype": "Int", "label": "Employees", "read_only": 1},
+  {"fieldname": "column_break_t1", "fieldtype": "Column Break"},
+  {"fieldname": "total_adjustment", "fieldtype": "Float", "label": "Net Adjustment (Days)", "precision": "2", "read_only": 1},
+
+  {"fieldname": "section_break_log", "fieldtype": "Section Break", "label": "Log", "collapsible": 1},
+  {"fieldname": "processing_log", "fieldtype": "Small Text", "label": "Processing Log", "read_only": 1, "no_copy": 1},
+  {"fieldname": "amended_from", "fieldtype": "Link", "label": "Amended From", "options": "OTPL Casual Leave Adjustment", "read_only": 1, "no_copy": 1, "print_hide": 1}
+ ],
+ "modified": "2026-09-10 12:00:00",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Casual Leave Adjustment",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "submit": 1, "cancel": 1, "amend": 1, "report": 1, "export": 1, "print": 1, "email": 1, "share": 1},
+  {"role": "HR Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "submit": 1, "cancel": 1, "amend": 1, "report": 1, "export": 1, "print": 1, "email": 1, "share": 1},
+  {"role": "HR User", "read": 1, "report": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

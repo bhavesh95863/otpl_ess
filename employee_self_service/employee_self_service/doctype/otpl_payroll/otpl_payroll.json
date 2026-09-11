@@ -4,8 +4,6 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
- "is_submittable": 1,
- "track_changes": 1,
  "field_order": [
   "naming_series",
   "company",
@@ -42,67 +40,341 @@
   "total_extra_allowance",
   "total_net_payable",
   "total_net_to_pay",
+  "section_break_orders",
+  "order_allocations",
+  "section_break_acct",
+  "salary_entries_created",
+  "employee_salary_entries",
   "section_break_log",
   "processing_log",
   "amended_from"
  ],
  "fields": [
-  {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "OTPL-PAYROLL-.YYYY.-.#####", "default": "OTPL-PAYROLL-.YYYY.-.#####", "reqd": 1, "no_copy": 1, "print_hide": 1, "set_only_once": 1},
-  {"fieldname": "company", "fieldtype": "Link", "label": "Company", "options": "Company", "reqd": 1},
-  {"fieldname": "title", "fieldtype": "Data", "label": "Title", "hidden": 1, "read_only": 1, "no_copy": 1},
-  {"fieldname": "column_break_h1", "fieldtype": "Column Break"},
-  {"fieldname": "from_date", "fieldtype": "Date", "label": "From Date", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1},
-  {"fieldname": "to_date", "fieldtype": "Date", "label": "To Date", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1},
-  {"fieldname": "days_in_period", "fieldtype": "Int", "label": "Days In Period", "read_only": 1, "description": "to_date - from_date + 1; used as the divisor in per-day salary computation."},
-
-  {"fieldname": "section_break_filters", "fieldtype": "Section Break", "label": "Filters"},
-  {"fieldname": "staff_type", "fieldtype": "Select", "label": "Staff Type", "options": "\nManager\nWorker\nStaff\nField\nDirector\nNot Applicable\nConsultant\nDriver", "in_standard_filter": 1},
-  {"fieldname": "location", "fieldtype": "Select", "label": "Location", "options": "\nNoida\nHaridwar\nSite\nLucknow", "in_standard_filter": 1},
-  {"fieldname": "column_break_f1", "fieldtype": "Column Break"},
-  {"fieldname": "business_line", "fieldtype": "Select", "label": "Business Line", "options": "\nALL\nATW\nTRANSLAMATIC\nGIRJ\nRBM\nPOTAS\nFRACTURE DETECTION\nSCOUR MONITORING\nRCRV\nSPURT CAR\nINSTRUMENTATION\nMANUAL USFD TESTING\nPAUT", "in_standard_filter": 1, "description": "Filters employees by their assigned Sales Order's business_line."},
-  {"fieldname": "employee", "fieldtype": "Link", "label": "Employee (Optional)", "options": "Employee", "description": "Restrict to a single employee."},
-
-  {"fieldname": "section_break_actions", "fieldtype": "Section Break", "label": "Actions"},
-  {"fieldname": "get_employees", "fieldtype": "Button", "label": "Get Employees"},
-  {"fieldname": "calculate_payroll", "fieldtype": "Button", "label": "Calculate Salary"},
-
-  {"fieldname": "section_break_emp", "fieldtype": "Section Break", "label": "Salary Sheet"},
-  {"fieldname": "employees", "fieldtype": "Table", "label": "Employees", "options": "OTPL Payroll Detail"},
-
-  {"fieldname": "section_break_totals", "fieldtype": "Section Break", "label": "Totals", "collapsible": 1},
-  {"fieldname": "total_gross_salary", "fieldtype": "Currency", "label": "Total Gross Salary", "read_only": 1},
-  {"fieldname": "total_payable_days", "fieldtype": "Float", "label": "Total Payable Days", "read_only": 1, "precision": "2"},
-  {"fieldname": "total_salary_amount", "fieldtype": "Currency", "label": "Total Salary Amount", "read_only": 1},
-  {"fieldname": "total_ot_hra_petrol", "fieldtype": "Currency", "label": "Total OT/HRA/Petrol", "read_only": 1},
-  {"fieldname": "total_incentive", "fieldtype": "Currency", "label": "Total Incentive", "read_only": 1},
-  {"fieldname": "total_salary_due", "fieldtype": "Currency", "label": "Total Salary Due", "read_only": 1},
-  {"fieldname": "column_break_t1", "fieldtype": "Column Break"},
-  {"fieldname": "total_pf_employee", "fieldtype": "Currency", "label": "Total PF (Employee)", "read_only": 1},
-  {"fieldname": "total_esic_employee", "fieldtype": "Currency", "label": "Total ESIC (Employee)", "read_only": 1},
-  {"fieldname": "total_tds", "fieldtype": "Currency", "label": "Total TDS", "read_only": 1},
-  {"fieldname": "total_pf_employer", "fieldtype": "Currency", "label": "Total PF (Employer)", "read_only": 1},
-  {"fieldname": "total_esic_employer", "fieldtype": "Currency", "label": "Total ESIC (Employer)", "read_only": 1},
-  {"fieldname": "total_advance_adjustment", "fieldtype": "Currency", "label": "Total Advance Adjustment", "read_only": 1},
-  {"fieldname": "total_extra_allowance", "fieldtype": "Currency", "label": "Total Extra Allowance", "read_only": 1},
-  {"fieldname": "total_net_payable", "fieldtype": "Currency", "label": "Total Net Payable", "read_only": 1},
-  {"fieldname": "total_net_to_pay", "fieldtype": "Currency", "label": "Total Net To Pay", "read_only": 1},
-
-  {"fieldname": "section_break_log", "fieldtype": "Section Break", "label": "Processing Log", "collapsible": 1, "depends_on": "processing_log"},
-  {"fieldname": "processing_log", "fieldtype": "Long Text", "label": "Processing Log", "read_only": 1},
-
-  {"fieldname": "amended_from", "fieldtype": "Link", "label": "Amended From", "no_copy": 1, "options": "OTPL Payroll", "print_hide": 1, "read_only": 1}
+  {
+   "default": "OTPL-PAYROLL-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "no_copy": 1,
+   "options": "OTPL-PAYROLL-.YYYY.-.#####",
+   "print_hide": 1,
+   "reqd": 1,
+   "set_only_once": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Title",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_h1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "From Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "To Date",
+   "reqd": 1
+  },
+  {
+   "description": "to_date - from_date + 1; used as the divisor in per-day salary computation.",
+   "fieldname": "days_in_period",
+   "fieldtype": "Int",
+   "label": "Days In Period",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_filters",
+   "fieldtype": "Section Break",
+   "label": "Filters"
+  },
+  {
+   "fieldname": "staff_type",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Staff Type",
+   "options": "\nManager\nWorker\nStaff\nField\nDirector\nNot Applicable\nConsultant\nDriver"
+  },
+  {
+   "fieldname": "location",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Location",
+   "options": "\nNoida\nHaridwar\nSite\nLucknow"
+  },
+  {
+   "fieldname": "column_break_f1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Filters employees by their assigned Sales Order's business_line.",
+   "fieldname": "business_line",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Business Line",
+   "options": "\nALL\nATW\nTRANSLAMATIC\nGIRJ\nRBM\nPOTAS\nFRACTURE DETECTION\nSCOUR MONITORING\nRCRV\nSPURT CAR\nINSTRUMENTATION\nMANUAL USFD TESTING\nPAUT"
+  },
+  {
+   "description": "Restrict to a single employee.",
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "Employee (Optional)",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "section_break_actions",
+   "fieldtype": "Section Break",
+   "label": "Actions"
+  },
+  {
+   "fieldname": "get_employees",
+   "fieldtype": "Button",
+   "label": "Get Employees"
+  },
+  {
+   "fieldname": "calculate_payroll",
+   "fieldtype": "Button",
+   "label": "Calculate Salary"
+  },
+  {
+   "fieldname": "section_break_emp",
+   "fieldtype": "Section Break",
+   "label": "Salary Sheet"
+  },
+  {
+   "fieldname": "employees",
+   "fieldtype": "Table",
+   "label": "Employees",
+   "options": "OTPL Payroll Detail"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_totals",
+   "fieldtype": "Section Break",
+   "label": "Totals"
+  },
+  {
+   "fieldname": "total_gross_salary",
+   "fieldtype": "Currency",
+   "label": "Total Gross Salary",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_payable_days",
+   "fieldtype": "Float",
+   "label": "Total Payable Days",
+   "precision": "2",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_salary_amount",
+   "fieldtype": "Currency",
+   "label": "Total Salary Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_ot_hra_petrol",
+   "fieldtype": "Currency",
+   "label": "Total OT/HRA/Petrol",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_incentive",
+   "fieldtype": "Currency",
+   "label": "Total Incentive",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_salary_due",
+   "fieldtype": "Currency",
+   "label": "Total Salary Due",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_t1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "total_pf_employee",
+   "fieldtype": "Currency",
+   "label": "Total PF (Employee)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_esic_employee",
+   "fieldtype": "Currency",
+   "label": "Total ESIC (Employee)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_tds",
+   "fieldtype": "Currency",
+   "label": "Total TDS",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_pf_employer",
+   "fieldtype": "Currency",
+   "label": "Total PF (Employer)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_esic_employer",
+   "fieldtype": "Currency",
+   "label": "Total ESIC (Employer)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_advance_adjustment",
+   "fieldtype": "Currency",
+   "label": "Total Advance Adjustment",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_extra_allowance",
+   "fieldtype": "Currency",
+   "label": "Total Extra Allowance",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_net_payable",
+   "fieldtype": "Currency",
+   "label": "Total Net Payable",
+   "read_only": 1
+  },
+  {
+   "fieldname": "total_net_to_pay",
+   "fieldtype": "Currency",
+   "label": "Total Net To Pay",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "depends_on": "processing_log",
+   "fieldname": "section_break_log",
+   "fieldtype": "Section Break",
+   "label": "Processing Log"
+  },
+  {
+   "fieldname": "processing_log",
+   "fieldtype": "Long Text",
+   "label": "Processing Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "OTPL Payroll",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "fieldname": "employee_salary_entries",
+   "fieldtype": "Small Text",
+   "label": "Employee Salary Entries",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "default": "0",
+   "fieldname": "salary_entries_created",
+   "fieldtype": "Check",
+   "label": "Salary Entries Created",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_acct",
+   "fieldtype": "Section Break",
+   "label": "Accounting"
+  },
+  {
+   "fieldname": "order_allocations",
+   "fieldtype": "Table",
+   "label": "Order Allocations",
+   "no_copy": 1,
+   "options": "OTPL Payroll Order Allocation",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_break_orders",
+   "fieldtype": "Section Break",
+   "label": "Sales Order Wise Allocation"
+  }
  ],
- "modified": "2026-04-29 12:00:00",
+ "is_submittable": 1,
+ "modified": "2026-09-09 17:53:02.515903",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Payroll",
  "owner": "Administrator",
- "title_field": "title",
  "permissions": [
-  {"role": "System Manager", "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "share": 1, "write": 1, "submit": 1, "cancel": 1, "amend": 1},
-  {"role": "HR Manager", "create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "share": 1, "write": 1, "submit": 1, "cancel": 1, "amend": 1},
-  {"role": "HR User", "create": 1, "read": 1, "report": 1, "write": 1, "submit": 1}
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "amend": 1,
+   "cancel": 1,
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR User",
+   "submit": 1,
+   "write": 1
+  }
  ],
  "sort_field": "modified",
- "sort_order": "DESC"
+ "sort_order": "DESC",
+ "title_field": "title",
+ "track_changes": 1
 }

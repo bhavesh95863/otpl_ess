@@ -437,6 +437,100 @@ class OTPLLeave(Document):
 			if doc_before_save and doc_before_save.status != "Cancelled" and self.status == "Cancelled":
 				self.cancel_linked_leave_applications()
 
+		# A Short Leave / Half Day only shifts the day's late / extra-late
+		# thresholds; it creates no Leave Application. If it is approved AFTER the
+		# day's attendance was already processed (e.g. approved the next day), that
+		# attendance still carries the old (extra-)late marks. Re-run the day so the
+		# marks are recomputed against the now-approved leave's updated timing.
+		self.refresh_processed_attendance_after_approval()
+
+		# Approving / cancelling a leave changes the present-ish picture, which can
+		# add or remove Travelling CL holiday-credit qualification for nearby
+		# holidays. Reconcile those credits (and refresh the affected attendance)
+		# in the background.
+		self.reevaluate_travelling_cl_holiday_credits()
+
+	def reevaluate_travelling_cl_holiday_credits(self):
+		"""On an Approved or Cancelled transition, queue a Travelling CL holiday
+		credit reconciliation over this leave's affected date range. Half-day /
+		short-leave dates matter too — an approved half day counts as present-ish."""
+		if self.get("__islocal"):
+			return
+		doc_before_save = self.get_doc_before_save()
+		if not doc_before_save:
+			return
+		before, after = doc_before_save.status, self.status
+		if after not in ("Approved", "Cancelled") or before == after:
+			return
+
+		dates = [
+			self.from_date, self.to_date,
+			self.get("approved_from_date"), self.get("half_day_date"),
+		]
+		dates = [getdate(d) for d in dates if d]
+		if not dates:
+			return
+
+		try:
+			from employee_self_service.employee_self_service.utils.travelling_cl_credit import (
+				enqueue_reprocess,
+			)
+			enqueue_reprocess(self.employee, min(dates), max(dates))
+		except Exception:
+			frappe.log_error(
+				title="Queue Travelling CL holiday credit re-eval failed: {0}".format(self.name),
+				message=frappe.get_traceback(),
+			)
+
+	def refresh_processed_attendance_after_approval(self):
+		"""Re-run the day's attendance when a Short Leave / Half Day is approved
+		late — i.e. after that day was already processed.
+
+		Only within-day leaves (Short Leave, Half Day) matter here: they leave the
+		employee Present but shift the late / extra-late thresholds, and unlike a
+		full-day leave they create no Leave Application to drive attendance. If the
+		day already has an Attendance record, it was processed before this approval,
+		so re-run it so the late / extra-late marks reflect the updated time. A day
+		with no Attendance yet is left to the daily job (re-running a future day
+		with no check-ins would wrongly mark it Absent).
+		"""
+		if self.get("__islocal"):
+			return
+		if not (self.short_leave or self.half_day):
+			return
+
+		doc_before_save = self.get_doc_before_save()
+		if not (doc_before_save
+				and doc_before_save.status != "Approved"
+				and self.status == "Approved"):
+			return
+
+		if self.short_leave:
+			target_date = self.approved_from_date or self.from_date
+		else:
+			target_date = self.half_day_date
+		if not target_date:
+			return
+
+		# Only refresh a day that was already processed; future days have no
+		# attendance yet and belong to the daily job.
+		if not frappe.db.exists(
+			"Attendance",
+			{"employee": self.employee, "attendance_date": getdate(target_date), "docstatus": 1}
+		):
+			return
+
+		try:
+			from employee_self_service.employee_self_service.utils.rerun_attendance import (
+				rerun_attendance_for_employee_date,
+			)
+			rerun_attendance_for_employee_date(self.employee, getdate(target_date))
+		except Exception:
+			frappe.log_error(
+				title="Refresh attendance after leave approval failed: {0}".format(self.name),
+				message=frappe.get_traceback()
+			)
+
 	def create_leave_applications(self):
 		if not self.get("__islocal"):
 			doc_before_save = self.get_doc_before_save()
@@ -720,11 +814,55 @@ class OTPLLeave(Document):
 		if half_day and half_day_date:
 			leave_app.half_day_date = half_day_date
 
+		self._allow_ledger_only_allocation(leave_app)
+
 		leave_app.insert(ignore_permissions=True)
 		leave_app.submit()
 
 		# Store reference to created leave application
 		self.add_leave_application_reference(leave_app.name)
+
+	def _allow_ledger_only_allocation(self, leave_app):
+		"""Let a Leave Application through when the balance exists as a Leave Ledger
+		Entry but no Leave Allocation document covers the dates.
+
+		ERPNext's validate_dates_across_allocation() demands a submitted Leave
+		Allocation spanning the application dates. An employee whose Casual Leave
+		balance was granted by OTPL Casual Leave Adjustment has that balance in the
+		ledger ONLY — the adjustment deliberately posts a Leave Ledger Entry instead
+		of a Leave Allocation, because ERPNext refuses an allocation overlapping an
+		existing one. Without this, such an employee could never be given Casual
+		Leave: every day would fall through to Leave Without Pay even though the
+		balance is real and payroll honours it.
+
+		The bypass is deliberately narrow — it applies only when NO allocation covers
+		either end of the application (the exact case ERPNext rejects as "outside
+		leave allocation period") AND the ledger balance actually covers the days
+		requested. Every other validation, the balance check included, still runs.
+		"""
+		if leave_app.leave_type == "Leave Without Pay":
+			return
+		if frappe.db.get_value("Leave Type", leave_app.leave_type, "allow_negative"):
+			return   # ERPNext skips the check itself in this case
+
+		def _allocation_on(date):
+			return frappe.db.sql("""select name from `tabLeave Allocation`
+				where employee=%s and leave_type=%s and docstatus=1
+				and %s between from_date and to_date""",
+				(leave_app.employee, leave_app.leave_type, date))
+
+		if _allocation_on(leave_app.from_date) or _allocation_on(leave_app.to_date):
+			return   # a real allocation exists; leave ERPNext's check alone
+
+		balance = flt(get_leave_balance_on(
+			employee=leave_app.employee,
+			leave_type=leave_app.leave_type,
+			date=getdate(leave_app.from_date),
+			consider_all_leaves_in_the_allocation_period=True
+		) or 0)
+		if balance >= flt(leave_app.total_leave_days):
+			# Shadows the bound method on this instance only.
+			leave_app.validate_dates_across_allocation = lambda: None
 
 	def add_leave_application_reference(self, leave_app_name):
 		"""Add leave application reference to the list"""

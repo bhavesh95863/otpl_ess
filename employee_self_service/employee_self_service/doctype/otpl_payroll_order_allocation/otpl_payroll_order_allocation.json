@@ -1,0 +1,136 @@
+{
+ "actions": [],
+ "creation": "2026-09-07 10:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "employee",
+  "employee_name",
+  "sales_order",
+  "cost_center",
+  "column_break_1",
+  "worked_days",
+  "allocated_days",
+  "allocation_ratio",
+  "column_break_2",
+  "salary_amount",
+  "total_salary_due",
+  "slot",
+  "source",
+  "journal_entry"
+ ],
+ "fields": [
+  {
+   "columns": 1,
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Employee",
+   "options": "Employee"
+  },
+  {
+   "columns": 2,
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Employee Name",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "fieldname": "sales_order",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sales Order",
+   "options": "Sales Order"
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "columns": 1,
+   "fieldname": "worked_days",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Worked Days",
+   "precision": "2",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "fieldname": "allocated_days",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Allocated Payable Days",
+   "precision": "2",
+   "read_only": 1
+  },
+  {
+   "fieldname": "allocation_ratio",
+   "fieldtype": "Percent",
+   "label": "Allocation Ratio",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "salary_amount",
+   "fieldtype": "Currency",
+   "label": "Salary Amount",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "fieldname": "total_salary_due",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Total Salary Due",
+   "read_only": 1
+  },
+  {
+   "fieldname": "slot",
+   "fieldtype": "Int",
+   "label": "Slot",
+   "read_only": 1
+  },
+  {
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "label": "Source",
+   "options": "Checkin\nEmployee Default\nFolded",
+   "read_only": 1
+  },
+  {
+   "columns": 2,
+   "fieldname": "journal_entry",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Journal Entry",
+   "options": "Journal Entry",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-07 16:00:00",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Payroll Order Allocation",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
