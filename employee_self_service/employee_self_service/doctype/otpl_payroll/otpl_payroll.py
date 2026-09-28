@@ -77,10 +77,10 @@ QUALIFY_MARGIN_DAYS = 21
 # driver actually worked is a flat ₹700 instead of the day's bands, again local
 # or out of station.
 DRIVER_OT_FLAT = 700.0
-# Flat OT for a holiday the driver actually worked. NOTE: this is paid for EVERY
-# worked holiday, not only the ones that pass the qualifying (sandwich) rule —
-# longstanding behaviour, unchanged here. Only the QUALIFYING ones are netted
-# back out of Days Worked, since only those were counted into it.
+# Flat OT for a holiday the driver actually worked. Paid for EVERY worked
+# holiday, not only the ones that pass the qualifying (sandwich) rule. It is
+# paid ON TOP of the day: a qualifying holiday the driver worked stays in Days
+# Worked and is NOT netted back out.
 DRIVER_HOLIDAY_OT = 700.0
 # Value of each hourly band entered past the duty end.
 DRIVER_OT_PER_HOUR = 100.0
@@ -1583,8 +1583,8 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		if d not in holiday_dates
 	)
 
-	# Driver rule: a holiday the driver actually WORKED gives a flat ₹500 OT
-	# (Col S) instead of pay for the day.
+	# Driver rule: a holiday the driver actually WORKED gives a flat ₹700 OT
+	# (Col S) ON TOP of the day's pay — the day itself stays in Col H.
 	#
 	# Gated on being PRESENT, not on the holiday qualifying. The qualifying
 	# (sandwich) rule decides whether an UNWORKED holiday is earned; a day the
@@ -1606,19 +1606,18 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	worked_holiday_half = (half_day_dates & holiday_dates) if not is_driver else set()
 	work_on_holiday = len(worked_holiday_full) + 0.5 * len(worked_holiday_half)
 
-	# Drivers are still netted: a qualifying holiday the driver actually drove is
-	# paid as a flat OT in Col S instead of as a day here.
 	# Field staff: AL is earned by WORKING the holiday, not by the qualifying rule,
 	# so Col G is the work-on-holiday count (1 per full day, 0.5 per half day).
 	if field_al_enabled:
 		al_generated = work_on_holiday
 
-	effective_qualified_holidays = (
-		qualified_holidays
-		- len(driver_worked_qh & qualifying_holiday_dates)
-	)
-
-	days_worked = non_holiday_present + effective_qualified_holidays
+	# A worked holiday is NOT netted out of Days Worked for Drivers either. A
+	# qualifying holiday is already earned pay that sits inside the month; taking
+	# it back out because the driver punched in left them a day's salary worse off
+	# for having driven on their day off. The flat ₹700 (Col S) is compensation ON
+	# TOP of that day, not a substitute for it — the same reasoning as the
+	# non-Driver work-on-holiday CL credit above.
+	days_worked = non_holiday_present + qualified_holidays
 	if is_worker_site:
 		dw_explain = "Worker@Site: non-holiday present + qualifying holidays (OR rule)"
 	else:
@@ -2208,7 +2207,9 @@ def get_calculation_trace(doc, employee):
 	def _f(v):
 		return "{0:.2f}".format(flt(v))
 
-	# Whatever Col H subtracted beyond the additive terms (Drivers only now).
+	# Whatever Col H lost beyond the additive terms. Nothing subtracts from Col H
+	# any more except the floor at 0, so this is normally 0 — kept as a guard so
+	# the breakdown never silently fails to add up.
 	_h_resid = (row["non_holiday_present"] + row["qualified_holidays"]
 	            - 2 * flt(att.get("false_attendance_count", 0)) - row["days_worked"])
 
@@ -2352,7 +2353,7 @@ def get_calculation_trace(doc, employee):
 				 "{dw} = non-holiday present-ish {nhp} + qualifying holidays {qh}{drv} − 2×{fc} false attendance"
 				 .format(dw=_f(row["days_worked"]), nhp=row["non_holiday_present"],
 				         qh=row["qualified_holidays"],
-				         drv=(" − driver holidays paid as flat OT {0}".format(_f(_h_resid))
+				         drv=(" − {0} (floored at 0)".format(_f(_h_resid))
 				              if _h_resid else ""),
 				         fc=false_count)),
 				("    ↳ non-holiday present-ish ({0})".format(row["non_holiday_present"]),
@@ -2575,7 +2576,7 @@ def _resolve_salary_due_base_data(business_vertical):
 	return name, None
 
 
-def _preflight_cost_centers(by_vertical, alloc_by_emp, default_so):
+def _preflight_cost_centers(by_vertical, alloc_by_emp, default_so, extra_orders=None):
 	"""Every sales order about to be booked must resolve to a Cost Center.
 
 	The cost centre is fetched from the sales order, via Cost Center.sales_order
@@ -2593,6 +2594,10 @@ def _preflight_cost_centers(by_vertical, alloc_by_emp, default_so):
 				wanted.update(so for so, _amt, _d, _cc in parts)
 			elif row.sales_order:
 				wanted.add(row.sales_order)
+	# Extra allowance rides the same orders and needs the same cost centres,
+	# including for employees the wage pass skipped (nothing due, but a TADA
+	# or HRA still to book).
+	wanted.update(extra_orders or ())
 	# The settings-level catch-all is deliberately exempt: employees who worked
 	# no order at all are office overhead, and their wages belong on their
 	# location's cost center, not on whichever project that default points at.
@@ -2693,29 +2698,50 @@ def create_salary_entries(payroll):
 			continue
 		by_vertical[row.business_line].append(row)
 
+	fallback_used = []
+
+	# Extra allowance (TADA + HRA + Conveyance + Telephone) never entered Total
+	# Salary Due, so the wage vouchers carry none of it; it is collected here
+	# and booked on its own voucher per vertical.
+	extra_parts, extra_skipped = _collect_extra_allowance_parts(
+		doc, settings, default_so, fallback_used)
+	extra_orders = {so for _v, _l, parts in extra_parts.values() for so, _amt, _cc in parts}
+
 	# Fail before creating anything if any sales order lacks a Cost Center.
-	_preflight_cost_centers(by_vertical, alloc_by_emp, default_so)
+	_preflight_cost_centers(by_vertical, alloc_by_emp, default_so, extra_orders)
 
 	# Cost follows the sales order's own vertical, not the employee's.
-	order_vertical = _fetch_order_verticals(
+	wage_orders = (
 		{so for parts in alloc_by_emp.values() for so, _a, _d, _c in parts}
 		| {row.sales_order for rows in by_vertical.values() for row in rows if row.sales_order}
 	)
-	# Every vertical that will bear cost needs its own accounts, not just the
-	# ones the employees sit under.
+	order_vertical = _fetch_order_verticals(wage_orders | extra_orders)
+	# Every vertical that will bear WAGES needs its own base data, not just the
+	# ones the employees sit under. A vertical reached only through extra
+	# allowance is left out: it books off Business Line, not base data.
 	bearing = set(by_vertical) | {
-		v for so, v in order_vertical.items() if so != default_so
+		v for so, v in order_vertical.items() if so != default_so and so in wage_orders
 	}
 	base_data_by_vertical = _preflight_verticals(sorted(bearing))
+	# Same promise for the allowance side: resolve every account before a
+	# single voucher is written.
+	extra_accounts = _preflight_extra_allowance_accounts(sorted({
+		_expense_vertical_for(so, employee_vertical, order_vertical, default_so)
+		for employee_vertical, _loc, parts in extra_parts.values()
+		for so, amount, _cc in parts if flt(amount, 2)
+	}))
 
-	fallback_used = []
 	created = _build_journal_entries(
 		doc, by_vertical, alloc_by_emp, settings, default_so, posting_date,
 		fallback_used, order_vertical, base_data_by_vertical,
 	)
 
-	if not created:
-		frappe.throw(_("Nothing to book: no employee had a positive Total Salary Due."))
+	if not created and not extra_parts:
+		frappe.throw(_("Nothing to book: no employee had a positive Total Salary Due "
+		               "or extra allowance."))
+
+	extra_created = _build_extra_allowance_entries(
+		doc, extra_parts, order_vertical, default_so, posting_date, extra_accounts)
 
 	# TDS is deliberately NOT posted here. It stays a manual step - the
 	# Process TDS Entry button, or a voucher keyed by hand - so the payroll
@@ -2727,13 +2753,19 @@ def create_salary_entries(payroll):
 	payable_requests, payable_error = _create_salary_payable_requests(
 		doc, sorted(by_vertical.keys()), posting_date)
 
-	log = [_("Journal Entries: {0}").format(", ".join(created))]
+	log = []
+	if created:
+		log.append(_("Journal Entries: {0}").format(", ".join(created)))
+	if extra_created:
+		log.append(_("Extra Allowance Journal Entries: {0}").format(", ".join(extra_created)))
 	if payable_requests:
 		log.append(_("Salary Payable Request (draft): {0}").format(", ".join(payable_requests)))
 	if payable_error:
 		log.append(_("Salary Payable Request not created: {0}").format(payable_error))
 	if skipped:
 		log.append(_("Skipped: {0}").format(", ".join(skipped)))
+	if extra_skipped:
+		log.append(_("Extra allowance skipped: {0}").format(", ".join(extra_skipped)))
 	if fallback_used:
 		log.append(_("Booked to the default sales order (no attendance order, no "
 		             "Employee master order): {0}").format(", ".join(fallback_used)))
@@ -2743,9 +2775,11 @@ def create_salary_entries(payroll):
 
 	return {
 		"created": created,
+		"extra_allowance_created": extra_created,
 		"payable_requests": payable_requests,
 		"payable_error": payable_error,
 		"skipped": skipped,
+		"extra_skipped": extra_skipped,
 		"fallback_used": fallback_used,
 	}
 
@@ -3176,6 +3210,201 @@ def _build_one_journal_entry(doc, vertical, base_data_name, expense_by_cc, credi
 	jv.insert()
 	jv.submit()
 	return jv.name
+
+
+# -----------------------------------------------------------------------------
+# Extra allowance (TADA + HRA + Conveyance + Telephone)
+# -----------------------------------------------------------------------------
+# Kept off the wage voucher on purpose. Extra allowance is not part of Total
+# Salary Due - it is added back at Net Amount to Pay - so the "Salary Due"
+# vouchers, which Salary Payable Request reads back off the ledger, must not
+# carry it. It gets its own purpose and its own accounts: the bearing business
+# line's Site Expense Account against that line's Payroll Payable.
+EXTRA_ALLOWANCE_PURPOSE = "Salary Due Extra Allowance"
+
+
+def _extra_allowance_shares(doc):
+	"""employee -> [(sales_order, ratio, cost_center), ...] for splitting allowances.
+
+	The allocation's money columns cannot be reused here: they apportion Total
+	Salary Due, and an employee whose salary nets to nothing this month still
+	earned their TADA and HRA. So the split falls back on the days the
+	allocation was itself built from - which is what "worked in two business
+	lines" means - and the ratios are recomputed over those days.
+	"""
+	shares = defaultdict(list)
+	for a in doc.get("order_allocations") or []:
+		if not a.sales_order:
+			continue
+		weight = flt(a.worked_days) or flt(a.allocated_days) or flt(a.allocation_ratio)
+		shares[a.employee].append((a.sales_order, weight, a.cost_center))
+
+	out = {}
+	for employee, parts in shares.items():
+		total = sum(w for _so, w, _cc in parts)
+		if total > 0:
+			out[employee] = [(so, w / total, cc) for so, w, cc in parts]
+		else:
+			# Allocated on an employee-default order with no day tally behind
+			# it: spread evenly rather than dropping the allowance.
+			even = 1.0 / len(parts)
+			out[employee] = [(so, even, cc) for so, _w, cc in parts]
+	return out
+
+
+def _extra_allowance_parts(row, shares, settings, default_so, fallback_used):
+	"""[(sales_order, amount, cost_center)] splitting one row's extra allowance."""
+	extra = flt(getattr(row, "extra_allowance", 0) or 0, 2)
+	parts = shares.get(row.employee)
+	if not parts:
+		fallback = row.sales_order or default_so
+		if not fallback:
+			frappe.throw(
+				_("Employee {0} has extra allowance but no sales order from attendance, "
+				  "no default on the Employee master, and no Default Sales Order in "
+				  "OTPL Accounting Settings.").format(row.employee)
+			)
+		if not row.sales_order:
+			note = "{0} -> {1}".format(row.employee, fallback)
+			# The wage pass may already have reported this employee; only rows
+			# it skipped (nothing due) need adding.
+			if note not in fallback_used:
+				fallback_used.append(note)
+		cc = frappe.db.get_value("Cost Center", {"sales_order": fallback}, "name")
+		parts = [(fallback, 1.0, cc)]
+
+	location_cc = _location_cost_center(row.location, settings)
+	amounts = _split_amount(extra, [r for _so, r, _cc in parts])
+	return [
+		(so, amounts[i], cc or location_cc)
+		for i, (so, _r, cc) in enumerate(parts)
+	]
+
+
+def _collect_extra_allowance_parts(doc, settings, default_so, fallback_used):
+	"""employee -> (business_line, location, [(sales_order, amount, cost_center), ...]).
+
+	Every row with an allowance is collected, including those the wage pass
+	skipped for having nothing due - the allowance is earned either way.
+	"""
+	shares = _extra_allowance_shares(doc)
+	out, skipped = {}, []
+	for row in doc.employees:
+		if flt(getattr(row, "extra_allowance", 0) or 0, 2) <= 0:
+			continue
+		if not row.business_line:
+			skipped.append("{0} (no business line)".format(row.employee))
+			continue
+		out[row.employee] = (
+			row.business_line,
+			row.location,
+			_extra_allowance_parts(row, shares, settings, default_so, fallback_used),
+		)
+	return out, skipped
+
+
+def _preflight_extra_allowance_accounts(verticals):
+	"""Resolve the Site Expense / Payroll Payable pair for every vertical about
+	to bear extra allowance.
+
+	All-or-nothing, exactly as the wage booking is: report every misconfigured
+	business line together so the whole thing is fixable in one pass, rather
+	than posting half the verticals and failing on the rest.
+	"""
+	resolved, problems = {}, []
+	for vertical in verticals:
+		acc = frappe.db.get_value(
+			"Business Line", vertical,
+			["site_expense_account", "payroll_payable"], as_dict=1,
+		) or frappe._dict()
+		if not acc.get("site_expense_account"):
+			problems.append(
+				_("Business Line {0} has no Site Expense Account set.").format(vertical))
+		if not acc.get("payroll_payable"):
+			problems.append(
+				_("Business Line {0} has no Payroll Payable account set.").format(vertical))
+		if acc.get("site_expense_account") and acc.get("payroll_payable"):
+			resolved[vertical] = acc
+	if problems:
+		frappe.throw(
+			_("Cannot book extra allowance until these are configured:")
+			+ "<br><br>" + "<br>".join("\u2022 " + p for p in problems),
+			title=_("Extra Allowance Accounts Not Configured"),
+		)
+	return resolved
+
+
+def _build_extra_allowance_entries(doc, extra_parts, order_vertical, default_so,
+                                   posting_date, accounts_by_vertical):
+	"""One extra-allowance voucher per business line that bears the cost.
+
+	Same shape as the wage voucher - Site Expense debited per cost center,
+	Payroll Payable credited per employee - and grouped the same way, by the
+	vertical that owns the SALES ORDER. An employee who worked two lines
+	therefore has their allowance divided between two vouchers, each debiting
+	its own line's Site Expense Account.
+	"""
+	expense = defaultdict(lambda: defaultdict(float))   # vertical -> cost center -> amount
+	credit = defaultdict(lambda: defaultdict(float))    # vertical -> employee -> amount
+	main_cc = defaultdict(dict)                         # vertical -> employee -> cost center
+
+	for employee, (employee_vertical, _location, parts) in sorted(extra_parts.items()):
+		for sales_order, amount, cost_center in parts:
+			if not flt(amount, 2):
+				continue
+			vertical = _expense_vertical_for(
+				sales_order, employee_vertical, order_vertical, default_so)
+			expense[vertical][cost_center] += flt(amount, 2)
+			credit[vertical][employee] += flt(amount, 2)
+			main_cc[vertical].setdefault(employee, cost_center)
+
+	verticals = sorted(set(expense) | set(credit))
+	if not verticals:
+		return []
+
+	company = frappe.db.get_value("Global Defaults", "Global Defaults", "default_company")
+	created = []
+	for vertical in verticals:
+		acc = accounts_by_vertical[vertical]
+		accounts = [
+			{"account": acc.site_expense_account,
+			 "debit_in_account_currency": flt(amount, 2), "cost_center": cc}
+			for cc, amount in sorted(expense[vertical].items(), key=lambda kv: str(kv[0]))
+			if flt(amount, 2)
+		]
+		for employee, amount in sorted(credit[vertical].items()):
+			if not flt(amount, 2):
+				continue
+			accounts.append({
+				"account": acc.payroll_payable,
+				"credit_in_account_currency": flt(amount, 2),
+				"party_type": "Employee", "party": employee,
+				"cost_center": main_cc[vertical].get(employee),
+			})
+		if not accounts:
+			continue
+
+		jv = frappe.new_doc("Journal Entry")
+		jv.posting_date = posting_date
+		jv.voucher_type = "Journal Entry"
+		jv.company = company
+		jv.business_vertical = vertical
+		# Deliberately not 'Salary Due': Salary Payable Request matches that
+		# purpose exactly when reading the month's salary back off the ledger,
+		# and the allowance must not be counted there as wages.
+		jv.purpose = EXTRA_ALLOWANCE_PURPOSE
+		jv.user_remark = _("Extra allowance for {0} to {1} ({2}) - {3}").format(
+			doc.from_date, doc.to_date, vertical, doc.name)
+		jv.otpl_ref_doctype = doc.doctype
+		jv.otpl_ref_name = doc.name
+		for line in accounts:
+			jv.append("accounts", line)
+		jv.flags.ignore_mandatory = True
+		jv.flags.ignore_permissions = True
+		jv.insert()
+		jv.submit()
+		created.append(jv.name)
+	return created
 
 
 def _stamp_order_allocations(doc, order_rows, jv_name):

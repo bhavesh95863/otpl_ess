@@ -401,12 +401,16 @@ def reprocess_period(employee, from_date, to_date):
 
 
 def _rerun_attendance_range(employee, from_date, to_date):
-	"""Re-run attendance for each already-processed day in [from_date, to_date]."""
+	"""Re-run attendance for each already-processed day in [from_date, to_date].
+
+	Capped at yesterday: submitting a Leave Application creates On Leave attendance
+	for today / future days too, but those days are not over yet and belong to the
+	daily job, so they must not be re-run here."""
 	from employee_self_service.employee_self_service.utils.rerun_attendance import (
 		rerun_attendance_for_employee_date,
 	)
 	d = getdate(from_date)
-	end = getdate(to_date)
+	end = min(getdate(to_date), add_days(getdate(nowdate()), -1))
 	while d <= end:
 		if frappe.db.exists(
 			"Attendance",

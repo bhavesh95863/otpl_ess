@@ -250,13 +250,25 @@ function create_salary_entries(frm) {
 				freeze_message: __('Creating Salary Entries...'),
 				callback(r) {
 					if (!r.message) return;
-					const { created = [], skipped = [], fallback_used = [] } = r.message;
-					const links = created
+					const {
+						created = [], extra_allowance_created = [],
+						skipped = [], extra_skipped = [], fallback_used = [],
+					} = r.message;
+					const link_list = (names) => names
 						.map((n) => `<a href="/app/journal-entry/${encodeURIComponent(n)}">${n}</a>`)
 						.join('<br>');
-					let msg = __('Posted {0} Journal Entries:', [created.length]) + '<br>' + links;
+					let msg = __('Posted {0} Journal Entries:', [created.length])
+						+ '<br>' + link_list(created);
+					if (extra_allowance_created.length) {
+						msg += '<br><br><b>' + __('Extra Allowance ({0}):', [extra_allowance_created.length])
+							+ '</b><br>' + link_list(extra_allowance_created);
+					}
 					if (skipped.length) {
 						msg += '<br><br><b>' + __('Skipped {0}:', [skipped.length]) + '</b><br>' + skipped.join('<br>');
+					}
+					if (extra_skipped.length) {
+						msg += '<br><br><b>' + __('Extra allowance skipped {0}:', [extra_skipped.length])
+							+ '</b><br>' + extra_skipped.join('<br>');
 					}
 					if (fallback_used.length) {
 						msg += '<br><br><b>' + __('Booked to the default sales order ({0}) - no attendance order and no Employee master order:', [fallback_used.length])
