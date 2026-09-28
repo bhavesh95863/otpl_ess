@@ -263,5 +263,12 @@ fixtures = [
             "Branch",
             "Attendance"
         ]]],
+    },
+    {
+        "dt": "Custom Field",
+        "filters": [["name", "in", [
+            "Employee-no_validation",
+            "Employee-no_validation_base_salary"
+        ]]],
     }
 ]

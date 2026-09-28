@@ -159,8 +159,12 @@ def rerun_attendance_for_period(from_date=None, to_date=None, location=None):
 	}
 
 
-def cancel_and_delete_existing_attendance(employee, date):
-	"""Cancel and delete all existing attendance records for employee on given date."""
+def cancel_and_delete_existing_attendance(employee, date, commit=True):
+	"""Cancel and delete all existing attendance records for employee on given date.
+
+	Pass commit=False when running inside a document save that must still be able
+	to roll back (e.g. OTPL Leave approval clearing past days before its Leave
+	Applications are submitted)."""
 	cancelled_count = 0
 	attendance_records = frappe.get_all(
 		"Attendance",
@@ -185,7 +189,7 @@ def cancel_and_delete_existing_attendance(employee, date):
 				message=frappe.get_traceback()
 			)
 
-	if cancelled_count:
+	if cancelled_count and commit:
 		frappe.db.commit()
 
 	return cancelled_count

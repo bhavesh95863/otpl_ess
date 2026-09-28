@@ -419,6 +419,19 @@ class OTPLLeave(Document):
 		# derived from a Short Leave that is about to be cancelled.
 		self.override_short_leave_with_half_day()
 
+		# Captured up front: merging a half-day pair (inside
+		# create_leave_applications) flips self.status to Cancelled in memory,
+		# but the days still need their attendance refreshed.
+		approved_now = self._is_approval_transition()
+
+		# A leave approved late covers days whose attendance was already
+		# processed. Clear those first — ERPNext refuses to submit a Leave
+		# Application over a day already marked Present (e.g. no-check-in
+		# employees are auto-marked Present). No commit here, so a failed
+		# approval below rolls this back too.
+		if approved_now:
+			self.clear_past_attendance_before_approval()
+
 		# Create Leave Applications FIRST, before anything commits.
 		# This must run before push_leave_to_remote_erp(), which calls
 		# frappe.db.commit() internally: if creation were done after that commit
@@ -437,12 +450,11 @@ class OTPLLeave(Document):
 			if doc_before_save and doc_before_save.status != "Cancelled" and self.status == "Cancelled":
 				self.cancel_linked_leave_applications()
 
-		# A Short Leave / Half Day only shifts the day's late / extra-late
-		# thresholds; it creates no Leave Application. If it is approved AFTER the
-		# day's attendance was already processed (e.g. approved the next day), that
-		# attendance still carries the old (extra-)late marks. Re-run the day so the
-		# marks are recomputed against the now-approved leave's updated timing.
-		self.refresh_processed_attendance_after_approval()
+		# Re-run the leave's past days (full day, half day or short leave) so
+		# their attendance reflects the now-approved leave. Days from today on
+		# are left to the daily job.
+		if approved_now:
+			self.refresh_processed_attendance_after_approval()
 
 		# Approving / cancelling a leave changes the present-ish picture, which can
 		# add or remove Travelling CL holiday-credit qualification for nearby
@@ -482,54 +494,79 @@ class OTPLLeave(Document):
 				message=frappe.get_traceback(),
 			)
 
-	def refresh_processed_attendance_after_approval(self):
-		"""Re-run the day's attendance when a Short Leave / Half Day is approved
-		late — i.e. after that day was already processed.
-
-		Only within-day leaves (Short Leave, Half Day) matter here: they leave the
-		employee Present but shift the late / extra-late thresholds, and unlike a
-		full-day leave they create no Leave Application to drive attendance. If the
-		day already has an Attendance record, it was processed before this approval,
-		so re-run it so the late / extra-late marks reflect the updated time. A day
-		with no Attendance yet is left to the daily job (re-running a future day
-		with no check-ins would wrongly mark it Absent).
-		"""
+	def _is_approval_transition(self):
+		"""True when this save moves the leave into Approved."""
 		if self.get("__islocal"):
-			return
-		if not (self.short_leave or self.half_day):
-			return
-
+			return False
 		doc_before_save = self.get_doc_before_save()
-		if not (doc_before_save
-				and doc_before_save.status != "Approved"
-				and self.status == "Approved"):
-			return
+		return bool(doc_before_save
+			and doc_before_save.status != "Approved"
+			and self.status == "Approved")
 
+	def _past_leave_dates(self):
+		"""The leave's days that are already over (strictly before today).
+
+		Covers the approved range (falling back to the requested one) plus the
+		half day date. Today and later are excluded: e.g. a 26–29 leave approved
+		on the 28th yields only the 26th and 27th — the rest is still ahead of
+		the daily attendance job.
+		"""
+		start = self.approved_from_date or self.from_date
 		if self.short_leave:
-			target_date = self.approved_from_date or self.from_date
+			end = start
 		else:
-			target_date = self.half_day_date
-		if not target_date:
-			return
+			end = self.approved_to_date or self.to_date
+		if not (start and end):
+			return []
 
-		# Only refresh a day that was already processed; future days have no
-		# attendance yet and belong to the daily job.
-		if not frappe.db.exists(
-			"Attendance",
-			{"employee": self.employee, "attendance_date": getdate(target_date), "docstatus": 1}
-		):
-			return
+		start, end = getdate(start), getdate(end)
+		if self.half_day and self.half_day_date:
+			start = min(start, getdate(self.half_day_date))
+			end = max(end, getdate(self.half_day_date))
+		end = min(end, add_days(getdate(nowdate()), -1))
 
-		try:
-			from employee_self_service.employee_self_service.utils.rerun_attendance import (
-				rerun_attendance_for_employee_date,
-			)
-			rerun_attendance_for_employee_date(self.employee, getdate(target_date))
-		except Exception:
-			frappe.log_error(
-				title="Refresh attendance after leave approval failed: {0}".format(self.name),
-				message=frappe.get_traceback()
-			)
+		dates = []
+		d = start
+		while d <= end:
+			dates.append(d)
+			d = add_days(d, 1)
+		return dates
+
+	def clear_past_attendance_before_approval(self):
+		"""Cancel + delete the attendance of this leave's past days, without
+		committing, so the Leave Applications can be submitted over them and
+		refresh_processed_attendance_after_approval rebuilds them."""
+		from employee_self_service.employee_self_service.utils.rerun_attendance import (
+			cancel_and_delete_existing_attendance,
+		)
+		for d in self._past_leave_dates():
+			cancel_and_delete_existing_attendance(self.employee, d, commit=False)
+
+	def refresh_processed_attendance_after_approval(self):
+		"""Re-run this employee's attendance for the leave's past days after an
+		approval that lands late — e.g. a leave for the 25th approved on the 28th.
+
+		Applies to every leave kind:
+		- Full day: the day becomes On Leave via its Leave Application, with the
+		  stale check-in based remarks / late marks gone.
+		- Half Day / Short Leave: no Leave Application, but the late / extra-late
+		  thresholds shift, so the marks are recomputed against the new timing.
+
+		Only days strictly before today are re-run (see _past_leave_dates); today
+		and later belong to the daily job, and re-running a day with no check-ins
+		yet would wrongly mark it Absent. Only this employee is touched.
+		"""
+		from employee_self_service.employee_self_service.utils.rerun_attendance import (
+			rerun_attendance_for_employee_date,
+		)
+		for d in self._past_leave_dates():
+			try:
+				rerun_attendance_for_employee_date(self.employee, d)
+			except Exception:
+				frappe.log_error(
+					title="Refresh attendance after leave approval failed: {0} {1}".format(self.name, d),
+					message=frappe.get_traceback()
+				)
 
 	def create_leave_applications(self):
 		if not self.get("__islocal"):
