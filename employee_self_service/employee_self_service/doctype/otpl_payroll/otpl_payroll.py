@@ -536,6 +536,8 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 		present_dates         set[date]   - submitted Present (excluding false)
 		half_day_dates        set[date]   - submitted Half Day (excluding false)
 		absent_dates          set[date]   - submitted Absent (excluding false)
+		absent_no_punch_dates set[date]   - Absent with neither a check-in nor a
+		                                    check-out on the record (Col L)
 		late_count               int      - # days flagged late_entry or early_exit
 		late_entry_count         int      - # days with late_entry checked
 		early_exit_count         int      - # days with early_exit checked
@@ -558,6 +560,8 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 	extra_late_expr = "COALESCE(a.extra_late_entry, 0)" if has_extra_late else "0"
 	has_extra_early = frappe.db.has_column("Attendance", "extra_early_exit")
 	extra_early_expr = "COALESCE(a.extra_early_exit, 0)" if has_extra_early else "0"
+	has_checkin_time = frappe.db.has_column("Attendance", "checkin_time")
+	checkin_time_expr = "a.checkin_time" if has_checkin_time else "NULL"
 
 	rows = frappe.db.sql(
 		"""
@@ -571,6 +575,7 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 			{extra_late_expr}                 AS extra_late_entry,
 			{extra_early_expr}                AS extra_early_exit,
 			{working_hours_expr}              AS working_hours,
+			{checkin_time_expr}               AS checkin_time,
 			a.checkout_time                   AS checkout_time,
 			COALESCE(a.false_attendance, 0)   AS false_attendance
 		FROM `tabAttendance` a
@@ -578,7 +583,8 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 		  AND a.attendance_date BETWEEN %(from_date)s AND %(to_date)s
 		  AND a.docstatus = 1
 		""".format(late_mark_expr=late_mark_expr, working_hours_expr=working_hours_expr,
-		           extra_late_expr=extra_late_expr, extra_early_expr=extra_early_expr),
+		           extra_late_expr=extra_late_expr, extra_early_expr=extra_early_expr,
+		           checkin_time_expr=checkin_time_expr),
 		{"emp_ids": tuple(emp_ids), "from_date": from_date, "to_date": to_date},
 		as_dict=True,
 	)
@@ -588,6 +594,7 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 		"present_dates": set(),
 		"half_day_dates": set(),
 		"absent_dates": set(),
+		"absent_no_punch_dates": set(),
 		"late_count": 0,
 		"late_entry_count": 0,
 		"early_exit_count": 0,
@@ -614,6 +621,11 @@ def _fetch_attendance_aggregates(emp_ids, from_date, to_date):
 			bucket["half_day_dates"].add(d)
 		elif r.status == "Absent":
 			bucket["absent_dates"].add(d)
+			# Only an Absent with no punch at all is "absent without info". A
+			# punch with the other half missing (e.g. forgot to check out) is
+			# already an unpaid day via Days Worked, so it is not deducted again.
+			if not r.get("checkin_time") and not r.get("checkout_time"):
+				bucket["absent_no_punch_dates"].add(d)
 		# Late / early marks: counted separately (their total drives the ESS
 		# Location count rule). late_count is the per-day tally kept for info.
 		if cint(r.late_entry):
@@ -1433,6 +1445,7 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	present_dates = att.get("present_dates", set())
 	half_day_dates = att.get("half_day_dates", set())
 	absent_dates = att.get("absent_dates", set())
+	absent_no_punch_dates = att.get("absent_no_punch_dates", set())
 	processed_dates = att.get("processed_dates", set())
 	late_count = 0 if skip_late_metrics else att.get("late_count", 0)
 	late_entry_count = 0 if skip_late_metrics else att.get("late_entry_count", 0)
@@ -1654,13 +1667,17 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	late_deduction = approved_half_days / 2.0 + late_mark_deduction + extra_late_half_days
 
 	# ---- Col L: Absent w/o info (observation #4) -----------------------------
-	# Count of Attendance.status='Absent' (excluding false attendance), MINUS any
-	# qualifying holiday (OR rule, Col H) that falls on an Absent-marked day. A
-	# qualifying holiday is a paid/earned holiday (counted in Days Worked); if a
-	# holiday date was also marked Absent, that Absent must not be double-counted
-	# against the employee here.
-	absent_on_qualifying_holiday = len(absent_dates & qualifying_holiday_dates)
-	absent_count = len(absent_dates) - absent_on_qualifying_holiday
+	# Count of Attendance.status='Absent' (excluding false attendance) with NO
+	# check-in and NO check-out at all, MINUS any qualifying holiday (OR rule,
+	# Col H) that falls on such a day. A qualifying holiday is a paid/earned
+	# holiday (counted in Days Worked); if a holiday date was also marked Absent,
+	# that Absent must not be double-counted against the employee here.
+	#
+	# An Absent caused by a missing punch (checked in but forgot to check out, or
+	# the reverse) is NOT absent without info: the day is already unpaid because
+	# it is not in Days Worked, so counting it here too would cost two days.
+	absent_on_qualifying_holiday = len(absent_no_punch_dates & qualifying_holiday_dates)
+	absent_count = len(absent_no_punch_dates) - absent_on_qualifying_holiday
 
 	# ---- Col M / N: Adjusted from CL / AL ------------------------------------
 	# CL comes from the standard "Casual Leave" allocation (passed in by the
@@ -2314,6 +2331,8 @@ def get_calculation_trace(doc, employee):
 				     if is_driver else "N/A (Driver rule only)")),
 				("Half Days (status = Half Day) — leave half-days only", str(len(half_day_dates))),
 				("Absent days", str(len(absent_dates))),
+				("Absent days with no check-in / check-out (Col L source)",
+				 str(len(att.get("absent_no_punch_dates", set())))),
 				("Late Entry marks", str(row.get("late_entry_count", 0))),
 				("Early Exit marks", str(row.get("early_exit_count", 0))),
 				("Late + Early total (for the count rule)", str(row.get("late_early_total", 0))),
@@ -2396,7 +2415,8 @@ def get_calculation_trace(doc, employee):
 				         lmv=_f(row.get("late_mark_deduction", 0)),
 				         xh=_f(row.get("extra_late_half_days", 0)))),
 				("(L) Absent w/o info",
-				 "{0}  —  Absent (excl. false) − qualifying holidays on absent days ({1})".format(
+				 "{0}  —  Absent with no check-in / check-out (excl. false) − qualifying "
+				 "holidays on those days ({1}). A missing-punch Absent is not counted".format(
 				     row["absent_no_info_days"], row.get("absent_on_qualifying_holiday", 0))),
 				("(M) Adjusted from CL",
 				 "0.00  —  Field staff are AL-only: no Casual Leave is drawn or reported"
