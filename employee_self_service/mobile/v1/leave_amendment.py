@@ -10,10 +10,13 @@ returns early). Contract for the app:
   * get_leave_amendment_approvals -> pending amendments for the manager.
   * get_leave_amendment_approved_list -> the manager's approved amendments.
   * set_leave_amendment_status    -> manager approves / rejects.
+  * cancel_approved_leave         -> the employee withdraws a whole Approved leave
+    that has not started yet (no manager approval needed).
 """
 
 import json
 import frappe
+from frappe.utils import getdate, nowdate
 
 from employee_self_service.mobile.v1.api_utils import (
 	gen_response,
@@ -173,5 +176,50 @@ def set_leave_amendment_status(*args, **kwargs):
 		return gen_response(200, "Leave amendment {0}".format(status.lower()), {
 			"name": doc.name, "status": doc.status, "amended_leave": doc.amended_leave,
 		})
+	except Exception as e:
+		return exception_handler(e)
+
+
+@frappe.whitelist()
+@ess_validate(methods=["POST"])
+def cancel_approved_leave(*args, **kwargs):
+	"""The employee cancels a complete Approved OTPL Leave. Body: name, reason
+	(optional). Only a leave that has not started yet (from date today or later)
+	can be cancelled — once it has started, raise an amendment instead. Setting
+	the status to Cancelled makes OTPL Leave cancel its Leave Applications and
+	sync the change to the remote ERP."""
+	try:
+		emp = get_employee_by_user(frappe.session.user)
+		if not emp:
+			return gen_response(500, "Employee does not exist")
+		data = kwargs or json.loads(frappe.request.get_data() or "{}")
+		name = data.get("name")
+		if not name:
+			return gen_response(500, "Leave ID is required")
+		if not frappe.db.exists("OTPL Leave", name):
+			return gen_response(500, "Leave does not exist")
+		doc = frappe.get_doc("OTPL Leave", name)
+		if doc.employee != emp.get("name"):
+			return gen_response(500, "You are not authorized to cancel this leave")
+		if doc.status != "Approved":
+			return gen_response(500, "Only an Approved leave can be cancelled (current status: {0})".format(doc.status))
+		from_date = getdate(doc.approved_from_date or doc.from_date)
+		if from_date < getdate(nowdate()):
+			return gen_response(500, "This leave has already started, so it cannot be cancelled. "
+			                         "Raise a leave amendment to shorten it instead.")
+		if frappe.db.exists("OTPL Leave Amendment", {"original_leave": name, "status": "Pending"}):
+			return gen_response(500, "A leave amendment is pending for this leave. "
+			                         "Wait for it to be actioned before cancelling.")
+		doc.status = "Cancelled"
+		doc.flags.ignore_permissions = True
+		doc.save(ignore_permissions=True)
+		note = "Leave cancelled by the employee from the mobile app"
+		if data.get("reason"):
+			note += ": {0}".format(data.get("reason"))
+		try:
+			doc.add_comment("Comment", text=note)
+		except Exception:
+			pass
+		return gen_response(200, "Leave cancelled", {"name": doc.name, "status": doc.status})
 	except Exception as e:
 		return exception_handler(e)
