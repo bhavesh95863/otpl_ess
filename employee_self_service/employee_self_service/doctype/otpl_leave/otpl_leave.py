@@ -7,6 +7,9 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import date_diff, add_days, getdate, get_first_day, get_last_day, nowdate, flt
 from employee_self_service.employee_self_service.utils.erp_sync import push_leave_to_remote_erp
+from employee_self_service.employee_self_service.utils.travelling_cl_credit import (
+	CL_ENCASHMENT_ONLY_STAFF_TYPES,
+)
 from employee_self_service.employee_self_service.utils.leave_escalation import (
 	resolve_external_manager_pull,
 	resolve_approver_chain,
@@ -738,12 +741,19 @@ class OTPLLeave(Document):
 		# broken at CL/LWP changes AND at month boundaries so every application stays
 		# within one month (keeps the monthly accounting exact).
 		MONTHLY_CL_CAP = 2.0
-		annual_cl_remaining = flt(get_leave_balance_on(
-			employee=self.employee,
-			leave_type=casual_leave,
-			date=from_date,
-			consider_all_leaves_in_the_allocation_period=True
-		) or 0)
+		# Workers and Field staff never spend CL on leave — it is kept for year-end
+		# encashment — so every day they take is booked as Leave Without Pay (payroll
+		# may still pay it from AL).
+		staff_type = frappe.db.get_value("Employee", self.employee, "staff_type")
+		if staff_type in CL_ENCASHMENT_ONLY_STAFF_TYPES:
+			annual_cl_remaining = 0.0
+		else:
+			annual_cl_remaining = flt(get_leave_balance_on(
+				employee=self.employee,
+				leave_type=casual_leave,
+				date=from_date,
+				consider_all_leaves_in_the_allocation_period=True
+			) or 0)
 
 		month_cl_used = {}
 

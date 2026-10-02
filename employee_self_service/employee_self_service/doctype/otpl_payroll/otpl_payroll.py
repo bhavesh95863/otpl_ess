@@ -30,6 +30,9 @@ from employee_self_service.employee_self_service.utils.daily_attendance import (
 	normalize_half_day_period,
 )
 from employee_self_service.employee_self_service.doctype.otpl_tds.otpl_tds import MONTHS
+from employee_self_service.employee_self_service.utils.travelling_cl_credit import (
+	CL_ENCASHMENT_ONLY_STAFF_TYPES,
+)
 
 
 # Constants from the salary spec
@@ -61,22 +64,64 @@ QUALIFY_WORKING_DAYS = 3
 # skipped, so this only has to clear the longest run of consecutive holidays.
 QUALIFY_MARGIN_DAYS = 21
 
+
+def working_days_around(h, step, holidays_to_skip):
+	"""The next ``QUALIFY_WORKING_DAYS`` working dates from ``h``, walking
+	backwards (step=-1) or forwards (step=+1) over holidays.
+
+	The walk gives up after ``QUALIFY_MARGIN_DAYS`` calendar days — the span
+	for which neighbouring holiday / attendance data was fetched — and
+	returns whatever it found, so it can never run off into dates it has no
+	data for.
+	"""
+	found = []
+	d = h
+	for _ in range(QUALIFY_MARGIN_DAYS):
+		d = d + timedelta(days=step)
+		if d in holidays_to_skip:
+			continue
+		found.append(d)
+		if len(found) == QUALIFY_WORKING_DAYS:
+			break
+	return found
+
+
+def holiday_window_qualifies(h, presentish_dates, holidays_to_skip):
+	"""True when the employee was present-ish on at least one of the working
+	days before holiday ``h`` AND on at least one of the working days after it.
+	The one qualifying rule, shared by payroll (Col G / Col H) and the
+	work-on-holiday CL credit (utils/travelling_cl_credit.py)."""
+	before = working_days_around(h, -1, holidays_to_skip)
+	after = working_days_around(h, 1, holidays_to_skip)
+	return (any(d in presentish_dates for d in before)
+	        and any(d in presentish_dates for d in after))
+
+
+def holiday_qualifies_for(employee, h):
+	"""Standalone qualifying check for one (employee, holiday), fetching the
+	neighbouring holidays and present-ish days itself. Used by the
+	work-on-holiday CL credit, which runs outside a payroll period."""
+	h = getdate(h)
+	margin = timedelta(days=QUALIFY_MARGIN_DAYS)
+	holidays = _fetch_holidays_per_employee(
+		[{"employee": employee}], h - margin, h + margin).get(employee, set())
+	presentish = _fetch_presentish_in_window([employee], h - margin, h + margin).get(employee, set())
+	return holiday_window_qualifies(h, presentish, holidays)
+
 # --- Driver OT rule (hardcoded per business spec) --------------------------
-# Duty ends at 19:30 and OT is banded by the hour the driver PUNCHES OUT in —
-# the hour is paid as soon as it is entered, not once it is completed. So a
-# checkout at 19:31 already earns the first ₹100, where the old
-# completed-hours rule paid nothing until 20:30.
+# Duty ends at 19:30 and OT is ₹100 per COMPLETED hour after it — a checkout
+# at 20:31 earns ₹100, at 21:31 ₹200, and so on:
 #
-#     19:30 – 20:30 -> ₹100
-#     20:30 – 21:30 -> ₹200
-#     21:30 – 22:30 -> ₹300
-#     22:30 – 23:30 -> ₹400
-#     after 23:30   -> ₹700 flat, and the hourly bands do NOT apply on top
+#     up to 20:30   -> ₹0
+#     20:30 – 21:30 -> ₹100
+#     21:30 – 22:30 -> ₹200
+#     22:30 – 23:30 -> ₹300
+#     after 23:30   -> ₹500 flat, and the hourly bands do NOT apply on top
 #
 # The bands apply whether the driver was local or out of station. A holiday the
 # driver actually worked is a flat ₹700 instead of the day's bands, again local
 # or out of station.
-DRIVER_OT_FLAT = 700.0
+DRIVER_OT_FLAT = 500.0
 # Flat OT for a holiday the driver actually worked. Paid for EVERY worked
 # holiday, not only the ones that pass the qualifying (sandwich) rule. It is
 # paid ON TOP of the day: a qualifying holiday the driver worked stays in Days
@@ -86,29 +131,28 @@ DRIVER_HOLIDAY_OT = 700.0
 DRIVER_OT_PER_HOUR = 100.0
 # Flat allowance for a WORKING day the driver spent out of station. It is an
 # allowance for being away, not overtime, so it stacks ON TOP of whatever the
-# checkout earned that day — including the flat ₹700 for a post-23:30 punch-out
+# checkout earned that day — including the flat ₹500 for a post-23:30 punch-out
 # (the "after 11.30 pm" rule cancels the hourly bands, not this). Holidays are
 # out of scope: a worked holiday already pays its own flat rate, local or away.
 DRIVER_OUT_OF_STATION_OT = 200.0
 DRIVER_DUTY_END = time(19, 30)
-# Absolute clock time past which the flat ₹700 applies, replacing the bands.
+# Absolute clock time past which the flat ₹500 applies, replacing the bands.
 DRIVER_OT_MAX_AFTER = time(23, 30)
-# Upper edge of each hourly band, in order. Entering a band pays for it.
-DRIVER_OT_BAND_ENDS = (time(20, 30), time(21, 30), time(22, 30), time(23, 30))
+# End of each completed hour after duty end, in order. A checkout past one
+# earns another ₹100.
+DRIVER_OT_HOUR_ENDS = (time(20, 30), time(21, 30), time(22, 30))
 
 
 def _driver_checkout_ot(checkout_dt, att_date):
 	"""Driver OT for a single day's checkout time (hardcoded bands).
 
-	₹100 for each hourly band the punch-out falls in, counted from the 19:30
-	duty end. The hour is paid on ENTRY, not on completion:
+	₹100 for each hour COMPLETED after the 19:30 duty end:
 
-	    <= 19:30 -> ₹0      (not past duty end)
-	    <= 20:30 -> ₹100    (punched out in the first hour)
-	    <= 21:30 -> ₹200
-	    <= 22:30 -> ₹300
-	    <= 23:30 -> ₹400
-	    >  23:30 -> ₹700    (flat; the bands do not apply as well)
+	    <= 20:30 -> ₹0
+	    <= 21:30 -> ₹100    (e.g. checkout 20:31)
+	    <= 22:30 -> ₹200    (e.g. checkout 21:31)
+	    <= 23:30 -> ₹300
+	    >  23:30 -> ₹500    (flat; the bands do not apply as well)
 
 	Applies to local and out-of-station days alike.
 
@@ -125,12 +169,8 @@ def _driver_checkout_ot(checkout_dt, att_date):
 	# Tested first: a next-day (post-midnight) timestamp is past every boundary.
 	if c > at(DRIVER_OT_MAX_AFTER):
 		return DRIVER_OT_FLAT
-	if c <= at(DRIVER_DUTY_END):
-		return 0.0
-	for i, band_end in enumerate(DRIVER_OT_BAND_ENDS):
-		if c <= at(band_end):
-			return DRIVER_OT_PER_HOUR * (i + 1)
-	return DRIVER_OT_PER_HOUR * len(DRIVER_OT_BAND_ENDS)
+	hours = sum(1 for hour_end in DRIVER_OT_HOUR_ENDS if c > at(hour_end))
+	return DRIVER_OT_PER_HOUR * hours
 
 
 # -----------------------------------------------------------------------------
@@ -1435,11 +1475,17 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# AND the employee's Business Line has al_eligible=1 (observation #12).
 	al_enabled = bool(is_worker_site and al_eligible)
 
-	# Field staff earn AL a different way: one AL per holiday they actually WORK
-	# (the qualifying / sandwich rule is not used), and the balance is forfeited
-	# the moment they take leave. No OTPL Employee Leave Balance row or AL-eligible
-	# Business Line is required — the row is created on submit if missing.
+	# Field staff earn AL by the same qualifying-holiday rule as Worker@Site, but
+	# the balance is forfeited the moment they take leave. No OTPL Employee Leave
+	# Balance row or AL-eligible Business Line is required — the row is created on
+	# submit if missing.
 	field_al_enabled = (staff_type == "Field")
+
+	# CL is never used to pay approved leave for Workers (any location) or Field
+	# staff. Their CL is an opening balance carried to year end and encashed, so
+	# it is reported in Col O but left untouched by Col M. Drivers and Manager /
+	# Director / Staff still have CL adjusted against approved leave.
+	cl_adjustable = staff_type not in CL_ENCASHMENT_ONLY_STAFF_TYPES
 
 	# Attendance aggregates -----------------------------------------------------
 	present_dates = att.get("present_dates", set())
@@ -1528,32 +1574,6 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	# This one rule drives BOTH Col H (Days Worked) and Col G (AL Generated).
 	holidays_to_skip = holiday_dates | (neighbour_holidays or set())
 
-	def _working_days_around(h, step):
-		"""The next ``QUALIFY_WORKING_DAYS`` working dates from ``h``, walking
-		backwards (step=-1) or forwards (step=+1) over holidays.
-
-		The walk gives up after ``QUALIFY_MARGIN_DAYS`` calendar days — the span
-		for which neighbouring holiday / attendance data was fetched — and
-		returns whatever it found, so it can never run off into dates it has no
-		data for.
-		"""
-		found = []
-		d = h
-		for _ in range(QUALIFY_MARGIN_DAYS):
-			d = d + timedelta(days=step)
-			if d in holidays_to_skip:
-				continue
-			found.append(d)
-			if len(found) == QUALIFY_WORKING_DAYS:
-				break
-		return found
-
-	def _holiday_window_qualifies(h):
-		before = _working_days_around(h, -1)
-		after = _working_days_around(h, 1)
-		return (any(d in presentish_dates for d in before)
-		        and any(d in presentish_dates for d in after))
-
 	# A holiday can only be judged once the employee's attendance has actually
 	# been processed that far, so the count stops at their last processed day.
 	# Without this every remaining holiday of the month would qualify by default
@@ -1576,14 +1596,17 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		# in payable_days.
 		if h in full_leave_dates:
 			continue
-		if _holiday_window_qualifies(h):
+		if holiday_window_qualifies(h, presentish_dates, holidays_to_skip):
 			qualified_holidays += 1
 			qualifying_holiday_dates.add(h)
 
 	# ---- Col G: AL Generated --------------------------------------------------
-	# One AL per qualifying holiday. Only counted when AL is enabled for this
-	# employee/business line.
-	al_generated = qualified_holidays if al_enabled else 0
+	# One AL per qualifying holiday the employee was NOT marked Leave or Absent
+	# on (they need not have worked it). Full-day leave on the holiday is already
+	# kept out of qualifying_holiday_dates above; Absent is taken out here. Only
+	# for Worker@Site on an AL-eligible business line, and for Field staff.
+	al_holiday_dates = qualifying_holiday_dates - absent_dates
+	al_generated = len(al_holiday_dates) if (al_enabled or field_al_enabled) else 0
 
 	# ---- Col H: Days Worked (Worked / Holidays / Leave Adjustment) -----------
 	# Half days count as a full present day here (obs #5); the 0.5-day salary
@@ -1601,14 +1624,13 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	#
 	# Gated on being PRESENT, not on the holiday qualifying. The qualifying
 	# (sandwich) rule decides whether an UNWORKED holiday is earned; a day the
-	# driver actually drove is earned by the work itself. This mirrors the
-	# non-Driver side, where working a holiday credits CL with no qualifying
-	# test (see utils/travelling_cl_credit.py).
+	# driver actually drove is earned by the work itself.
 	driver_worked_qh = (present_dates & holiday_dates) if is_driver else set()
 
 	# Non-Driver Work-on-Holiday: a holiday the employee is Present (1) or Half Day
-	# (0.5) on. Reported for information, and it drives the CL credit granted by the
-	# work-on-holiday job, but it is NOT deducted from Days Worked.
+	# (0.5) on. Reported for information (for Manager / Director / Staff a worked
+	# QUALIFYING holiday also earns CL via the work-on-holiday job), but it is NOT
+	# deducted from Days Worked.
 	#
 	# A monthly-salaried employee's holidays already sit inside the month's pay, so
 	# deducting a worked holiday removed pay they would have received by staying at
@@ -1618,11 +1640,6 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	worked_holiday_full = (present_dates & holiday_dates) if not is_driver else set()
 	worked_holiday_half = (half_day_dates & holiday_dates) if not is_driver else set()
 	work_on_holiday = len(worked_holiday_full) + 0.5 * len(worked_holiday_half)
-
-	# Field staff: AL is earned by WORKING the holiday, not by the qualifying rule,
-	# so Col G is the work-on-holiday count (1 per full day, 0.5 per half day).
-	if field_al_enabled:
-		al_generated = work_on_holiday
 
 	# A worked holiday is NOT netted out of Days Worked for Drivers either. A
 	# qualifying holiday is already earned pay that sits inside the month; taking
@@ -1702,12 +1719,6 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	cl_balance = flt(cl_balance)
 	cl_generated = flt(cl_generated)
 
-	# Field staff are AL-only: their comp-off for working a holiday is AL, and they
-	# neither draw on nor report Casual Leave. Zeroed here so Col M and Col O stay
-	# empty even for a Field employee who still has a standing CL allocation.
-	if field_al_enabled:
-		cl_balance = 0.0
-		cl_generated = 0.0
 	al_balance = flt(balance.get("al_balance") or balance.get("year_opening_al") or 0)
 
 	# CL available to absorb THIS period's leave = the opening balance plus any
@@ -1724,15 +1735,13 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		effective_al = al_balance + al_generated
 	else:
 		effective_al = 0
-	# Leave Without Pay is never adjusted from CL / AL — it was decided as unpaid.
+	# Leave Without Pay is never adjusted from CL — it was decided as unpaid.
 	adjusted_leaves = len(full_leave_dates - (lwp_dates or set()))
 
-	# Field staff only: their AL is a comp-off for holidays worked, so it pays ANY
-	# approved full-day leave — Leave Without Pay included. (Everywhere else LWP is
-	# excluded from the adjustment: it was decided as unpaid because no balance was
-	# left. A Field employee who banked days by working Sundays does have a balance,
-	# so those LWP days are paid out of it.)
-	al_adjustable_leaves = len(full_leave_dates) if field_al_enabled else adjusted_leaves
+	# AL pays ANY approved full-day leave — Leave Without Pay included. An
+	# AL-earning employee (Worker@Site, Field) never draws CL, so OTPL Leave books
+	# every one of their leave days as LWP; AL is the only thing that can pay them.
+	al_adjustable_leaves = len(full_leave_dates) if (al_enabled or field_al_enabled) else adjusted_leaves
 
 	# Col N: Adjusted from AL
 	if al_enabled or field_al_enabled:
@@ -1751,11 +1760,9 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		closing_al = 0
 
 	# Col M: Adjusted from CL — whatever AL did not already cover.
-	# For Field staff AL may have been spent on LWP days, so the CL side is judged
-	# against the AL actually consumed, not the whole AL balance.
-	al_used_against_leave = adj_al if field_al_enabled else effective_al
-	if field_al_enabled:
-		# AL-only: no CL adjustment for Field staff, whatever leave remains.
+	al_used_against_leave = adj_al if (al_enabled or field_al_enabled) else effective_al
+	if not cl_adjustable:
+		# CL is kept for year-end encashment, never spent on leave.
 		adj_cl = 0
 	elif adjusted_leaves > al_used_against_leave:
 		uncovered = adjusted_leaves - al_used_against_leave
@@ -1917,13 +1924,15 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		expenses_balance = pp_balance + part_adv
 
 	# ---- Col AE: Extra Allowance (observations #19, #20) ---------------------
-	# TADA  -> only Worker/Site or Field/Site, per present day * daily_tada
+	# TADA  -> only Worker/Site or Field/Site, daily_tada × days marked Present
+	#          (worked holidays included, false attendance and leave days
+	#          excluded). A site check-in is always a full day, so there is no
+	#          half-day rule here.
 	# HRA/Conveyance/Telephone -> everyone EXCEPT Worker/Site & Field/Site
 	tada_amount = 0.0
+	tada_days = 0.0
 	if is_worker_field_site:
-		tada_days = flt(payable_days) - flt(adj_cl) - flt(adj_al)
-		if tada_days < 0:
-			tada_days = 0.0
+		tada_days = len(present_dates)
 		tada_amount = flt(emp.get("daily_tada")) * tada_days
 	hra = conv = tel = 0.0
 	if not is_worker_field_site:
@@ -2303,7 +2312,7 @@ def get_calculation_trace(doc, employee):
 				         _f(al_balance))),
 				("Holiday list dates in period", str(len(holiday_dates))),
 				("AL Calculation",
-				 "ENABLED (Field staff rule: AL per holiday worked, forfeited on any leave)"
+				 "ENABLED (Field staff rule: AL per qualifying holiday, forfeited on any leave)"
 				 if is_field_al else
 				 ("ENABLED" if al_eligible else "DISABLED — " + ", ".join(al_reason))),
 			],
@@ -2317,10 +2326,11 @@ def get_calculation_trace(doc, employee):
 				 "{0}  —  {1}".format(
 				     _f(row.get("work_on_holiday", 0)),
 				     ("holiday(s) worked (Present=1 / Half Day=0.5). NOT deducted from Days Worked — "
-				      "the day is paid as part of the month; the Casual Leave credit is a comp-off on top"
-				      if staff_type != "Field" else
-				      "holiday(s) worked (Present=1 / Half Day=0.5). Field staff earn NO work-on-holiday "
-				      "Casual Leave; the day is paid as part of the month")
+				      "the day is paid as part of the month; a worked QUALIFYING holiday also earns "
+				      "Casual Leave as a comp-off on top"
+				      if staff_type not in CL_ENCASHMENT_ONLY_STAFF_TYPES else
+				      "holiday(s) worked (Present=1 / Half Day=0.5). {0} staff earn NO work-on-holiday "
+				      "Casual Leave; the day is paid as part of the month".format(staff_type))
 				     if not is_driver else "N/A (Driver — flat OT instead)")),
 				("Out of station (approved Travelling CL)",
 				 "{0}  —  {1}".format(
@@ -2363,11 +2373,8 @@ def get_calculation_trace(doc, employee):
 				("(G) AL Generated",
 				 "{0}  —  {1}".format(
 				     row["al_generated"],
-				     "Field staff: one AL per holiday WORKED (Present=1 / Half Day=0.5); "
-				     "the qualifying/sandwich rule is not used"
-				     if is_field_al else
-				     ("one per qualifying holiday (same rule as Col H)"
-				      if al_eligible else "0 (AL disabled)"))),
+				     "one per qualifying holiday (same rule as Col H) not marked Leave / Absent"
+				     if (is_field_al or al_eligible) else "0 (AL disabled)")),
 				("(H) Days Worked",
 				 "{dw} = non-holiday present-ish {nhp} + qualifying holidays {qh}{drv} − 2×{fc} false attendance"
 				 .format(dw=_f(row["days_worked"]), nhp=row["non_holiday_present"],
@@ -2419,8 +2426,9 @@ def get_calculation_trace(doc, employee):
 				 "holidays on those days ({1}). A missing-punch Absent is not counted".format(
 				     row["absent_no_info_days"], row.get("absent_on_qualifying_holiday", 0))),
 				("(M) Adjusted from CL",
-				 "0.00  —  Field staff are AL-only: no Casual Leave is drawn or reported"
-				 if is_field_al else
+				 "0.00  —  {0} staff: CL is kept for year-end encashment, never adjusted "
+				 "against leave".format(staff_type)
+				 if staff_type in CL_ENCASHMENT_ONLY_STAFF_TYPES else
 				 ("{0}  —  adjustable={1} (approved full-day {2} − Leave Without Pay {3}), AL Bal={4}, "
 				  "CL available={5} (opening {6} + earned this period {7}); CL covers up to 2 of "
 				  "(adjustable−AL Bal). Absent (Col L) is NOT netted here."
@@ -2439,8 +2447,6 @@ def get_calculation_trace(doc, employee):
 				     ("min(AL Bal {0}, approved {1})".format(_f(al_balance), approved_full)
 				      if al_eligible else "0 (AL disabled)"))),
 				("(O) Balance CL",
-				 "0.00  —  Field staff are AL-only: no Casual Leave balance is carried"
-				 if is_field_al else
 				 "{0} = opening {1} + work-on-holiday CL earned this period {2} − adjusted {3}"
 				 .format(_f(row["balance_cl"]), _f(cl_balance),
 				         _f(row.get("cl_generated", 0)), _f(row["adjusted_from_cl"]))),
@@ -2471,8 +2477,8 @@ def get_calculation_trace(doc, employee):
 				("(S) OT/HRA/Petrol",
 				 "{0}  —  {1}".format(_f(row["ot_hra_petrol"]),
 				                      ("Driver rule (₹): holidays actually worked × ₹{hol:.0f} "
-				                       "+ checkout bands (₹{hr:.0f} per hour ENTERED after 19:30, so ≤19:30 ₹0 / "
-				                       "≤20:30 ₹100 / ≤21:30 ₹200 / ≤22:30 ₹300 / ≤23:30 ₹400; after 23:30 "
+				                       "+ checkout bands (₹{hr:.0f} per hour COMPLETED after 19:30, so ≤20:30 ₹0 / "
+				                       "≤21:30 ₹100 / ≤22:30 ₹200 / ≤23:30 ₹300; after 23:30 "
 				                       "flat ₹{flat:.0f} with no bands on top) — all of that local or out of "
 				                       "station alike — + ₹{oos:.0f} × {oosd} out-of-station working day(s), "
 				                       "stacked on top of the band."
@@ -2569,8 +2575,13 @@ def _resolve_salary_due_base_data(business_vertical):
 
 	A vertical has several "Salary Due" base rows (earnest money, inter-company
 	transfers, ...). The one that posts wages is the one crediting that
-	vertical's Payroll Payable from a "Salary and Wages" expense head, which is
-	also the pair Salary Payable Request later reads back off the ledger.
+	vertical's Payroll Payable from an expense head, which is also the pair
+	Salary Payable Request later reads back off the ledger.
+
+	The debit side is identified by the account's root type, not its name:
+	charts spell the head differently ("Salary and Wages USFD - OTPL" against
+	"Salary & Wages - USFD - TRS"). Only when a vertical debits more than one
+	expense head (e.g. internet expenses as well) does the name break the tie.
 
 	Returns (base_data_name, error_message); exactly one is set.
 	"""
@@ -2578,22 +2589,33 @@ def _resolve_salary_due_base_data(business_vertical):
 	if not payroll_payable:
 		return None, _("Business Line {0} has no Payroll Payable account set.").format(business_vertical)
 
-	name = frappe.db.get_value(
-		"Employee Salary Base Data",
-		{
-			"business_vertical": business_vertical,
-			"purpose": "Salary Due",
-			"cr_ledger": payroll_payable,
-			"dr_ledger": ("like", "Salary and Wages%"),
-		},
-		"name",
+	candidates = frappe.db.sql(
+		"""SELECT b.name, b.dr_ledger
+		   FROM `tabEmployee Salary Base Data` b
+		   INNER JOIN `tabAccount` a ON a.name = b.dr_ledger
+		   WHERE b.business_vertical = %(vertical)s
+		     AND b.purpose = 'Salary Due'
+		     AND b.cr_ledger = %(payable)s
+		     AND a.root_type = 'Expense'""",
+		{"vertical": business_vertical, "payable": payroll_payable},
+		as_dict=True,
 	)
-	if not name:
+	if len(candidates) > 1:
+		candidates = [
+			c for c in candidates
+			if "salary" in c.dr_ledger.lower() and "wages" in c.dr_ledger.lower()
+		]
+		if len(candidates) != 1:
+			return None, _(
+				"More than one 'Salary Due' Employee Salary Base Data for {0} crediting {1} "
+				"from an Expense account; keep exactly one Salary & Wages head."
+			).format(business_vertical, payroll_payable)
+	if not candidates:
 		return None, _(
 			"No 'Salary Due' Employee Salary Base Data for {0} crediting {1} "
-			"from a 'Salary and Wages' account."
+			"from an Expense account."
 		).format(business_vertical, payroll_payable)
-	return name, None
+	return candidates[0].name, None
 
 
 def _preflight_cost_centers(by_vertical, alloc_by_emp, default_so, extra_orders=None):

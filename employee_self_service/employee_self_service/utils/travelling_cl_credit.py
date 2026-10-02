@@ -3,11 +3,16 @@
 # For license information, please see license.txt
 """Work-on-holiday CL credit.
 
-When an eligible employee is Present (full day) or Half Day on a holiday, that
-day is credited to their Casual Leave balance: +1 for a full day, +0.5 for a half
-day. The qualifying / "sandwich" rule is NOT used — simply working the holiday
-earns the CL. Drivers are excluded (they earn a flat OT instead, in payroll) and
-so are Field staff.
+When an eligible employee is Present (full day) or Half Day on a QUALIFYING
+holiday, that day is credited to their Casual Leave balance: +1 for a full day,
++0.5 for a half day. The holiday must pass the same qualifying rule payroll uses
+(present-ish on at least one working day before AND after it). Drivers are
+excluded (they earn a flat OT instead, in payroll) and so are Workers and Field
+staff.
+
+A holiday cannot qualify until the working days after it have attendance, so the
+credit usually lands a few days after the holiday — the nightly backstop and
+the attendance trigger both re-check it.
 
 The credit is reconciled from Attendance: granted when the holiday shows Present /
 Half Day, adjusted if that status changes, and reverted if the day is no longer
@@ -22,8 +27,15 @@ from frappe.utils import getdate, add_days, nowdate, flt
 
 CASUAL_LEAVE = "Casual Leave"
 # Staff types that never earn the work-on-holiday CL: Drivers get a flat holiday
-# OT in payroll instead, and Field staff are excluded by policy.
-EXCLUDED_STAFF_TYPES = ("Driver", "Field")
+# OT in payroll instead, and Workers (every location) and Field staff are
+# excluded by policy. Only Manager / Director / Staff (and the other office
+# staff types) earn it.
+EXCLUDED_STAFF_TYPES = ("Driver", "Field", "Worker")
+
+# Staff types whose CL is an opening balance kept for year-end encashment: it is
+# never spent on approved leave (OTPL Leave books those days as LWP and payroll
+# leaves Col M at zero).
+CL_ENCASHMENT_ONLY_STAFF_TYPES = ("Worker", "Field")
 LOOKBACK_DAYS = 31    # nightly backstop scans holidays within this many days
 
 
@@ -147,8 +159,8 @@ def _active_credit(employee, date):
 
 def _holiday_credit_amount(employee, date):
 	"""CL earned by (employee, date): 1.0 if Present on the holiday, 0.5 if Half
-	Day, else 0.0. Drivers never earn it (they get a flat OT in payroll instead),
-	nor do Field staff, and it applies only on a holiday of the employee's holiday
+	Day, else 0.0 — and 0.0 unless the holiday qualifies. Drivers never earn it (they get a flat OT in payroll instead),
+	nor do Workers or Field staff, and it applies only on a holiday of the employee's holiday
 	list."""
 	emp = frappe.db.get_value(
 		"Employee", employee,
@@ -169,10 +181,16 @@ def _holiday_credit_amount(employee, date):
 	if not att or att.get("false_attendance"):
 		return 0.0
 	if att.status == "Present":
-		return 1.0
-	if att.status == "Half Day":
-		return 0.5
-	return 0.0
+		amount = 1.0
+	elif att.status == "Half Day":
+		amount = 0.5
+	else:
+		return 0.0
+
+	from employee_self_service.employee_self_service.doctype.otpl_payroll.otpl_payroll import (
+		holiday_qualifies_for,
+	)
+	return amount if holiday_qualifies_for(employee, date) else 0.0
 
 
 def _grant_credit(employee, date, amount):
@@ -453,11 +471,14 @@ def on_leave_application_change(doc, method=None):
 
 
 def on_attendance_change(doc, method=None):
-	"""doc_event for Attendance submit / cancel / update: when the day is a holiday
-	for an eligible employee, (re)evaluate the work-on-holiday CL credit so a
-	holiday marked Present/Half Day is credited and a reverted one is pulled back.
-	Gated on the date actually being a holiday so ordinary working days enqueue
-	nothing."""
+	"""doc_event for Attendance submit / cancel / update: (re)evaluate the
+	work-on-holiday CL credit for an eligible employee, so a holiday marked
+	Present/Half Day is credited and a reverted one is pulled back.
+
+	The day itself may be the holiday, or a working day next to one whose
+	attendance decides whether that holiday qualifies. Only holidays the
+	employee actually worked (or already holds a credit for) near the date are
+	queued, so ordinary days enqueue nothing."""
 	employee = doc.get("employee")
 	attendance_date = doc.get("attendance_date")
 	if not (employee and attendance_date):
@@ -468,9 +489,33 @@ def on_attendance_change(doc, method=None):
 	if not emp or emp.staff_type in EXCLUDED_STAFF_TYPES:
 		return
 	holiday_list = emp.holiday_list or _default_holiday_list(emp.company)
-	if not holiday_list or not _is_holiday(holiday_list, getdate(attendance_date)):
+	if not holiday_list:
 		return
-	enqueue_holiday_credit(employee, attendance_date)
+
+	from employee_self_service.employee_self_service.doctype.otpl_payroll.otpl_payroll import (
+		QUALIFY_MARGIN_DAYS,
+	)
+	d = getdate(attendance_date)
+	window = {"s": add_days(d, -QUALIFY_MARGIN_DAYS), "e": add_days(d, QUALIFY_MARGIN_DAYS)}
+	holidays = set(frappe.db.sql_list(
+		"""
+		SELECT h.holiday_date FROM `tabHoliday` h
+		WHERE h.parent = %(hl)s AND h.holiday_date BETWEEN %(s)s AND %(e)s
+		  AND (
+			EXISTS (SELECT 1 FROM `tabAttendance` a
+			        WHERE a.employee = %(emp)s AND a.attendance_date = h.holiday_date
+			          AND a.docstatus = 1 AND a.status IN ('Present', 'Half Day'))
+			OR EXISTS (SELECT 1 FROM `tabTravelling CL Holiday Credit` c
+			           WHERE c.employee = %(emp)s AND c.holiday_date = h.holiday_date
+			             AND c.status != 'Reverted')
+		  )
+		""",
+		dict(window, hl=holiday_list, emp=employee),
+	))
+	if _is_holiday(holiday_list, d):
+		holidays.add(d)
+	for h in holidays:
+		enqueue_holiday_credit(employee, h)
 
 
 def enqueue_holiday_credit(employee, date):
