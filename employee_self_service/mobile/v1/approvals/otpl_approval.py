@@ -222,7 +222,11 @@ def approve_otpl_leave():
                     title="OTPL Leave Approval Failed",
                     message=frappe.get_traceback(),
                 )
-                return gen_response(500, str(save_error))
+                # Some errors (e.g. a bare PermissionError) carry no text.
+                return gen_response(
+                    500,
+                    str(save_error) or "Could not approve the leave application. Please contact HR.",
+                )
 
             return gen_response(200, "Leave application approved successfully")
 
