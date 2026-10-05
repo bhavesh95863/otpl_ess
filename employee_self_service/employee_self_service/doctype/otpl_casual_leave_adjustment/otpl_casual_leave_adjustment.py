@@ -58,7 +58,8 @@ class OTPLCasualLeaveAdjustment(Document):
 		self._validate_no_overlapping_adjustment()
 
 	def on_submit(self):
-		self._post_ledger_entries()
+		created = self._ensure_leave_allocations()
+		self._post_ledger_entries(created)
 
 	def on_cancel(self):
 		self._remove_ledger_entries()
@@ -152,9 +153,34 @@ class OTPLCasualLeaveAdjustment(Document):
 		self.total_adjustment = flt(sum(flt(r.adjustment) for r in self.employees), 2)
 
 	# -------------------------------------------------------------------------
+	# Leave Allocation
+	# -------------------------------------------------------------------------
+	def _ensure_leave_allocations(self):
+		"""Give every employee in the table a submitted Casual Leave Leave
+		Allocation covering the effective date, creating a 0-day one (effective
+		date .. Valid Till) where none exists. Returns the names created.
+
+		The balance itself still moves only through this tool's ledger entries;
+		the allocation is the container other features need — the work-on-holiday
+		CL credit attaches to the allocation document and skips employees who have
+		none. The row's allocation_from_date cannot be used to decide this: it is
+		read from the ledger, so an earlier adjustment's entries look like an
+		allocation even when no Leave Allocation document exists."""
+		created = []
+		for row in self.employees:
+			name = ensure_casual_leave_allocation(
+				row.employee, self.effective_date,
+				row.allocation_to_date or self.allocation_to_date,
+				description=_("Auto-created by Casual Leave Adjustment {0}").format(self.name),
+			)
+			if name:
+				created.append(name)
+		return created
+
+	# -------------------------------------------------------------------------
 	# Ledger posting
 	# -------------------------------------------------------------------------
-	def _post_ledger_entries(self):
+	def _post_ledger_entries(self, created_allocations=()):
 		posted = skipped = 0
 		for row in self.employees:
 			delta = flt(row.adjustment, 2)
@@ -187,9 +213,13 @@ class OTPLCasualLeaveAdjustment(Document):
 			ledger.submit()
 			posted += 1
 
-		self.db_set("processing_log", _(
+		log = _(
 			"Posted {0} leave ledger entrie(s) effective {1}. {2} row(s) had no change."
-		).format(posted, self.effective_date, skipped), update_modified=False)
+		).format(posted, self.effective_date, skipped)
+		if created_allocations:
+			log += "\n" + _("Created {0} Casual Leave allocation(s) (0 days): {1}").format(
+				len(created_allocations), ", ".join(created_allocations))
+		self.db_set("processing_log", log, update_modified=False)
 
 	def _remove_ledger_entries(self):
 		"""Leave Ledger Entry.on_cancel refuses anything that is not an expiry
@@ -205,10 +235,58 @@ class OTPLCasualLeaveAdjustment(Document):
 			WHERE transaction_type = 'Leave Allocation' AND transaction_name = %s
 		""", self.name)
 
+		# Allocations this document auto-created are deliberately left in place: they
+		# hold 0 days, so they move no balance, and work-on-holiday CL credits may
+		# already be attached to them.
 		self.db_set("processing_log", _(
 			"Cancelled: removed {0} leave ledger entrie(s). Leave Applications are "
-			"unaffected — this tool never changed them."
+			"unaffected — this tool never changed them. Any Casual Leave allocation it "
+			"auto-created (0 days) is kept."
 		).format(count), update_modified=False)
+
+
+def ensure_casual_leave_allocation(employee, from_date, to_date, description=None):
+	"""Make sure a submitted Casual Leave Leave Allocation covers ``from_date``
+	for ``employee``. If none does, create and submit a 0-day one from
+	``from_date`` to ``to_date`` — cut short the day before any later allocation
+	so it never overlaps one. Returns the new allocation's name, or None if one
+	already existed."""
+	from_date, to_date = getdate(from_date), getdate(to_date)
+	if frappe.db.exists("Leave Allocation", {
+		"employee": employee, "leave_type": CASUAL_LEAVE, "docstatus": 1,
+		"from_date": ["<=", from_date], "to_date": [">=", from_date],
+	}):
+		return None
+
+	next_from = frappe.db.sql("""
+		SELECT MIN(from_date) FROM `tabLeave Allocation`
+		WHERE employee = %s AND leave_type = %s AND docstatus = 1
+			AND from_date > %s AND from_date <= %s
+	""", (employee, CASUAL_LEAVE, from_date, to_date))[0][0]
+	if next_from:
+		to_date = add_days(next_from, -1)
+
+	alloc = frappe.get_doc({
+		"doctype": "Leave Allocation",
+		"employee": employee,
+		"leave_type": CASUAL_LEAVE,
+		"from_date": from_date,
+		"to_date": to_date,
+		"new_leaves_allocated": 0,
+		"unused_leaves": 0,
+		"total_leaves_allocated": 0,
+		"carry_forward": 0,
+		"description": description,
+	})
+	alloc.employee_name = frappe.db.get_value("Employee", employee, "employee_name")
+	alloc.flags.ignore_permissions = True
+	# Leave Allocation.validate refuses a 0-day allocation ("Total leaves allocated
+	# is mandatory") — the one case this needs. The overlap check it would also run
+	# is done above.
+	alloc.flags.ignore_validate = True
+	alloc.insert()
+	alloc.submit()
+	return alloc.name
 
 
 # -----------------------------------------------------------------------------

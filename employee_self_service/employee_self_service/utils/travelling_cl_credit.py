@@ -129,8 +129,15 @@ def reevaluate_holiday_credit(employee, date):
 	the amount currently earned (0 / 0.5 / 1.0). Grants when newly earned, reverts
 	when the day is no longer worked, and adjusts when the amount changes (e.g.
 	Present <-> Half Day). Returns 'granted', 'reverted', 'adjusted', or None.
-	Idempotent."""
+	Idempotent.
+
+	The nightly backstop (short queue) and the attendance-triggered job (long
+	queue) can reconcile the same holiday at the same moment; without a lock both
+	read "no credit" and both grant, doubling the CL. So the Employee row is
+	locked first, serialising every reconciliation for this employee until the
+	caller commits."""
 	date = getdate(date)
+	_lock_employee(employee)
 	desired = _holiday_credit_amount(employee, date)
 	active = _active_credit(employee, date)
 
@@ -146,15 +153,31 @@ def reevaluate_holiday_credit(employee, date):
 	return None
 
 
+def _lock_employee(employee):
+	"""Row-lock the Employee until the current transaction ends, so concurrent
+	holiday-credit reconciliations for the same employee run one at a time."""
+	frappe.db.sql("SELECT name FROM `tabEmployee` WHERE name = %s FOR UPDATE", employee)
+
+
 def _active_credit(employee, date):
 	"""The live (non-reverted) Travelling CL Holiday Credit for (employee, date),
-	or None."""
-	return frappe.db.get_value(
-		"Travelling CL Holiday Credit",
-		{"employee": employee, "holiday_date": date, "status": ["!=", "Reverted"]},
-		["name", "leaves", "leave_ledger_entry"],
+	or None.
+
+	A locking read (FOR UPDATE), not a plain one: under REPEATABLE READ a plain
+	SELECT can return the transaction's older snapshot and miss a credit another
+	job committed while this one waited on _lock_employee."""
+	rows = frappe.db.sql(
+		"""
+		SELECT name, leaves, leave_ledger_entry
+		FROM `tabTravelling CL Holiday Credit`
+		WHERE employee = %s AND holiday_date = %s AND status != 'Reverted'
+		LIMIT 1
+		FOR UPDATE
+		""",
+		(employee, getdate(date)),
 		as_dict=True,
 	)
+	return rows[0] if rows else None
 
 
 def _holiday_credit_amount(employee, date):
