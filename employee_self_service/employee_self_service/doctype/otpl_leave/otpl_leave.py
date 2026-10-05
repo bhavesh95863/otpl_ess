@@ -16,6 +16,7 @@ from employee_self_service.employee_self_service.utils.leave_escalation import (
 	get_employee_contact,
 	get_employee_pull_contact,
 )
+from employee_self_service.employee_self_service.utils.system_user import as_system_user
 from erpnext.hr.doctype.leave_application.leave_application import get_leave_balance_on
 
 class OTPLLeave(Document):
@@ -417,6 +418,15 @@ class OTPLLeave(Document):
 		"""
 		Trigger sync to remote ERP when leave is saved with external manager
 		"""
+		# Everything below is system bookkeeping (Leave Applications, their
+		# Leave Ledger Entries, attendance refresh), not the approver's own
+		# action. ERPNext creates Leave Ledger Entries without
+		# ignore_permissions, so an approver with no HR role would hit a
+		# PermissionError mid-approval — run it as the system user instead.
+		with as_system_user():
+			self._process_update()
+
+	def _process_update(self):
 		# A Half Day supersedes a Short Leave already applied for the same period.
 		# Retire it before the day's Leave Applications are built, so nothing is
 		# derived from a Short Leave that is about to be cancelled.
@@ -935,7 +945,8 @@ class OTPLLeave(Document):
 
 	def on_cancel(self):
 		"""Cancel all linked Leave Applications when OTPL Leave is cancelled"""
-		self.cancel_linked_leave_applications()
+		with as_system_user():
+			self.cancel_linked_leave_applications()
 
 	def cancel_linked_leave_applications(self):
 		"""Cancel all Leave Applications linked to this OTPL Leave"""
