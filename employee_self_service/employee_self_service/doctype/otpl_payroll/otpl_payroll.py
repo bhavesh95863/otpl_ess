@@ -1928,7 +1928,12 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 	#          (worked holidays included, false attendance and leave days
 	#          excluded). A site check-in is always a full day, so there is no
 	#          half-day rule here.
-	# HRA/Conveyance/Telephone -> everyone EXCEPT Worker/Site & Field/Site
+	# HRA/Conveyance/Telephone -> everyone EXCEPT Worker/Site & Field/Site.
+	#          HRA and Conveyance are monthly figures prorated on Col Q
+	#          (payable days / days in month), so zero payable days pays no
+	#          HRA or Conveyance. Q is not clamped upstream, so the ratio is
+	#          bounded to 0..1 here - never negative, never above the monthly
+	#          figure. Telephone stays flat.
 	tada_amount = 0.0
 	tada_days = 0.0
 	if is_worker_field_site:
@@ -1936,8 +1941,11 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		tada_amount = flt(emp.get("daily_tada")) * tada_days
 	hra = conv = tel = 0.0
 	if not is_worker_field_site:
-		hra = flt(emp.get("hra_amount"))
-		conv = flt(emp.get("conveyance_amount"))
+		allowance_ratio = (
+			min(max(flt(payable_days) / days_in_month, 0.0), 1.0) if days_in_month else 0.0
+		)
+		hra = flt(emp.get("hra_amount")) * allowance_ratio
+		conv = flt(emp.get("conveyance_amount")) * allowance_ratio
 		tel = flt(emp.get("telephone_amount"))
 	extra_allowance = tada_amount + hra + conv + tel
 
@@ -2523,12 +2531,16 @@ def get_calculation_trace(doc, employee):
 				 .format(_f(row["expenses_balance"]), to_date,
 				         "−" if flt(payable_balance) >= 0 else "+")),
 				("(AE) Extra Allowance",
-				 "{0} = TADA {1} + HRA {2} + Conv {3} + Tel {4}"
+				 "{0} = TADA {1} + HRA {2} + Conv {3} + Tel {4}  "
+				 "[HRA {5} and Conv {6} monthly × Q / {7}, bounded 0–100%]"
 				 .format(_f(row.get("extra_allowance", 0)),
 				         _f(row.get("tada_amount", 0)),
 				         _f(row.get("hra_amount", 0)),
 				         _f(row.get("conveyance_amount", 0)),
-				         _f(row.get("telephone_amount", 0)))),
+				         _f(row.get("telephone_amount", 0)),
+				         _f(emp.get("hra_amount")),
+				         _f(emp.get("conveyance_amount")),
+				         days_in_month)),
 				("(AF) Net Amount to Pay", "{0} = AC − AD + AE".format(_f(row["net_amount_to_pay"]))),
 			],
 		},

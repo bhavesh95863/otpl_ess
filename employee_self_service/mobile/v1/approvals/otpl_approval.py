@@ -184,23 +184,32 @@ def approve_otpl_leave():
                 return gen_response(500, f"Leave application is already {leave_doc.status}")
 
             # Pre-flight: for regular (non-short) leave, ensure attendance isn't
-            # already marked for the approved date range. Approving triggers
+            # already marked from today onwards. Approving triggers
             # create_leave_applications() in on_update, where ERPNext's
             # Leave Application.validate_attendance() raises
             # AttendanceAlreadyMarkedError deep in the stack. Check it up front so
             # the approver gets a clear message and the leave is not left
             # half-processed.
             #
+            # Past days are NOT checked: on approval OTPL Leave clears their
+            # attendance itself (clear_past_attendance_before_approval) and
+            # re-runs it once the Leave Applications exist, so a leave approved
+            # late must go through.
+            #
             # Short Leave intentionally does NOT create a Leave Application (the
             # employee stays present for the day), so existing attendance is
             # expected and must not block approval.
             if not leave_doc.short_leave:
+                check_from = max(
+                    frappe.utils.getdate(approved_from_date),
+                    frappe.utils.getdate(frappe.utils.nowdate()),
+                )
                 conflict = _get_marked_attendance_message(
                     leave_doc.employee,
                     leave_doc.employee_name,
-                    approved_from_date,
+                    check_from,
                     approved_to_date,
-                )
+                ) if check_from <= frappe.utils.getdate(approved_to_date) else None
                 if conflict:
                     return gen_response(500, conflict)
 
