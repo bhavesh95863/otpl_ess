@@ -55,7 +55,7 @@ class OTPLCasualLeaveAdjustment(Document):
 		self._refresh_rows()
 		self._set_totals()
 		self._validate_sufficient_balance()
-		self._validate_no_overlapping_adjustment()
+		self._validate_has_employees()
 
 	def on_submit(self):
 		created = self._ensure_leave_allocations()
@@ -109,37 +109,9 @@ class OTPLCasualLeaveAdjustment(Document):
 				title=_("Insufficient Casual Leave Balance"),
 			)
 
-	def _validate_no_overlapping_adjustment(self):
-		"""One submitted adjustment per employee per effective date. Submitting a
-		second one would post the delta twice, since each is measured against the
-		balance at the time it was fetched."""
-		employees = [r.employee for r in self.employees]
-		if not employees:
+	def _validate_has_employees(self):
+		if not self.employees:
 			frappe.throw(_("Add at least one employee"))
-
-		existing = frappe.db.sql("""
-			SELECT d.employee, d.parent
-			FROM `tabOTPL Casual Leave Adjustment Detail` d
-			INNER JOIN `tabOTPL Casual Leave Adjustment` p ON p.name = d.parent
-			WHERE p.docstatus = 1
-				AND p.name <> %(name)s
-				AND p.effective_date = %(effective_date)s
-				AND d.employee IN %(employees)s
-		""", {
-			"name": self.name,
-			"effective_date": self.effective_date,
-			"employees": employees,
-		}, as_dict=1)
-
-		if existing:
-			frappe.throw(
-				_("Casual Leave has already been adjusted as on {0} for:").format(
-					frappe.utils.formatdate(self.effective_date))
-				+ "<br>" + "<br>".join(
-					"{0} — {1}".format(e.employee, e.parent) for e in existing[:20]
-				),
-				title=_("Duplicate Adjustment"),
-			)
 
 	# -------------------------------------------------------------------------
 	# Row maintenance
