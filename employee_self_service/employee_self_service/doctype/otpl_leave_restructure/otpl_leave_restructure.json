@@ -1,0 +1,278 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-10-06 12:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "is_submittable": 1,
+ "track_changes": 1,
+ "title_field": "employee_name",
+ "field_order": [
+  "naming_series",
+  "employee",
+  "employee_name",
+  "staff_type",
+  "column_break_h1",
+  "month",
+  "year",
+  "from_date",
+  "to_date",
+  "section_break_actions",
+  "get_leaves",
+  "section_break_summary",
+  "monthly_cl_cap",
+  "other_cl_in_month",
+  "cl_available",
+  "column_break_s1",
+  "current_cl_days",
+  "current_lwp_days",
+  "column_break_s2",
+  "new_cl_days",
+  "new_lwp_days",
+  "changed_days",
+  "section_break_payroll",
+  "payroll_warning",
+  "allow_after_payroll",
+  "section_break_days",
+  "days",
+  "section_break_log",
+  "processing_log",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "OTPL-LR-.YYYY.-.#####",
+   "default": "OTPL-LR-.YYYY.-.#####",
+   "reqd": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "employee",
+   "fieldtype": "Link",
+   "label": "Employee",
+   "options": "Employee",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "employee_name",
+   "fieldtype": "Data",
+   "label": "Employee Name",
+   "fetch_from": "employee.employee_name",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "staff_type",
+   "fieldtype": "Data",
+   "label": "Staff Type",
+   "fetch_from": "employee.staff_type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_h1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "month",
+   "fieldtype": "Select",
+   "label": "Month",
+   "options": "January\nFebruary\nMarch\nApril\nMay\nJune\nJuly\nAugust\nSeptember\nOctober\nNovember\nDecember",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "year",
+   "fieldtype": "Int",
+   "label": "Year",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "label": "From Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "label": "To Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_actions",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "get_leaves",
+   "fieldtype": "Button",
+   "label": "Get Leaves"
+  },
+  {
+   "fieldname": "section_break_summary",
+   "fieldtype": "Section Break",
+   "label": "Summary"
+  },
+  {
+   "fieldname": "monthly_cl_cap",
+   "fieldtype": "Float",
+   "label": "Monthly CL Cap",
+   "read_only": 1,
+   "default": "2",
+   "description": "Casual Leave days allowed per calendar month; every further day is Leave Without Pay."
+  },
+  {
+   "fieldname": "other_cl_in_month",
+   "fieldtype": "Float",
+   "label": "CL Already Used Outside OTPL Leave",
+   "read_only": 1,
+   "description": "Casual Leave in this month from Leave Applications not created by OTPL Leave. Counts towards the monthly cap and is not touched."
+  },
+  {
+   "fieldname": "cl_available",
+   "fieldtype": "Float",
+   "label": "CL Balance Available",
+   "read_only": 1,
+   "description": "Casual Leave balance that the OTPL Leave days of this month may use (balance over the allocation period plus the CL these days already hold)."
+  },
+  {
+   "fieldname": "column_break_s1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "current_cl_days",
+   "fieldtype": "Float",
+   "label": "Current CL Days",
+   "read_only": 1
+  },
+  {
+   "fieldname": "current_lwp_days",
+   "fieldtype": "Float",
+   "label": "Current LWP Days",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_s2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "new_cl_days",
+   "fieldtype": "Float",
+   "label": "New CL Days",
+   "read_only": 1
+  },
+  {
+   "fieldname": "new_lwp_days",
+   "fieldtype": "Float",
+   "label": "New LWP Days",
+   "read_only": 1
+  },
+  {
+   "fieldname": "changed_days",
+   "fieldtype": "Float",
+   "label": "Days Changing",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_payroll",
+   "fieldtype": "Section Break",
+   "depends_on": "eval:doc.payroll_warning"
+  },
+  {
+   "fieldname": "payroll_warning",
+   "fieldtype": "Small Text",
+   "label": "Payroll Warning",
+   "read_only": 1
+  },
+  {
+   "fieldname": "allow_after_payroll",
+   "fieldtype": "Check",
+   "label": "Restructure Even Though Payroll Is Submitted",
+   "description": "Payroll already paid for this month will not change. Any difference has to be settled by hand."
+  },
+  {
+   "fieldname": "section_break_days",
+   "fieldtype": "Section Break",
+   "label": "Leave Days"
+  },
+  {
+   "fieldname": "days",
+   "fieldtype": "Table",
+   "label": "Days",
+   "options": "OTPL Leave Restructure Day",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_log",
+   "fieldtype": "Section Break",
+   "label": "Log",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "processing_log",
+   "fieldtype": "Long Text",
+   "label": "Processing Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "options": "OTPL Leave Restructure",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1
+  }
+ ],
+ "modified": "2026-10-06 12:00:00",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Leave Restructure",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1
+  },
+  {
+   "role": "HR Manager",
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "submit": 1,
+   "cancel": 1,
+   "amend": 1
+  },
+  {
+   "role": "HR User",
+   "read": 1,
+   "report": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}
