@@ -873,11 +873,17 @@ class OTPLLeave(Document):
 
 		self._allow_ledger_only_allocation(leave_app)
 
+		# Set by back-office corrections (OTPL Leave Restructure): the record is
+		# rebuilt silently, without ERPNext's leave status / approval emails.
+		if self.flags.get("mute_leave_notifications"):
+			mute_leave_application_notifications(leave_app)
+
 		leave_app.insert(ignore_permissions=True)
 		leave_app.submit()
 
 		# Store reference to created leave application
 		self.add_leave_application_reference(leave_app.name)
+		return leave_app.name
 
 	def _allow_ledger_only_allocation(self, leave_app):
 		"""Let a Leave Application through when the balance exists as a Leave Ledger
@@ -1108,6 +1114,13 @@ def merge_half_day_pair(first, second):
 			pass   # a comment is nice to have; never fail the merge over it
 
 	return merged.name
+
+
+def mute_leave_application_notifications(leave_app):
+	"""Stop this Leave Application instance from emailing the employee / approver
+	on submit and cancel. Shadows the bound methods on this instance only."""
+	leave_app.notify_employee = lambda *a, **k: None
+	leave_app.notify_leave_approver = lambda *a, **k: None
 
 
 def validate_leave_application_cancel(doc, method):

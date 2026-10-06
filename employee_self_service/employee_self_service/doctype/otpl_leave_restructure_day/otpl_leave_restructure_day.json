@@ -1,0 +1,101 @@
+{
+ "creation": "2026-10-06 12:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "field_order": [
+  "leave_date",
+  "day_weight",
+  "otpl_leave",
+  "current_leave_type",
+  "new_leave_type",
+  "changed",
+  "outside_month",
+  "current_leave_application",
+  "new_leave_application"
+ ],
+ "fields": [
+  {
+   "fieldname": "leave_date",
+   "fieldtype": "Date",
+   "label": "Date",
+   "in_list_view": 1,
+   "columns": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "day_weight",
+   "fieldtype": "Float",
+   "label": "Days",
+   "in_list_view": 1,
+   "columns": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "otpl_leave",
+   "fieldtype": "Data",
+   "label": "OTPL Leave",
+   "in_list_view": 1,
+   "columns": 2,
+   "read_only": 1,
+   "description": "Plain text, not a Link, so the OTPL Leave can still be cancelled or deleted later."
+  },
+  {
+   "fieldname": "current_leave_type",
+   "fieldtype": "Link",
+   "label": "Current Leave Type",
+   "options": "Leave Type",
+   "in_list_view": 1,
+   "columns": 2,
+   "read_only": 1
+  },
+  {
+   "fieldname": "new_leave_type",
+   "fieldtype": "Link",
+   "label": "New Leave Type",
+   "options": "Leave Type",
+   "in_list_view": 1,
+   "columns": 2,
+   "read_only": 1
+  },
+  {
+   "fieldname": "changed",
+   "fieldtype": "Check",
+   "label": "Changed",
+   "in_list_view": 1,
+   "columns": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "outside_month",
+   "fieldtype": "Check",
+   "label": "Outside Month",
+   "read_only": 1,
+   "description": "Day of a Leave Application that spans into another month. It keeps its leave type and is only rebuilt because the application is split."
+  },
+  {
+   "fieldname": "current_leave_application",
+   "fieldtype": "Data",
+   "label": "Current Leave Application",
+   "read_only": 1
+  },
+  {
+   "fieldname": "new_leave_application",
+   "fieldtype": "Data",
+   "label": "New Leave Application",
+   "in_list_view": 1,
+   "columns": 1,
+   "read_only": 1,
+   "no_copy": 1
+  }
+ ],
+ "modified": "2026-10-06 13:00:00",
+ "modified_by": "Administrator",
+ "module": "Employee Self Service",
+ "name": "OTPL Leave Restructure Day",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}
