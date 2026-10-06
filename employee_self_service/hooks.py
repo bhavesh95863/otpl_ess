@@ -156,6 +156,9 @@ doc_events = {
         "on_submit": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change",
         "on_cancel": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change"
     },
+    "Leave Allocation": {
+        "before_validate": "employee_self_service.employee_self_service.utils.leave_allocation.allow_overlapping_casual_leave"
+    },
     "Team Leader Location Log": {
         "after_insert": "employee_self_service.employee_self_service.utils.team_leader_location.after_team_leader_location_update_insert"
     },
