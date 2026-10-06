@@ -1837,10 +1837,9 @@ def _calculate_employee(emp, from_date, to_date, days_in_period,
 		ot_hra_petrol = ot_hours * hourly_rate
 
 	# ---- Col T: Incentive (observation #11) ----------------------------------
-	# If present_days + qualified_holidays = days_in_month => Rs 200; Worker@HWR only.
+	# If Days Worked (Col H) >= days_in_month => Rs 200; Worker@HWR only.
 	incentive = 0.0
-	present_count = len(present_dates) + 0.5 * len(half_day_dates)
-	if is_worker_haridwar and (present_count + qualified_holidays) >= days_in_month:
+	if is_worker_haridwar and days_worked >= days_in_month:
 		incentive = WORKER_HARIDWAR_INCENTIVE
 
 	# ---- Col U: Total Salary Due ---------------------------------------------
@@ -2499,7 +2498,7 @@ def get_calculation_trace(doc, employee):
 				                      if ot_eligible else "N/A (only Worker@Noida/Haridwar or Driver)")),
 				("(T) Incentive",
 				 "{0}  —  {1}".format(_f(row["incentive"]),
-				                      "Worker@Haridwar: present + qualified holidays ≥ {0} ⇒ ₹200".format(days_in_month)
+				                      "Worker@Haridwar: H (Days Worked) ≥ {0} ⇒ ₹200".format(days_in_month)
 				                      if is_worker_haridwar else "N/A")),
 				("(U) Total Salary Due", "{0} = R + S + T{1}".format(
 					_f(row["total_salary_due"]),
