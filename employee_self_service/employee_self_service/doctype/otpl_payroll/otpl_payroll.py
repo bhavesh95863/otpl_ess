@@ -2056,16 +2056,13 @@ def _set_totals(doc):
 		t["salary_amount"] += flt(r.salary_amount)
 		t["ot"] += flt(r.ot_hra_petrol)
 		t["incentive"] += flt(r.incentive)
-		t["due"] += flt(r.total_salary_due)
+		t["due"] += flt(r.net_amount_payable)
 		t["pfe"] += flt(r.pf_employee_share)
 		t["esice"] += flt(r.esic_employee_share)
 		t["tds"] += flt(r.tds)
 		t["pfemp"] += flt(r.pf_employer_share)
 		t["esicemp"] += flt(r.esic_employer_share)
-		t["adv"] += flt(r.full_advance_adjustment) + flt(r.part_advance_adjustment)
 		t["extra"] += flt(getattr(r, "extra_allowance", 0) or 0)
-		t["net_pay"] += flt(r.net_amount_payable)
-		t["net_to_pay"] += flt(r.net_amount_to_pay)
 
 	doc.total_gross_salary = t["gross"]
 	doc.total_payable_days = t["payable_days"]
@@ -2078,11 +2075,8 @@ def _set_totals(doc):
 	doc.total_tds = t["tds"]
 	doc.total_pf_employer = t["pfemp"]
 	doc.total_esic_employer = t["esicemp"]
-	doc.total_advance_adjustment = t["adv"]
-	if hasattr(doc, "total_extra_allowance"):
-		doc.total_extra_allowance = t["extra"]
-	doc.total_net_payable = t["net_pay"]
-	doc.total_net_to_pay = t["net_to_pay"]
+	doc.total_extra_allowance = t["extra"]
+	doc.input_for_salary_payable = flt(t["due"] + t["extra"], 2)
 
 
 def _persist_leave_balances(doc):

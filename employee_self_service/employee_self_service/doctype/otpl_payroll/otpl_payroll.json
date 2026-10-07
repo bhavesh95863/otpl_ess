@@ -29,17 +29,15 @@
   "total_salary_amount",
   "total_ot_hra_petrol",
   "total_incentive",
+  "total_extra_allowance",
   "total_salary_due",
+  "input_for_salary_payable",
   "column_break_t1",
   "total_pf_employee",
   "total_esic_employee",
   "total_tds",
   "total_pf_employer",
   "total_esic_employer",
-  "total_advance_adjustment",
-  "total_extra_allowance",
-  "total_net_payable",
-  "total_net_to_pay",
   "section_break_orders",
   "order_allocations",
   "section_break_acct",
@@ -245,27 +243,16 @@
    "read_only": 1
   },
   {
-   "fieldname": "total_advance_adjustment",
-   "fieldtype": "Currency",
-   "label": "Total Advance Adjustment",
-   "read_only": 1
-  },
-  {
    "fieldname": "total_extra_allowance",
    "fieldtype": "Currency",
    "label": "Total Extra Allowance",
    "read_only": 1
   },
   {
-   "fieldname": "total_net_payable",
+   "description": "Total Salary Due + Total Extra Allowance",
+   "fieldname": "input_for_salary_payable",
    "fieldtype": "Currency",
-   "label": "Total Net Payable",
-   "read_only": 1
-  },
-  {
-   "fieldname": "total_net_to_pay",
-   "fieldtype": "Currency",
-   "label": "Total Net To Pay",
+   "label": "Input for Salary Payable",
    "read_only": 1
   },
   {
@@ -328,7 +315,7 @@
   }
  ],
  "is_submittable": 1,
- "modified": "2026-09-09 17:53:02.515903",
+ "modified": "2026-10-07 15:09:19.602302",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "OTPL Payroll",
