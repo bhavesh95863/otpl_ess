@@ -47,6 +47,22 @@ frappe.ui.form.on('OTPL Payroll', {
 				frappe.set_route('List', 'Salary Payable Request', { otpl_payroll: frm.doc.name });
 			}, __('View'));
 		}
+		if (frm.doc.docstatus === 1 && frm.doc.salary_entries_created
+			&& (frm.doc.employee_salary_entries || '').includes('Salary Payable Request not created')) {
+			// Booking succeeded but a payment request did not; raise just the missing ones.
+			frm.add_custom_button(__('Retry Salary Payable Request'), () => {
+				frappe.call({
+					method: 'employee_self_service.employee_self_service.doctype.otpl_payroll.otpl_payroll.retry_salary_payable_requests',
+					args: { payroll: frm.doc.name },
+					freeze: true,
+					callback(r) {
+						frappe.msgprint(r.message && r.message.length
+							? __('Created: {0}', [r.message.join(', ')])
+							: __('Nothing was missing.'));
+					},
+				});
+			});
+		}
 
 		if (frm.doc.from_date && frm.doc.to_date) {
 			const d = frappe.datetime;
