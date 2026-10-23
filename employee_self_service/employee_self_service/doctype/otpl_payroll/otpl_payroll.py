@@ -2056,7 +2056,7 @@ def _set_totals(doc):
 		t["salary_amount"] += flt(r.salary_amount)
 		t["ot"] += flt(r.ot_hra_petrol)
 		t["incentive"] += flt(r.incentive)
-		t["due"] += flt(r.net_amount_payable)
+		t["due"] += flt(r.total_salary_due)
 		t["pfe"] += flt(r.pf_employee_share)
 		t["esice"] += flt(r.esic_employee_share)
 		t["tds"] += flt(r.tds)
