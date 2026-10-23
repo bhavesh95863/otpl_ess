@@ -198,8 +198,36 @@ class OTPLPayroll(Document):
 		becomes the opening for the next payroll run, then book the payroll
 		into accounting.
 		"""
+		self.validate_no_overlapping_payroll()
 		_persist_leave_balances(self)
 		create_salary_entries(self)
+
+	def validate_no_overlapping_payroll(self):
+		"""An employee booked by two submitted payrolls for the same days would
+		have their salary credited twice, and the payment request pays whatever
+		the ledger holds."""
+		emp_ids = [r.employee for r in self.employees if r.employee]
+		if not emp_ids:
+			return
+		clashes = frappe.db.sql(
+			"""SELECT d.employee, p.name
+			   FROM `tabOTPL Payroll Detail` d
+			   INNER JOIN `tabOTPL Payroll` p ON p.name = d.parent
+			   WHERE p.docstatus = 1 AND p.name != %(name)s
+			     AND p.from_date <= %(to_date)s AND p.to_date >= %(from_date)s
+			     AND d.employee IN %(emps)s""",
+			{"name": self.name, "from_date": self.from_date, "to_date": self.to_date,
+			 "emps": tuple(emp_ids)},
+			as_dict=True,
+		)
+		if clashes:
+			frappe.throw(
+				_("These employees are already on a submitted payroll for an overlapping "
+				  "period; cancel that payroll or remove them here:")
+				+ "<br><br>" + "<br>".join(
+					"• {0} ({1})".format(c.employee, c.name) for c in clashes),
+				title=_("Employee Already On Payroll"),
+			)
 
 	def on_cancel(self):
 		"""Reverse the booking: cancel the journal entries this payroll posted
@@ -2797,8 +2825,11 @@ def create_salary_entries(payroll):
 
 	# Payment side: draft only. Releasing money needs the approval role, the
 	# bucket and the PE naming series, which are human decisions by design.
+	# An employee with nothing due but an allowance still has money to receive,
+	# so their vertical needs a request even when no one there had wages due.
 	payable_requests, payable_error = _create_salary_payable_requests(
-		doc, sorted(by_vertical.keys()), posting_date)
+		doc, sorted(set(by_vertical) | {v for v, _l, _p in extra_parts.values()}),
+		posting_date)
 
 	log = []
 	if created:
@@ -3477,8 +3508,17 @@ def _create_salary_payable_requests(doc, verticals, posting_date):
 	than allowed to roll the whole posting back.
 	"""
 	made = []
+	# A vertical that already has a live request (a retry after a partial
+	# failure) is not raised a second time.
+	existing = {
+		d.business_vertical for d in frappe.get_all(
+			"Salary Payable Request",
+			{"otpl_payroll": doc.name, "docstatus": ["<", 2]}, ["business_vertical"])
+	}
 	try:
 		for vertical in verticals:
+			if vertical in existing:
+				continue
 			spr = frappe.new_doc("Salary Payable Request")
 			spr.business_vertical = vertical
 			# Must match the journal entries' posting date: get_from_jv reads the
@@ -3494,7 +3534,6 @@ def _create_salary_payable_requests(doc, verticals, posting_date):
 			if not spr.get("salary_payable_request_details"):
 				continue
 			spr.insert()
-			spr.populate_details()
 			made.append(spr.name)
 		return made, None
 	except Exception:
@@ -3503,6 +3542,29 @@ def _create_salary_payable_requests(doc, verticals, posting_date):
 			message=frappe.get_traceback(),
 		)
 		return made, _("see Error Log")
+
+
+@frappe.whitelist()
+def retry_salary_payable_requests(payroll):
+	"""Raise the payment requests a booked payroll is missing.
+
+	Request creation is best effort on submit, and Retry Salary Entry refuses a
+	payroll that is already booked, so without this a failure there could only
+	be worked around with a hand-made request - which is not scoped to the
+	payroll and reads only the employee's own vertical.
+	"""
+	doc = frappe.get_doc("OTPL Payroll", payroll)
+	if doc.docstatus != 1 or not doc.get("salary_entries_created"):
+		frappe.throw(_("Book this payroll's salary entries first."))
+	verticals = sorted({
+		r.business_line for r in doc.employees
+		if r.business_line and (flt(r.total_salary_due, 2) > 0
+		                        or flt(getattr(r, "extra_allowance", 0) or 0, 2) > 0)
+	})
+	made, error = _create_salary_payable_requests(doc, verticals, getdate(doc.to_date))
+	if error:
+		frappe.throw(_("Salary Payable Request not created: {0}").format(error))
+	return made
 
 
 # -----------------------------------------------------------------------------
