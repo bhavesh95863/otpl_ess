@@ -7,10 +7,12 @@ import frappe
 import requests
 from frappe.model.document import Document
 
+NOTIFICATION_RELAY_URL = "https://notification.nesscale.com/api/method/ncs_nesscale.api.send_push_notification"
+
 
 class ESSNotificationLog(Document):
     def after_insert(self):
-        target_site_url = "https://notification.nesscale.com/api/method/ncs_nesscale.api.send_push_notification"
+        target_site_url = NOTIFICATION_RELAY_URL
 
         erp_url = frappe.utils.get_url()
 

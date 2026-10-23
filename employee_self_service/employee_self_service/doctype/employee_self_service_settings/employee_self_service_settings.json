@@ -48,7 +48,13 @@
   "auto_location_track_for_team_leader",
   "location_update_time",
   "attendance_discrepancy_section",
-  "attendance_discrepancy_recipients"
+  "attendance_discrepancy_recipients",
+  "attendance_reminder_section",
+  "disable_attendance_reminders",
+  "attendance_reminder_offsets",
+  "column_break_attendance_reminder",
+  "site_check_in_reminder_time",
+  "enable_reminder_refresh_push"
  ],
  "fields": [
   {
@@ -287,10 +293,45 @@
    "fieldname": "attendance_discrepancy_recipients",
    "fieldtype": "Small Text",
    "label": "Attendance Discrepancy Email Recipients"
+  },
+  {
+   "fieldname": "attendance_reminder_section",
+   "fieldtype": "Section Break",
+   "label": "Attendance Reminders"
+  },
+  {
+   "default": "0",
+   "description": "Stop check-in / check-out reminders for every employee (get_attendance_reminder_schedule returns no schedule).",
+   "fieldname": "disable_attendance_reminders",
+   "fieldtype": "Check",
+   "label": "Disable Attendance Reminders"
+  },
+  {
+   "description": "Minutes relative to shift start / end at which the app fires reminders, comma-separated (e.g. -5, 0, 5, 15, 25, 35). Max 8 values. Leave blank to use the app default.",
+   "fieldname": "attendance_reminder_offsets",
+   "fieldtype": "Data",
+   "label": "Reminder Offsets (Minutes)"
+  },
+  {
+   "fieldname": "column_break_attendance_reminder",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Check-in reminder time for Site employees (Site has no ESS Location shift). Site staff get no check-out reminder.",
+   "fieldname": "site_check_in_reminder_time",
+   "fieldtype": "Time",
+   "label": "Site Check-in Reminder Time"
+  },
+  {
+   "default": "0",
+   "description": "Send a silent push to the employee's app when an approved leave in the next 7 days changes, so it re-plans its reminders. Needs data-only message support on the notification relay.",
+   "fieldname": "enable_reminder_refresh_push",
+   "fieldtype": "Check",
+   "label": "Enable Reminder Refresh Push"
   }
  ],
  "issingle": 1,
- "modified": "2026-03-22 22:03:44.987539",
+ "modified": "2026-10-18 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Employee Self Service",
  "name": "Employee Self Service Settings",
