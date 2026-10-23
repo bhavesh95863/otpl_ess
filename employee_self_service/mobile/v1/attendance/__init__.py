@@ -265,3 +265,25 @@ def create_other_employee_attendance(
         )
     except Exception as e:
         return exception_handler(e)
+
+@frappe.whitelist()
+@ess_validate(methods=["GET"])
+def get_attendance_reminder_schedule(days=7):
+    """Shift times and off days for the next `days` days (default 7, max 14),
+    from which the app schedules its check-in / check-out alarms. data is None
+    when the employee should get no reminders."""
+    from employee_self_service.employee_self_service.utils.attendance_reminder import (
+        MAX_DAYS,
+        WINDOW_DAYS,
+        build_reminder_schedule,
+    )
+
+    try:
+        days = min(max(cint(days) or WINDOW_DAYS, 1), MAX_DAYS)
+        emp_data = get_employee_by_user(frappe.session.user)
+        data = build_reminder_schedule(emp_data.get("name"), days) if emp_data else None
+        if not data:
+            return gen_response(200, "Attendance reminders are not enabled for this employee", None)
+        return gen_response(200, "Attendance reminder schedule fetched successfully", data)
+    except Exception as e:
+        return exception_handler(e)

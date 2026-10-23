@@ -153,8 +153,17 @@ doc_events = {
     },
     "Leave Application": {
         "before_cancel": "employee_self_service.employee_self_service.doctype.otpl_leave.otpl_leave.validate_leave_application_cancel",
-        "on_submit": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change",
-        "on_cancel": "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change"
+        "on_submit": [
+            "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change",
+            "employee_self_service.employee_self_service.utils.attendance_reminder.on_leave_application_change"
+        ],
+        "on_cancel": [
+            "employee_self_service.employee_self_service.utils.travelling_cl_credit.on_leave_application_change",
+            "employee_self_service.employee_self_service.utils.attendance_reminder.on_leave_application_change"
+        ]
+    },
+    "OTPL Leave": {
+        "on_update": "employee_self_service.employee_self_service.utils.attendance_reminder.on_otpl_leave_update"
     },
     "Leave Allocation": {
         "before_validate": "employee_self_service.employee_self_service.utils.leave_allocation.allow_overlapping_casual_leave"
