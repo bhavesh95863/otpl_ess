@@ -1,7 +1,7 @@
 # OTPL Leave Amendment — Mobile Integration Guide
 
 Contract for the **mobile app** to implement *Leave Amendment* — shortening an
-already-approved leave when the employee returns early. The backend (doctype,
+Approved or Pending leave when the employee returns early. The backend (doctype,
 approver routing, and the cancel-old/create-new cascade) is built in the
 `employee_self_service` app; the app calls the endpoints below.
 
@@ -20,6 +20,12 @@ fixes this:
   Leave Applications and frees the returned days for attendance) and creates a
   **new approved leave** for the amended range (with fresh Leave Applications and
   the usual CL/LWP monthly cap).
+- A **Pending** leave (not yet approved) can be amended too. On approval its
+  requested From / To is **shortened in place**. It stays **Pending** and still
+  goes to its own approver. No new leave is created, and `amended_leave` is the
+  same leave.
+- **Only one Pending amendment per leave.** A second request on the same leave
+  is refused until the first is Approved or Rejected.
 - **Only full-day leaves** may be amended — **Short Leave and Half Day are not
   amendable**.
 
@@ -37,18 +43,22 @@ Method path prefix: `employee_self_service.mobile.v1.leave_amendment.`
 ## 3. Endpoints
 
 ### 3.1 `get_amendable_leaves` — GET
-The employee's **Approved, full-day** leaves that can be amended (Short Leave / Half
-Day excluded). Use this to show the "Amend" option / picker.
+The employee's **Approved or Pending, full-day** leaves that can be amended (Short
+Leave / Half Day excluded). Use this to show the "Amend" option / picker.
 
 **Query params (optional):** `start` (0), `page_length` (20).
 
 **Response `data`:** array of
 ```json
-{ "name": "LEAVE00742", "from_date": "2026-11-02", "to_date": "2026-11-11",
-  "number_of_days": 10, "reason": "..." }
+{ "name": "LEAVE00742", "status": "Approved", "from_date": "2026-11-02",
+  "to_date": "2026-11-11", "number_of_days": 10, "reason": "..." }
 ```
+- `status` is `Approved` or `Pending`. The dates and `number_of_days` are the
+  **approved** range for an Approved leave and the **requested** range for a
+  Pending one.
 > If the app already has the open leave, it may skip this call and offer **Amend**
-> whenever the leave is `status = Approved`, `short_leave = 0`, `half_day = 0`.
+> whenever the leave is `status` in (`Approved`, `Pending`), `short_leave = 0`,
+> `half_day = 0`.
 
 ### 3.2 `apply_leave_amendment` — POST
 Raise an amendment for the logged-in employee.
@@ -58,14 +68,16 @@ Raise an amendment for the logged-in employee.
 { "original_leave": "LEAVE00742", "amended_from_date": "2026-11-02",
   "amended_to_date": "2026-11-08", "reason": "Returned early" }
 ```
-- The amended range must sit **within** the original approved range and be **fewer
-  days** (server enforced).
+- The amended range must sit **within** the original range (approved range for an
+  Approved leave, requested range for a Pending one) and be **fewer days**
+  (server enforced).
 - Approver is resolved **server-side**.
 
 **Response `data`:** `{ "name": "LAMEND00001", "status": "Pending" }`
 
-**Errors (500):** original not Approved / is Short Leave or Half Day; amended range
-outside the original or not shorter; no approver found — show `message`.
+**Errors (500):** original not Approved or Pending / is Short Leave or Half Day;
+the leave already has a Pending amendment; amended range outside the original or
+not shorter; no approver found. Show `message`.
 
 ### 3.3 `get_my_leave_amendments` — GET
 The employee's own amendments (newest first). Optional `status`, `start`, `page_length`.
@@ -78,7 +90,8 @@ The employee's own amendments (newest first). Optional `status`, `start`, `page_
   "number_of_days": 7, "reason": "...", "status": "Approved",
   "amended_leave": "LEAVE00743", "approver_name": "...", "approver_mobile_no": "..." }
 ```
-- `amended_leave` is the NEW leave created on approval (empty until approved).
+- `amended_leave` is the NEW leave created on approval (empty until approved). For
+  a Pending original it is the same leave, shortened in place.
 
 ### 3.4 `get_leave_amendment_approvals` — GET  *(manager)*
 Pending amendments awaiting the logged-in manager. Optional `start`, `page_length`.
@@ -107,8 +120,11 @@ server-side.**
 ```json
 { "name": "LAMEND00001", "status": "Approved", "amended_leave": "LEAVE00743" }
 ```
-- On **Approved**, `amended_leave` is the newly created shorter leave. The original
-  leave is now Cancelled and the returned days are free for attendance.
+- On **Approved** with an Approved original, `amended_leave` is the newly created
+  shorter leave. The original leave is now Cancelled and the returned days are
+  free for attendance.
+- On **Approved** with a Pending original, `amended_leave` is the original leave,
+  now with the shorter From / To and still Pending for its own approver.
 - On **Rejected**, nothing changes (the original leave stays as-is).
 
 ---
@@ -128,7 +144,9 @@ to `total` — alongside `leave`, `expense`, `travel`, `travelling_cl`:
 ## 5. Suggested app flows
 
 **Employee**
-1. Open an approved leave. If `short_leave==0 && half_day==0`, show **Amend**.
+1. Open an Approved or Pending leave. If `short_leave==0 && half_day==0`, show
+   **Amend**. Hide or disable it while that leave already has a Pending amendment
+   (`get_my_leave_amendments?status=Pending`).
 2. Pick the new (shorter) From / To within the original range → `apply_leave_amendment`.
 3. Track under `get_my_leave_amendments`; once Approved, `amended_leave` is the new leave.
 
@@ -143,7 +161,8 @@ to `total` — alongside `leave`, `expense`, `travel`, `travelling_cl`:
 ## 6. Field / status reference
 - **OTPL Leave Amendment** `status`: `Pending` → `Approved` / `Rejected`.
 - Dates `YYYY-MM-DD`; `number_of_days` = inclusive count of the amended range.
-- Not amendable: Short Leave, Half Day, or any non-Approved leave.
+- Not amendable: Short Leave, Half Day, or any leave that is not Approved or
+  Pending, or a leave that already has a Pending amendment.
 - **External approvers:** when the employee reports to an EXTERNAL manager, the
   amendment syncs to that manager's ERP (via `OTPL Leave Amendment Pull`) and the
   decision syncs back automatically — no app work; the app only ever calls the

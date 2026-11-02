@@ -3,8 +3,8 @@
 # For license information, please see license.txt
 """Mobile APIs for OTPL Leave Amendment (amend an approved leave when the employee
 returns early). Contract for the app:
-  * get_amendable_leaves          -> the employee's Approved full-day leaves that
-    can be amended (not Short Leave / Half Day).
+  * get_amendable_leaves          -> the employee's Approved / Pending full-day
+    leaves that can be amended (not Short Leave / Half Day).
   * apply_leave_amendment         -> raise an amendment (shorter range).
   * get_my_leave_amendments       -> the employee's own amendments.
   * get_leave_amendment_approvals -> pending amendments for the manager.
@@ -29,7 +29,7 @@ from employee_self_service.mobile.v1.api_utils import (
 @frappe.whitelist()
 @ess_validate(methods=["GET"])
 def get_amendable_leaves(start=0, page_length=20):
-	"""Approved, full-day OTPL Leaves of the logged-in employee that may be amended
+	"""Approved or Pending, full-day OTPL Leaves of the logged-in employee that may be amended
 	(Short Leave and Half Day are excluded)."""
 	try:
 		emp = get_employee_by_user(frappe.session.user)
@@ -39,16 +39,28 @@ def get_amendable_leaves(start=0, page_length=20):
 			"OTPL Leave",
 			filters={
 				"employee": emp.get("name"),
-				"status": "Approved",
+				"status": ["in", ["Approved", "Pending"]],
 				"short_leave": 0,
 				"half_day": 0,
 			},
-			fields=["name", "approved_from_date as from_date", "approved_to_date as to_date",
-			        "total_no_of_approved_days as number_of_days", "reason"],
-			order_by="approved_from_date desc",
+			fields=["name", "status", "from_date", "to_date", "total_no_of_days",
+			        "approved_from_date", "approved_to_date", "total_no_of_approved_days", "reason"],
+			order_by="from_date desc",
 			start=int(start), page_length=int(page_length),
 		)
-		return gen_response(200, "success", rows)
+		# Approved leaves amend their approved range; Pending ones their requested range.
+		out = []
+		for r in rows:
+			approved = r.status == "Approved"
+			out.append({
+				"name": r.name,
+				"status": r.status,
+				"from_date": r.approved_from_date if approved else r.from_date,
+				"to_date": r.approved_to_date if approved else r.to_date,
+				"number_of_days": r.total_no_of_approved_days if approved else r.total_no_of_days,
+				"reason": r.reason,
+			})
+		return gen_response(200, "success", out)
 	except Exception as e:
 		return exception_handler(e)
 
