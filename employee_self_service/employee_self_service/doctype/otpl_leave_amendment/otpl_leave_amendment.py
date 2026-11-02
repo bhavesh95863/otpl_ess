@@ -15,11 +15,14 @@ from employee_self_service.employee_self_service.utils.leave_escalation import (
 
 
 class OTPLLeaveAmendment(Document):
-	"""Amend an already-approved OTPL Leave to a SHORTER range (e.g. the employee
-	returned early). Goes to the manager for approval. On approval the original
-	leave is Cancelled (which frees the returned days for attendance) and a NEW
-	approved OTPL Leave is created for the amended range (creating fresh Leave
-	Applications). Only full-day leaves may be amended — not Short Leave / Half Day.
+	"""Amend an Approved or Pending OTPL Leave to a SHORTER range (e.g. the employee
+	returned early). Goes to the manager for approval. On approval:
+	  * Approved original -> it is Cancelled (which frees the returned days for
+	    attendance) and a NEW approved OTPL Leave is created for the amended range
+	    (creating fresh Leave Applications).
+	  * Pending original  -> its requested range is shortened in place; it stays
+	    Pending for its own approver (no Leave Applications exist yet).
+	Only full-day leaves may be amended — not Short Leave / Half Day.
 	"""
 
 	def validate(self):
@@ -51,12 +54,24 @@ class OTPLLeaveAmendment(Document):
 		orig = frappe.get_doc("OTPL Leave", self.original_leave)
 		if orig.employee != self.employee:
 			frappe.throw(_("The original leave does not belong to this employee."))
-		if orig.status != "Approved":
-			frappe.throw(_("Only an Approved leave can be amended (current status: {0}).").format(orig.status))
+		if self.status == "Pending":
+			existing = frappe.db.get_value("OTPL Leave Amendment", {
+				"original_leave": self.original_leave,
+				"status": "Pending",
+				"name": ["!=", self.name],
+			})
+			if existing:
+				frappe.throw(_("Leave {0} already has a pending amendment request ({1}). "
+				               "Wait for it to be approved or rejected first.").format(self.original_leave, existing))
+		if orig.status not in ("Approved", "Pending"):
+			frappe.throw(_("Only an Approved or Pending leave can be amended (current status: {0}).").format(orig.status))
 		if orig.short_leave or orig.half_day:
 			frappe.throw(_("Short Leave and Half Day leaves cannot be amended."))
-		if not (orig.approved_from_date and orig.approved_to_date):
-			frappe.throw(_("The original leave has no approved date range to amend."))
+		of, ot = _leave_range(orig)
+		if not (of and ot):
+			frappe.throw(_("The original leave has no date range to amend."))
+		# fetch_from reads the approved dates, which a Pending leave does not have yet.
+		self.original_from_date, self.original_to_date = of, ot
 		self._orig = orig
 
 	def validate_amended_range(self):
@@ -66,7 +81,7 @@ class OTPLLeaveAmendment(Document):
 		if not (self.amended_from_date and self.amended_to_date):
 			return
 		af, at = getdate(self.amended_from_date), getdate(self.amended_to_date)
-		of, ot = getdate(orig.approved_from_date), getdate(orig.approved_to_date)
+		of, ot = (getdate(d) for d in _leave_range(orig))
 		if at < af:
 			frappe.throw(_("Amended To Date cannot be before Amended From Date."))
 		if af < of or at > ot:
@@ -146,6 +161,10 @@ class OTPLLeaveAmendment(Document):
 
 		orig = frappe.get_doc("OTPL Leave", self.original_leave)
 
+		if orig.status == "Pending":
+			self.shorten_pending_leave(orig)
+			return
+
 		# 1. Cancel the original leave — cancels its Leave Applications and frees the
 		#    returned days for attendance.
 		if orig.status != "Cancelled":
@@ -196,3 +215,32 @@ class OTPLLeaveAmendment(Document):
 				doc.add_comment("Comment", text=note)
 			except Exception:
 				pass
+
+	def shorten_pending_leave(self, orig):
+		"""A Pending leave has no Leave Applications yet, so just shorten its requested
+		range in place. It stays Pending and still goes through its own approval."""
+		old_from, old_to = orig.from_date, orig.to_date
+		orig.from_date = self.amended_from_date
+		orig.to_date = self.amended_to_date
+		orig.flags.ignore_permissions = True
+		orig.save(ignore_permissions=True)
+
+		self.db_set("amended_leave", orig.name, update_modified=False)
+		frappe.db.commit()
+
+		note = ("Leave amendment {0} approved: pending leave {1} shortened from {2}..{3} "
+		        "to {4}..{5}.").format(
+			self.name, orig.name, old_from, old_to, self.amended_from_date, self.amended_to_date)
+		for doc in (self, orig):
+			try:
+				doc.add_comment("Comment", text=note)
+			except Exception:
+				pass
+
+
+def _leave_range(leave):
+	"""The range an amendment works against: the approved range for an Approved
+	leave, the requested range for a Pending one."""
+	if leave.status == "Pending":
+		return leave.from_date, leave.to_date
+	return leave.approved_from_date, leave.approved_to_date
