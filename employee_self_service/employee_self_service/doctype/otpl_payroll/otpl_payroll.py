@@ -295,7 +295,8 @@ def _select_employees(where_sql, where_values):
 			-- PF/ESIC wage bands: for location='Site' these are sourced from a
 			-- fixed ESS Location (esl_site) instead of the employee's own
 			-- location, which has no wage band. Sales Order OPAUT-00003 -> use
-			-- "Haridwar" bands; any other sales order -> use "Noida" bands.
+			-- "Haridwar" bands; any other sales order -> use "Noida" bands, or
+			-- "Lucknow" bands when no "Noida" ESS Location exists.
 			COALESCE(CASE WHEN e.location = 'Site' THEN esl_site.min_wages     ELSE esl.min_wages     END, 0) AS min_wages,
 			COALESCE(CASE WHEN e.location = 'Site' THEN esl_site.max_wage_pf   ELSE esl.max_wage_pf   END, 0) AS max_wage_pf,
 			COALESCE(CASE WHEN e.location = 'Site' THEN esl_site.max_wage_esic ELSE esl.max_wage_esic END, 0) AS max_wage_esic,
@@ -314,11 +315,13 @@ def _select_employees(where_sql, where_values):
 			ON esl.name = e.location
 		-- Fixed ESS Location used ONLY to source PF/ESIC wage bands for
 		-- location='Site' employees (see the min_wages/max_wage_* CASEs above).
-		-- OPAUT-00003 -> Haridwar; anything else (incl. NULL) -> Noida.
+		-- OPAUT-00003 -> Haridwar; anything else (incl. NULL) -> Noida, falling
+		-- back to Lucknow when the Noida ESS Location does not exist.
 		LEFT JOIN `tabESS Location` esl_site
 			ON esl_site.name = CASE
 				WHEN e.sales_order = 'OPAUT-00003' THEN 'Haridwar'
-				ELSE 'Noida'
+				WHEN EXISTS (SELECT 1 FROM `tabESS Location` WHERE name = 'Noida') THEN 'Noida'
+				ELSE 'Lucknow'
 			END
 		WHERE {where}
 		ORDER BY e.employee_name ASC
